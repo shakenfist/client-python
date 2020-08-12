@@ -1,0 +1,6 @@
+click>=7.1.1        # bsd
+prettytable         # bsd
+tox                 # mit
+flake8              # mit
+testtools           # mit
+requests            # apache2
