@@ -4,7 +4,7 @@ import mock
 import testtools
 
 
-from client import apiclient
+from shakenfist_client import apiclient
 
 
 class ApiClientTestCase(testtools.TestCase):
@@ -12,7 +12,7 @@ class ApiClientTestCase(testtools.TestCase):
         super(ApiClientTestCase, self).setUp()
 
         self.request_url = mock.patch(
-            'client.apiclient.Client._request_url')
+            'shakenfist_client.apiclient.Client._request_url')
         self.mock_request = self.request_url.start()
         self.addCleanup(self.request_url.stop)
 
@@ -300,7 +300,7 @@ class GetNodesMock():
 
 
 class ApiClientGetNodesTestCase(testtools.TestCase):
-    @mock.patch('client.apiclient.Client._request_url',
+    @mock.patch('shakenfist_client.apiclient.Client._request_url',
                 return_value=GetNodesMock())
     def test_get_nodes(self, mock_request):
         client = apiclient.Client()

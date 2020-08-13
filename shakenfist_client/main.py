@@ -9,7 +9,7 @@ import os
 from prettytable import PrettyTable
 import sys
 
-from shakenfist.client import apiclient
+from shakenfist_client import apiclient
 
 
 logging.basicConfig(level=logging.INFO)
