@@ -1,4 +1,3 @@
-import datetime
 import json
 import mock
 import testtools
@@ -304,7 +303,7 @@ class ApiClientGetNodesTestCase(testtools.TestCase):
                 return_value=GetNodesMock())
     def test_get_nodes(self, mock_request):
         client = apiclient.Client()
-        out = list(client.get_nodes())
+        list(client.get_nodes())
 
         mock_request.assert_called_with(
             'GET', 'http://localhost:13000/nodes')
