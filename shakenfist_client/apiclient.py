@@ -4,6 +4,7 @@ import logging
 import os
 from pbr.version import VersionInfo
 import requests
+import time
 
 
 LOG = logging.getLogger(__name__)
@@ -60,7 +61,8 @@ STATUS_CODES_TO_ERRORS = {
 
 class Client(object):
     def __init__(self, base_url='http://localhost:13000', verbose=False,
-                 namespace=None, key=None):
+                 namespace=None, key=None, sync_request_timeout=300):
+        self.sync_request_timeout = sync_request_timeout
 
         # Where do we find authentication details? First off, we try command line
         # flags; then environment variables (thanks for doing this for free click);
@@ -189,7 +191,7 @@ class Client(object):
         return r.json()
 
     def create_instance(self, name, cpus, memory, network, disk, sshkey, userdata,
-                        namespace=None, force_placement=None, video=None):
+                        namespace=None, force_placement=None, video=None, async_request=False):
         body = {
             'name': name,
             'cpus': cpus,
@@ -207,7 +209,14 @@ class Client(object):
 
         r = self._request_url('POST', self.base_url + '/instances',
                               data=body)
-        return r.json()
+        i = r.json()
+        if not async_request:
+            start_time = time.time()
+            while (time.time() - start_time < self.sync_request_timeout and
+                   i.get('state') in ['initial', 'creating']):
+                time.sleep(1)
+                i = self.get_instance(i['uuid'])
+        return i
 
     def snapshot_instance(self, instance_uuid, all=False):
         r = self._request_url('POST', self.base_url + '/instances/' + instance_uuid +
@@ -247,10 +256,19 @@ class Client(object):
                               '/unpause')
         return r.json()
 
-    def delete_instance(self, instance_uuid):
-        r = self._request_url('DELETE', self.base_url +
-                              '/instances/' + instance_uuid)
-        return r.json()
+    def delete_instance(self, instance_uuid, async_request=False):
+        self._request_url('DELETE', self.base_url +
+                          '/instances/' + instance_uuid)
+        if async_request:
+            return
+
+        i = self.get_instance(instance_uuid)
+        start_time = time.time()
+        while (time.time() - start_time < self.sync_request_timeout and
+               i and i.get('state') in ['deleted', 'error']):
+            time.sleep(1)
+            i = self.get_instance(instance_uuid)
+        return
 
     def get_instance_events(self, instance_uuid):
         r = self._request_url('GET', self.base_url +
