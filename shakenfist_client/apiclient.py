@@ -212,9 +212,11 @@ class Client(object):
         i = r.json()
         if not async_request:
             start_time = time.time()
+            rounds = 1
             while (time.time() - start_time < self.sync_request_timeout and
                    i.get('state') in ['initial', 'creating']):
-                time.sleep(1)
+                time.sleep(min(rounds, 10))
+                rounds += 1
                 i = self.get_instance(i['uuid'])
         return i
 
@@ -264,9 +266,11 @@ class Client(object):
 
         i = self.get_instance(instance_uuid)
         start_time = time.time()
+        rounds = 1
         while (time.time() - start_time < self.sync_request_timeout and
-               i and i.get('state') in ['deleted', 'error']):
-            time.sleep(1)
+               i and i.get('state') not in ['deleted', 'error']):
+            time.sleep(min(rounds, 10))
+            rounds += 1
             i = self.get_instance(instance_uuid)
         return
 
