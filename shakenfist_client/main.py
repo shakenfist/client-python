@@ -663,6 +663,7 @@ def _show_instance(ctx, i, include_snapshots=False):
     print(format_string % ('node', i['node']))
     print(format_string % ('power state', i['power_state']))
     print(format_string % ('state', i['state']))
+    print(format_string % ('error message', i.get('error_message', '')))
 
     # NOTE(mikal): I am not sure we should expose this, but it will do
     # for now until a proxy is written.
