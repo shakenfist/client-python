@@ -363,8 +363,10 @@ class Client(object):
     def get_console_data(self, instance_uuid, length=None):
         url = self.base_url + '/instances/' + instance_uuid + '/consoledata'
         if length:
-            url += '?length=%d' % length
-        r = self._request_url('GET', url)
+            d = {'length': length}
+        else:
+            d = {}
+        r = self._request_url('GET', url, data=d)
         return r.text
 
     def get_namespaces(self):
