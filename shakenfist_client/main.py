@@ -158,6 +158,42 @@ def node_list(ctx):
 cli.add_command(node)
 
 
+@click.group(help='Admin commands')
+def admin():
+    pass
+
+
+@click.group(help='Lock commands')
+def lock():
+    pass
+
+
+@admin.command(name='list', help='List existing locks')
+@click.pass_context
+def lock_list(ctx):
+    locks = CLIENT.get_existing_locks()
+
+    if ctx.obj['OUTPUT'] == 'pretty':
+        x = PrettyTable()   
+        x.field_names = ['lock', 'pid', 'node']
+        for l, meta in locks.items():
+            x.add_row([l, meta['pid'], meta['node']])
+        print(x)
+
+    elif ctx.obj['OUTPUT'] == 'simple':
+        print('lock,pid,node')
+        for l, meta in locks.items():
+            print('%s,%s,%s' % (l, meta['pid'], meta['node']))
+
+    elif ctx.obj['OUTPUT'] == 'json':
+        print(json.dumps(locks))
+
+
+lock.add_command(lock_list)
+admin.add_command(lock)
+cli.add_command(admin)
+
+
 @click.group(help='Namespace commands')
 def namespace():
     pass

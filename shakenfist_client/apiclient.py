@@ -419,6 +419,10 @@ class Client(object):
                               '/metadata/' + key)
         return r.json()
 
+    def get_existing_locks(self):
+        r = self._request_url('GET', self.base_url + '/admin/locks')
+        return r.json()
+
 
 def get_user_agent():
     sf_version = VersionInfo('shakenfist').version_string()
