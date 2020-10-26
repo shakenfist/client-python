@@ -158,6 +158,14 @@ class ApiClientTestCase(testtools.TestCase):
             'POST', 'http://localhost:13000/images',
             data={'url': 'imageurl'})
 
+    def test_get_image_meta(self):
+        client = apiclient.Client()
+        client.get_image_meta('sf-2')
+
+        self.mock_request.assert_called_with(
+            'GET', 'http://localhost:13000/images',
+            data={'node': 'sf-2'})
+
     def test_create_namespace(self):
         client = apiclient.Client()
         client.create_namespace('testspace')
@@ -279,6 +287,13 @@ class ApiClientTestCase(testtools.TestCase):
                 'name': 'gerkin',
                 'namespace': None
             })
+
+    def test_get_existing_locks(self):
+        client = apiclient.Client()
+        client.get_existing_locks()
+
+        self.mock_request.assert_called_with(
+            'GET', 'http://localhost:13000/admin/locks')
 
 
 class GetNodesMock():
