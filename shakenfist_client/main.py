@@ -174,16 +174,16 @@ def lock_list(ctx):
     locks = CLIENT.get_existing_locks()
 
     if ctx.obj['OUTPUT'] == 'pretty':
-        x = PrettyTable()   
+        x = PrettyTable()
         x.field_names = ['lock', 'pid', 'node']
-        for l, meta in locks.items():
-            x.add_row([l, meta['pid'], meta['node']])
+        for ref, meta in locks.items():
+            x.add_row([ref, meta['pid'], meta['node']])
         print(x)
 
     elif ctx.obj['OUTPUT'] == 'simple':
         print('lock,pid,node')
-        for l, meta in locks.items():
-            print('%s,%s,%s' % (l, meta['pid'], meta['node']))
+        for ref, meta in locks.items():
+            print('%s,%s,%s' % (ref, meta['pid'], meta['node']))
 
     elif ctx.obj['OUTPUT'] == 'json':
         print(json.dumps(locks))
@@ -1166,6 +1166,38 @@ def image_cache(ctx, image_url=None):
     CLIENT.cache_image(image_url)
     if ctx.obj['OUTPUT'] == 'json':
         print('{}')
+
+
+@image.command(name='list',
+               help='List cached images.\n\n'
+                    'NODE: Only list images cached on NODE')
+@click.option('--node', type=click.STRING)
+@click.pass_context
+def image_list(ctx, node=None):
+    images = CLIENT.get_image_meta(node)
+
+    if ctx.obj['OUTPUT'] == 'pretty':
+        x = PrettyTable()
+        x.field_names = ['ref', 'node', 'url', 'size', 'modified', 'fetched',
+                         'file_version', 'checksum']
+        x.align['url'] = 'l'
+        x.sortby = 'url'
+        for meta in images:
+            x.add_row([meta['ref'], meta['node'], meta['url'], meta['size'],
+                       meta['modified'], meta['fetched'], meta['file_version'],
+                       meta['checksum']])
+        print(x)
+
+    elif ctx.obj['OUTPUT'] == 'simple':
+        print('ref,node,url,size,modified,fetched,file_version,checksum')
+        for meta in images:
+            print('%s,%s,%s,%s,%s,%s,%s,%s' % (
+                meta['ref'], meta['node'], meta['url'], meta['size'],
+                meta['modified'], meta['fetched'], meta['file_version'],
+                meta['checksum']))
+
+    elif ctx.obj['OUTPUT'] == 'json':
+        print(json.dumps(images))
 
 
 cli.add_command(image)

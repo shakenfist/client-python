@@ -284,6 +284,11 @@ class Client(object):
                               data={'url': image_url})
         return r.json()
 
+    def get_image_meta(self, node=None):
+        r = self._request_url('GET', self.base_url + '/images',
+                              data={'node': node})
+        return r.json()
+
     def get_image_events(self, image_url):
         r = self._request_url('GET', self.base_url + '/images/events',
                               data={'url': image_url})
