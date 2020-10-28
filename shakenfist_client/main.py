@@ -175,15 +175,17 @@ def lock_list(ctx):
 
     if ctx.obj['OUTPUT'] == 'pretty':
         x = PrettyTable()
-        x.field_names = ['lock', 'pid', 'node']
+        x.field_names = ['lock', 'pid', 'node', 'operation']
         for ref, meta in locks.items():
-            x.add_row([ref, meta['pid'], meta['node']])
+            x.add_row([ref, meta['pid'], meta['node'],
+                       meta.get('operation')])
         print(x)
 
     elif ctx.obj['OUTPUT'] == 'simple':
-        print('lock,pid,node')
+        print('lock,pid,node,operation')
         for ref, meta in locks.items():
-            print('%s,%s,%s' % (ref, meta['pid'], meta['node']))
+            print('%s,%s,%s,%s' % (ref, meta['pid'], meta['node'],
+                                   meta.get('operation')))
 
     elif ctx.obj['OUTPUT'] == 'json':
         print(json.dumps(locks))
