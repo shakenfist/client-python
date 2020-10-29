@@ -382,7 +382,8 @@ def _get_networks(ctx, args, incomplete):
 
 
 @network.command(name='list', help='List networks')
-@click.argument('all', type=click.BOOL, default=False)
+@click.option('-a', '--all', is_flag=True,
+              help='Include networks in error and deleted networks')
 @click.pass_context
 def network_list(ctx, all=False):
     nets = list(CLIENT.get_networks(all=all))
@@ -460,17 +461,17 @@ def network_show(ctx, network_uuid=None):
 
 @network.command(name='create',
                  help=('Create a network.\n\n'
+                       'NAME:             The name of the network\n'
                        'NETBLOCK:         The IP address block to use, as a CIDR\n'
                        '                  range -- for example 192.168.200.1/24\n'
-                       'NAME:             The name of the network\n'
                        '--dhcp/--no-dhcp: Should this network have DHCP?\n'
                        '--nat/--no-nat:   Should this network be able to access'
                        '                  the Internet via NAT?\n'
                        '\n'
                        '--namespace:     If you are an admin, you can create this object in a\n'
                        '                 different namespace.\n'))
-@click.argument('netblock', type=click.STRING)
 @click.argument('name', type=click.STRING)
+@click.argument('netblock', type=click.STRING)
 @click.option('--dhcp/--no-dhcp', default=True)
 @click.option('--nat/--no-nat', default=True)
 @click.option('--namespace', type=click.STRING)
@@ -598,7 +599,8 @@ def _get_instances(ctx, args, incomplete):
 
 
 @instance.command(name='list', help='List instances')
-@click.argument('all', type=click.BOOL, default=False)
+@click.option('-a', '--all', is_flag=True,
+              help='Include instances in error and deleted instances')
 @click.pass_context
 def instance_list(ctx, all=False):
     insts = CLIENT.get_instances(all=all)
@@ -683,7 +685,7 @@ def _show_instance(ctx, i, include_snapshots=False):
     if ctx.obj['OUTPUT'] == 'simple':
         format_string = '%s:%s'
     else:
-        format_string = '%-12s: %s'
+        format_string = '%-13s: %s'
         d_space = {'type': 5, 'bus': 4, 'size': 2, 'base': 0}
         v_space = {'model': 0, 'memory': 0}
 
@@ -1049,7 +1051,8 @@ def instance_consoledata(ctx, instance_uuid=None, length=None):
 
 @instance.command(name='snapshot', help='Snapshot instance')
 @click.argument('instance_uuid', type=click.STRING, autocompletion=_get_instances)
-@click.argument('all', type=click.BOOL, default=False)
+@click.option('-a', '--all', is_flag=True,
+              help='Snapshot all disks, not just disk 0.')
 @click.pass_context
 def instance_snapshot(ctx, instance_uuid=None, all=False):
     snapshot_uuid = CLIENT.snapshot_instance(instance_uuid, all)
