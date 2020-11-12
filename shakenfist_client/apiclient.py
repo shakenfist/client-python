@@ -197,7 +197,6 @@ class Client(object):
             'cpus': cpus,
             'memory': memory,
             'network': network,
-            'disk': disk,
             'ssh_key': sshkey,
             'user_data': userdata,
             'namespace': namespace,
@@ -206,6 +205,14 @@ class Client(object):
 
         if force_placement:
             body['placed_on'] = force_placement
+
+        # Ensure size is always an int if specified
+        clean_disks = []
+        for d in disk:
+            if 'size' in d and d['size']:
+                d['size'] = int(d['size'])
+            clean_disks.append(d)
+        body['disk'] = clean_disks
 
         r = self._request_url('POST', self.base_url + '/instances',
                               data=body)
