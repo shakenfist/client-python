@@ -435,6 +435,11 @@ class Client(object):
         r = self._request_url('GET', self.base_url + '/admin/locks')
         return r.json()
 
+    def ping(self, network_uuid, address):
+        r = self._request_url('GET', self.base_url +
+                              '/networks/' + network_uuid + '/ping/' + address)
+        return r.json()
+
 
 def get_user_agent():
     sf_version = VersionInfo('shakenfist').version_string()

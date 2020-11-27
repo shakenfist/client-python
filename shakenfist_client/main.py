@@ -584,6 +584,22 @@ def network_delete_metadata(ctx, network_uuid=None, key=None, value=None):
         print('{}')
 
 
+@network.command(name='ping', help='Ping on this network')
+@click.argument('network_uuid', type=click.STRING, autocompletion=_get_networks)
+@click.argument('address', type=click.STRING)
+@click.pass_context
+def network_ping(ctx, network_uuid=None, address=None):
+    output = CLIENT.ping(network_uuid, address)
+    if ctx.obj['OUTPUT'] in ['pretty', 'simple']:
+        for line in output.get('stdout', '').split('\n'):
+            print('stdout: %s' % line)
+        for line in output.get('stderr', '').split('\n'):
+            print('stderr: %s' % line)
+
+    elif ctx.obj['OUTPUT'] == 'json':
+        print(output)
+
+
 cli.add_command(network)
 
 
