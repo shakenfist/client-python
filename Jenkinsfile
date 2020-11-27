@@ -62,7 +62,7 @@ pipeline {
     stage('Run CI tests') {
       steps {
         sh '''  # Run the nextgen CI
-                cd $WORKSPACE/deploy/
+                cd $WORKSPACE/shakenfist/deploy/
                 sudo chmod ugo+rx /etc/sf/shakenfist.json
                 tox -epy3
           '''
