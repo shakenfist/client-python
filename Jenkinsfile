@@ -31,7 +31,7 @@ pipeline {
 
                 if [ '%%' == '%%' ]
                 then
-                  BRANCH=`git branch --show-current`
+                  BRANCH=`git rev-parse --abbrev-ref HEAD`
                 else
                   BRANCH=""
                 fi
