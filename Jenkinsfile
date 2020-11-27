@@ -55,7 +55,6 @@ pipeline {
                 export KSM_ENABLED="0"
 
                 echo "Deploying $RELEASE to cloud $CLOUD"
-                cd $WORKSPACE/deploy/ansible
                 ./deployandtest.sh
           '''
         }
