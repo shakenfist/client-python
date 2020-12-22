@@ -14,7 +14,7 @@ on:
       - v*-devel
 
 jobs:
-  build:
+  lint:
     runs-on: ubuntu-latest
 
     steps:
@@ -22,11 +22,6 @@ jobs:
         uses: actions/checkout@v2
         with:
           fetch-depth: 2
-
-      - name: Set up Python 3.7
-        uses: actions/setup-python@v2
-        with:
-          python-version: 3.7
 
       - name: Install dependencies
         run: |
@@ -37,14 +32,33 @@ jobs:
         run: |
           tox -eflake8
 
-      - name: Test with python 3.7
-        run: |
-          tox -epy37
+  build38:
+    runs-on: ubuntu-latest
 
-      - name: Test with python 3.7 again
-        run: |
-          tox -epy37
+    steps:
+      - name: Checkout code with two commits
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 2
 
-      - name: Test with python 3.7 again again
+      - name: Set up Python 3.8
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.8
+
+      - name: Install dependencies
         run: |
-          tox -epy37
+          python -m pip install --upgrade pip
+          sudo apt-get install -y -q tox
+
+      - name: Test with python 3.8
+        run: |
+          tox -epy3
+
+      - name: Test with python 3.8 again
+        run: |
+          tox -epy3
+
+      - name: Test with python 3.8 again again
+        run: |
+          tox -epy3
