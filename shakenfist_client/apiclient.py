@@ -36,7 +36,7 @@ class ResourceNotFoundException(APIException):
     pass
 
 
-class DependanciesNotReadyException(APIException):
+class DependenciesNotReadyException(APIException):
     pass
 
 
@@ -57,7 +57,7 @@ STATUS_CODES_TO_ERRORS = {
     401: UnauthorizedException,
     403: ResourceCannotBeDeletedException,
     404: ResourceNotFoundException,
-    406: DependanciesNotReadyException,
+    406: DependenciesNotReadyException,
     409: ResourceInUseException,
     500: InternalServerError,
     507: InsufficientResourcesException,
@@ -161,7 +161,7 @@ class Client(object):
                 except UnauthorizedException:
                     self.cached_auth = self._authenticate()
                     return self._actual_request_url(method, url, data=data)
-            except DependanciesNotReadyException as e:
+            except DependenciesNotReadyException as e:
                 # The API server will return a 406 exception when we have
                 # specified an operation which depends on a resource and
                 # that resource is not in the created state. We retry
