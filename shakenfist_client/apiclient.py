@@ -36,6 +36,10 @@ class ResourceNotFoundException(APIException):
     pass
 
 
+class DependenciesNotReadyException(APIException):
+    pass
+
+
 class ResourceInUseException(APIException):
     pass
 
@@ -53,6 +57,7 @@ STATUS_CODES_TO_ERRORS = {
     401: UnauthorizedException,
     403: ResourceCannotBeDeletedException,
     404: ResourceNotFoundException,
+    406: DependenciesNotReadyException,
     409: ResourceInUseException,
     500: InternalServerError,
     507: InsufficientResourcesException,
@@ -148,11 +153,22 @@ class Client(object):
         if not self.cached_auth:
             self.cached_auth = self._authenticate()
 
-        try:
-            return self._actual_request_url(method, url, data=data)
-        except UnauthorizedException:
-            self.cached_auth = self._authenticate()
-            return self._actual_request_url(method, url, data=data)
+        start_time = time.time()
+        while True:
+            try:
+                try:
+                    return self._actual_request_url(method, url, data=data)
+                except UnauthorizedException:
+                    self.cached_auth = self._authenticate()
+                    return self._actual_request_url(method, url, data=data)
+            except DependenciesNotReadyException as e:
+                # The API server will return a 406 exception when we have
+                # specified an operation which depends on a resource and
+                # that resource is not in the created state. We retry
+                # for a while before we give up.
+                if time.time() - start_time > 30:
+                    raise e
+                time.sleep(1)
 
     def get_instances(self, all=False):
         r = self._request_url('GET', self.base_url +
