@@ -166,7 +166,7 @@ class Client(object):
                 # specified an operation which depends on a resource and
                 # that resource is not in the created state. We retry
                 # for a while before we give up.
-                if time.time() - start_time > 30:
+                if time.time() - start_time > 60:
                     raise e
                 time.sleep(1)
 
