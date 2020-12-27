@@ -42,6 +42,10 @@ pipeline {
 
                 export RELEASE="git:$BRANCH"
                 cd $WORKSPACE/shakenfist/deploy/ansible
+
+                # We restore a backup to ensure upgrades work
+                export RESTORE_BACKUP="$WORKSPACE/shakenfist/examples/schema-v0_3_3.tgz"
+
                 git checkout $BRANCH || git checkout master
                 git branch
                 git pull
