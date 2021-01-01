@@ -66,32 +66,34 @@ STATUS_CODES_TO_ERRORS = {
 
 class Client(object):
     def __init__(self, base_url='http://localhost:13000', verbose=False,
-                 namespace=None, key=None, sync_request_timeout=300):
+                 namespace=None, key=None, sync_request_timeout=300,
+                 suppress_configuration_lookup=False):
         self.sync_request_timeout = sync_request_timeout
 
-        # Where do we find authentication details? First off, we try command line
-        # flags; then environment variables (thanks for doing this for free click);
-        # and finally ~/.shakenfist (which is a JSON file).
-        if not namespace:
-            user_conf = os.path.expanduser('~/.shakenfist')
-            if os.path.exists(user_conf):
-                with open(user_conf) as f:
-                    d = json.loads(f.read())
-                    namespace = d['namespace']
-                    key = d['key']
-                    base_url = d['apiurl']
-
-        if not namespace:
-            try:
-                if os.path.exists('/etc/sf/shakenfist.json'):
-                    with open('/etc/sf/shakenfist.json') as f:
+        if not suppress_configuration_lookup:
+            # Where do we find authentication details? First off, we try command line
+            # flags; then environment variables (thanks for doing this for free click);
+            # and finally ~/.shakenfist (which is a JSON file).
+            if not namespace:
+                user_conf = os.path.expanduser('~/.shakenfist')
+                if os.path.exists(user_conf):
+                    with open(user_conf) as f:
                         d = json.loads(f.read())
                         namespace = d['namespace']
                         key = d['key']
                         base_url = d['apiurl']
-            except IOError as e:
-                if e.errno != errno.EACCES:
-                    raise
+
+            if not namespace:
+                try:
+                    if os.path.exists('/etc/sf/shakenfist.json'):
+                        with open('/etc/sf/shakenfist.json') as f:
+                            d = json.loads(f.read())
+                            namespace = d['namespace']
+                            key = d['key']
+                            base_url = d['apiurl']
+                except IOError as e:
+                    if e.errno != errno.EACCES:
+                        raise
 
         self.base_url = base_url
         self.namespace = namespace
