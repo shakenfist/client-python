@@ -716,15 +716,15 @@ def _show_instance(ctx, i, include_snapshots=False):
     if ctx.obj['OUTPUT'] == 'pretty':
         print(format_string % ('video',
                                _pretty_dict(15, (i['video'],), v_space)))
-    print(format_string % ('node', i['node']))
-    print(format_string % ('power state', i['power_state']))
-    print(format_string % ('state', i['state']))
+    print(format_string % ('node', i.get('node', '')))
+    print(format_string % ('power state', i.get('power_state', '')))
+    print(format_string % ('state', i.get('state', '')))
     print(format_string % ('error message', i.get('error_message', '')))
 
     # NOTE(mikal): I am not sure we should expose this, but it will do
     # for now until a proxy is written.
-    print(format_string % ('console port', i['console_port']))
-    print(format_string % ('vdi port', i['vdi_port']))
+    print(format_string % ('console port', i.get('console_port', '')))
+    print(format_string % ('vdi port', i.get('vdi_port', '')))
 
     print()
     print(format_string % ('ssh key', i['ssh_key']))
