@@ -5,6 +5,7 @@ import os
 from pbr.version import VersionInfo
 import requests
 import time
+import sys
 
 
 LOG = logging.getLogger(__name__)
@@ -309,10 +310,16 @@ class Client(object):
                               data={'url': image_url})
         return r.json()
 
-    def get_image_meta(self, node=None):
+    def get_images(self, node=None):
         r = self._request_url('GET', self.base_url + '/images',
                               data={'node': node})
         return r.json()
+
+    def get_image_meta(self, node=None):
+        sys.stderr.write('get_image_meta() is deprecated and will be removed in '
+                         'Shaken Fist 0.5. Please convert to get_images().')
+        sys.stderr.flush()
+        return self.get_images(node=node)
 
     def get_image_events(self, image_url):
         r = self._request_url('GET', self.base_url + '/images/events',
