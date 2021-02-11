@@ -390,22 +390,23 @@ def network_list(ctx, all=False):
 
     if ctx.obj['OUTPUT'] == 'pretty':
         x = PrettyTable()
-        x.field_names = ['uuid', 'name', 'namespace', 'netblock']
+        x.field_names = ['uuid', 'name', 'namespace', 'netblock', 'state']
         for n in nets:
-            x.add_row([n['uuid'], n['name'], n['namespace'], n['netblock']])
+            x.add_row([n['uuid'], n['name'], n['namespace'],
+                       n['netblock'], n['state']])
         print(x)
 
     elif ctx.obj['OUTPUT'] == 'simple':
         print('uuid,name,namespace,netblock')
         for n in nets:
-            print('%s,%s,%s,%s' %
-                  (n['uuid'], n['name'], n['namespace'], n['netblock']))
+            print('%s,%s,%s,%s,%s' %
+                  (n['uuid'], n['name'], n['namespace'], n['netblock'], n['state']))
 
     elif ctx.obj['OUTPUT'] == 'json':
         filtered_nets = []
         for n in nets:
             filtered_nets.append(filter_dict(
-                n, ['uuid', 'name', 'namespace', 'netblock']))
+                n, ['uuid', 'name', 'namespace', 'netblock', 'state']))
         print(json.dumps({'networks': filtered_nets},
                          indent=4, sort_keys=True))
 
