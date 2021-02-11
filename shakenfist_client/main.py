@@ -512,9 +512,9 @@ def network_events(ctx, network_uuid=None):
         print('timestamp,node,operation,phase,duration,message')
         for e in events:
             e['timestamp'] = datetime.datetime.fromtimestamp(e['timestamp'])
-            x.add_row('%s,%s,%s,%s,%s,%s'
-                      % (e['timestamp'], e['fqdn'], e['operation'], e['phase'],
-                         e['duration'], e['message']))
+            print('%s,%s,%s,%s,%s,%s'
+                  % (e['timestamp'], e['fqdn'], e['operation'], e['phase'],
+                     e['duration'], e['message']))
 
     elif ctx.obj['OUTPUT'] == 'json':
         filtered_events = []
