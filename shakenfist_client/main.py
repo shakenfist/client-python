@@ -615,6 +615,16 @@ def _get_instances(ctx, args, incomplete):
     return [arg for arg in choices if arg.startswith(incomplete)]
 
 
+def _summarize_interfaces(instance_uuid):
+    ifaces = []
+    for iface in CLIENT.get_instance_interfaces(instance_uuid):
+        if iface.get('floating'):
+            ifaces.append('%s (%s)' % (iface['ipv4'], iface['floating']))
+        else:
+            ifaces.append(iface['ipv4'])
+    return ifaces
+
+
 @instance.command(name='list', help='List instances')
 @click.option('-a', '--all', is_flag=True,
               help='Include instances in error and deleted instances')
@@ -626,20 +636,24 @@ def instance_list(ctx, all=False):
         x = PrettyTable()
         x.field_names = ['uuid', 'name', 'namespace',
                          'cpus', 'memory', 'hypervisor',
-                         'power state', 'state']
+                         'power state', 'state', 'interfaces']
         for i in insts:
+            ifaces = _summarize_interfaces(i['uuid'])
             x.add_row([i['uuid'], i['name'], i['namespace'],
                        i['cpus'], i['memory'], i['node'],
-                       i.get('power_state', 'unknown'), i['state']])
+                       i.get('power_state', 'unknown'), i['state'],
+                       '\n'.join(ifaces)])
         print(x)
 
     elif ctx.obj['OUTPUT'] == 'simple':
         print('uuid,name,namespace,cpus,memory,hypervisor,power state,state')
         for i in insts:
-            print('%s,%s,%s,%s,%s,%s,%s,%s'
+            ifaces = _summarize_interfaces(i['uuid'])
+            print('%s,%s,%s,%s,%s,%s,%s,%s,%s'
                   % (i['uuid'], i['name'], i['namespace'],
                      i['cpus'], i['memory'], i['node'],
-                     i.get('power_state', 'unknown'), i['state']))
+                     i.get('power_state', 'unknown'), i['state'],
+                     ';'.join(ifaces)))
 
     elif ctx.obj['OUTPUT'] == 'json':
         filtered_insts = []
