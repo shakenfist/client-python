@@ -1204,7 +1204,7 @@ def image_cache(ctx, image_url=None):
 @click.option('--node', type=click.STRING)
 @click.pass_context
 def image_list(ctx, node=None):
-    images = CLIENT.get_image_meta(node)
+    images = CLIENT.get_images(node)
 
     if ctx.obj['OUTPUT'] == 'pretty':
         x = PrettyTable()
