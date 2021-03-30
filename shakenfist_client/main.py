@@ -824,29 +824,36 @@ def _parse_spec(spec):
                         'MEMORY:    The amount of RAM for the instance in MB.\n'
                         '\n'
                         'Options (may be repeated, must be specified at least once):\n'
-                        '--network/-n:   The uuid of the network to attach the instance to.\n'
-                        '--disk/-d:      The disks attached to the instance, in this format: \n'
-                        '                size@image_url where size is in GB and @image_url\n'
-                        '                is optional.\n'
-                        '--video/-V:     The video configuration for the instance.\n'
-                        '--sshkey/-i:    The path to a ssh public key to configure on the\n'
-                        '                instance via config drive / cloud-init.\n'
-                        '--sshkeydata/-I:\n'
-                        '               A ssh public key as a string to configure on the\n'
-                        '                 instance via config drive / cloud-init.\n'
-                        '--userdata/-u:  The path to a file containing user data to provided\n'
-                        '                to the instance via config drive / cloud-init.'
+                        '--network/-n:     The short form definition of the network to attach\n'
+                        '                  the instance to.\n'
+                        '--floated/-f:     The short form definition of a network to attach to\n'
+                        '                  with an implied floating IP assignment.\n'
+                        '--networkspec/-N: A long form "networkspec" definition of a network\n'
+                        '                  interface to create.\n'
+                        '--disk/-d:        The disks attached to the instance, in this format:\n'
+                        '                  size@image_url where size is in GB and @image_url\n'
+                        '                  is optional.\n'
+                        '--diskspec/-D:    A long form "diskspec" definition of a disk to create.\n'
+                        '--video/-V:       The video configuration for the instance.\n'
+                        '--sshkey/-i:      The path to a ssh public key to configure on the\n'
+                        '                  instance via config drive / cloud-init.\n'
+                        '--sshkeydata/-I:  A ssh public key as a string to configure on the\n'
+                        '                   instance via config drive / cloud-init.\n'
+                        '--userdata/-u:    The path to a file containing user data to provided\n'
+                        '                  to the instance via config drive / cloud-init.'
                         '--encodeduserdata/-U:\n'
-                        '                Base64 encoded user data to provide to the instance\n'
-                        '                via config drive / cloud-init.\n'
+                        '                  Base64 encoded user data to provide to the instance\n'
+                        '                  via config drive / cloud-init.\n'
                         '\n'
-                        '--placement/-p: Force placement of instance on specified node.\n'
-                        '--namespace:    If you are an admin, you can create this object in a\n'
-                        '                different namespace.'))
+                        '--placement/-p:   Force placement of instance on specified node.\n'
+                        '--namespace:      If you are an admin, you can create this object in a\n'
+                        '                  different namespace.'))
 @click.argument('name', type=click.STRING)
 @click.argument('cpus', type=click.INT)
 @click.argument('memory', type=click.INT)
 @click.option('-n', '--network', type=click.STRING, multiple=True,
+              autocompletion=_get_networks)
+@click.option('-f', '--floated', type=click.STRING, multiple=True,
               autocompletion=_get_networks)
 @click.option('-N', '--networkspec', type=click.STRING, multiple=True)
 @click.option('-d', '--disk', type=click.STRING, multiple=True)
@@ -859,9 +866,10 @@ def _parse_spec(spec):
 @click.option('-V', '--videospec', type=click.STRING)
 @click.option('--namespace', type=click.STRING)
 @click.pass_context
-def instance_create(ctx, name=None, cpus=None, memory=None, network=None, networkspec=None,
-                    disk=None, diskspec=None, sshkey=None, sshkeydata=None, userdata=None,
-                    encodeduserdata=None, placement=None, videospec=None, namespace=None):
+def instance_create(ctx, name=None, cpus=None, memory=None, network=None, floated=None,
+                    networkspec=None, disk=None, diskspec=None, sshkey=None, sshkeydata=None,
+                    userdata=None, encodeduserdata=None, placement=None, videospec=None,
+                    namespace=None):
     if len(disk) < 1 and len(diskspec) < 1:
         print('You must specify at least one disk')
         return
@@ -910,6 +918,15 @@ def instance_create(ctx, name=None, cpus=None, memory=None, network=None, networ
         diskdefs.append(defn)
 
     netdefs = []
+    for n in floated:
+        network_uuid, address = _parse_spec(n)
+        netdefs.append({
+            'network_uuid': network_uuid,
+            'address': address,
+            'macaddress': None,
+            'model': 'virtio',
+            'float': True
+        })
     for n in network:
         network_uuid, address = _parse_spec(n)
         netdefs.append({
@@ -926,7 +943,12 @@ def instance_create(ctx, name=None, cpus=None, memory=None, network=None, networ
                 print('Error in network specification -'
                       ' should be key=value: %s' % elem)
                 return
-            defn[s[0]] = s[1]
+
+            value = s[1]
+            if s[0] == 'float':
+                value = s[1] in ['true', 'True']
+
+            defn[s[0]] = value
         netdefs.append(defn)
 
     video = {'model': 'cirrus', 'memory': 16384}
