@@ -777,7 +777,7 @@ def _show_instance(ctx, i, include_snapshots=False):
             _show_interface(ctx, interface)
 
     else:
-        print('iface,interface uuid,network uuid,macaddr,order,ipv4,floating')
+        print('iface,interface uuid,network uuid,macaddr,order,ipv4,floating,model')
         for interface in interfaces:
             _show_interface(ctx, interface)
 
