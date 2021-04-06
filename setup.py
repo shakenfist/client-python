@@ -13,12 +13,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import setuptools
-from os import path
 
-this_directory = path.abspath(path.dirname(__file__))
-with open(path.join(this_directory, 'README.md'), encoding='utf-8') as f:
+this_directory = os.path.abspath(os.path.dirname(__file__))
+with open(os.path.join(this_directory, 'README.md'), encoding='utf-8') as f:
     long_description = f.read()
+
+version_path = os.path.join(this_directory, 'VERSION.txt')
+if os.path.exists(version_path):
+    with open(version_path) as f:
+        os.environ['PBR_VERSION'] = f.readline().rstrip()
 
 
 setuptools.setup(
@@ -26,4 +31,12 @@ setuptools.setup(
     pbr=True,
     long_description=long_description,
     long_description_content_type="text/markdown",
-    )
+    data_files=[
+        (
+            'share/shakenfist/ansible', [
+                'ansible/sf_instance.py',
+                'ansible/sf_network.py'
+            ]
+        )
+    ],
+)
