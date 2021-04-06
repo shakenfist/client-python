@@ -19,7 +19,7 @@ EXAMPLES = """
   sf_instance:
     name: 'myinstance'
     cpu: 1
-    ram: 1
+    ram: 1024
     disks:
       - 8@cirros
     networks:
@@ -36,7 +36,7 @@ EXAMPLES = """
   sf_instance:
     name: 'myinstance'
     cpu: 1
-    ram: 1
+    ram: 1024
     diskspecs:
       - size=8,base=cirros,bus=ide,type=disk
       - size=16,type=disk
@@ -115,7 +115,7 @@ def present(module):
 
     try:
         j = json.loads(stdout)
-    except json.decoder.JSONDecodeError:
+    except ValueError:
         rc = -1
         j = ('Failed to parse JSON:\n'
              '[[command: %s]]\n'
@@ -139,7 +139,7 @@ def absent(module):
 
     try:
         j = json.loads(stdout)
-    except json.decoder.JSONDecodeError:
+    except ValueError:
         rc = -1
         j = ('Failed to parse JSON:\n'
              '[[command: %s]]\n'
