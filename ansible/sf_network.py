@@ -45,7 +45,7 @@ def present(module):
 
     try:
         j = json.loads(stdout)
-    except json.decoder.JSONDecodeError:
+    except ValueError:
         rc = -1
         j = ('Failed to parse JSON:\n'
              '[[command: %s]]\n'
@@ -69,7 +69,7 @@ def absent(module):
 
     try:
         j = json.loads(stdout)
-    except json.decoder.JSONDecodeError:
+    except ValueError:
         rc = -1
         j = ('Failed to parse JSON:\n'
              '[[command: %s]]\n'
