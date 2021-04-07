@@ -4,6 +4,7 @@
 # https://blog.toast38coza.me/custom-ansible-module-hello-world/
 
 import json
+import time
 
 from ansible.module_utils.basic import AnsibleModule
 
@@ -113,15 +114,28 @@ def present(module):
     rc, stdout, stderr = module.run_command(
         cmd, check_rc=False, use_unsafe_shell=True)
 
-    try:
-        j = json.loads(stdout)
-    except ValueError:
-        rc = -1
-        j = ('Failed to parse JSON:\n'
-             '[[command: %s]]\n'
-             '[[stdout: %s]]\n'
-             '[[stderr: %s]]'
-             % (cmd, stdout, stderr))
+    finalized = False
+    while not finalized:
+        try:
+            j = json.loads(stdout)
+            if j['state'] == 'created':
+                finalized = True
+            elif j['state'].endswith('error'):
+                return error('Instance %s failed to create' % j['uuid'])
+
+            if not finalized:
+                rc, stdout, stderr = module.run_command(
+                    'sf-client --json instance show %s' % j['uuid'],
+                    check_rc=False, use_unsafe_shell=True)
+                time.sleep(5)
+
+        except ValueError:
+            rc = -1
+            j = ('Failed to parse JSON:\n'
+                 '[[command: %s]]\n'
+                 '[[stdout: %s]]\n'
+                 '[[stderr: %s]]'
+                 % (cmd, stdout, stderr))
 
     if rc != 0:
         return True, False, j
