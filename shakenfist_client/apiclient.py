@@ -467,5 +467,5 @@ class Client(object):
 
 
 def get_user_agent():
-    sf_version = VersionInfo('shakenfist').version_string()
+    sf_version = VersionInfo('shakenfist_client').version_string()
     return 'Mozilla/5.0 (Ubuntu; Linux x86_64) Shaken Fist/%s' % sf_version
