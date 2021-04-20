@@ -16,28 +16,32 @@ class ApiClientTestCase(testtools.TestCase):
         self.addCleanup(self.request_url.stop)
 
     def test_get_instances(self):
-        client = apiclient.Client(suppress_configuration_lookup=True)
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
         list(client.get_instances())
 
         self.mock_request.assert_called_with(
             'GET', 'http://localhost:13000/instances', data={'all': False})
 
     def test_get_instance(self):
-        client = apiclient.Client(suppress_configuration_lookup=True)
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
         client.get_instance('notreallyauuid')
 
         self.mock_request.assert_called_with(
             'GET', 'http://localhost:13000/instances/notreallyauuid')
 
     def test_get_instance_interfaces(self):
-        client = apiclient.Client(suppress_configuration_lookup=True)
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
         client.get_instance_interfaces('notreallyauuid')
 
         self.mock_request.assert_called_with(
             'GET', 'http://localhost:13000/instances/notreallyauuid/interfaces')
 
     def test_create_instance(self):
-        client = apiclient.Client(suppress_configuration_lookup=True)
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
         client.create_instance('foo', 1, 2048, ['netuuid1'], ['8@cirros'],
                                'sshkey', None, namespace=None, force_placement=None,
                                video={'model': 'cirrus', 'memory': 16384})
@@ -57,7 +61,8 @@ class ApiClientTestCase(testtools.TestCase):
             })
 
     def test_create_instance_user_data(self):
-        client = apiclient.Client(suppress_configuration_lookup=True)
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
         client.create_instance('foo', 1, 2048, ['netuuid1'], ['8@cirros'],
                                'sshkey', 'userdatabeforebase64', namespace=None,
                                force_placement=None,
@@ -78,7 +83,8 @@ class ApiClientTestCase(testtools.TestCase):
             })
 
     def test_snapshot_instance(self):
-        client = apiclient.Client(suppress_configuration_lookup=True)
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
         client.snapshot_instance('notreallyauuid', all=True)
 
         self.mock_request.assert_called_with(
@@ -86,56 +92,64 @@ class ApiClientTestCase(testtools.TestCase):
             data={'all': True})
 
     def test_soft_reboot_instance(self):
-        client = apiclient.Client(suppress_configuration_lookup=True)
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
         client.reboot_instance('notreallyauuid')
 
         self.mock_request.assert_called_with(
             'POST', 'http://localhost:13000/instances/notreallyauuid/rebootsoft')
 
     def test_hard_reboot_instance(self):
-        client = apiclient.Client(suppress_configuration_lookup=True)
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
         client.reboot_instance('notreallyauuid', hard=True)
 
         self.mock_request.assert_called_with(
             'POST', 'http://localhost:13000/instances/notreallyauuid/reboothard')
 
     def test_power_off_instance(self):
-        client = apiclient.Client(suppress_configuration_lookup=True)
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
         client.power_off_instance('notreallyauuid')
 
         self.mock_request.assert_called_with(
             'POST', 'http://localhost:13000/instances/notreallyauuid/poweroff')
 
     def test_power_on_instance(self):
-        client = apiclient.Client(suppress_configuration_lookup=True)
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
         client.power_on_instance('notreallyauuid')
 
         self.mock_request.assert_called_with(
             'POST', 'http://localhost:13000/instances/notreallyauuid/poweron')
 
     def test_pause_instance(self):
-        client = apiclient.Client(suppress_configuration_lookup=True)
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
         client.pause_instance('notreallyauuid')
 
         self.mock_request.assert_called_with(
             'POST', 'http://localhost:13000/instances/notreallyauuid/pause')
 
     def test_unpause_instance(self):
-        client = apiclient.Client(suppress_configuration_lookup=True)
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
         client.unpause_instance('notreallyauuid')
 
         self.mock_request.assert_called_with(
             'POST', 'http://localhost:13000/instances/notreallyauuid/unpause')
 
     def test_delete_instance(self):
-        client = apiclient.Client(suppress_configuration_lookup=True)
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
         client.delete_instance('notreallyauuid', async_request=True)
 
         self.mock_request.assert_called_with(
             'DELETE', 'http://localhost:13000/instances/notreallyauuid')
 
     def test_delete_all_instances(self):
-        client = apiclient.Client(suppress_configuration_lookup=True)
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
         client.delete_all_instances(None)
 
         self.mock_request.assert_called_with(
@@ -143,7 +157,8 @@ class ApiClientTestCase(testtools.TestCase):
             data={'confirm': True, 'namespace': None})
 
     def test_delete_all_instances_namespace(self):
-        client = apiclient.Client(suppress_configuration_lookup=True)
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
         client.delete_all_instances('bobspace')
 
         self.mock_request.assert_called_with(
@@ -151,7 +166,8 @@ class ApiClientTestCase(testtools.TestCase):
             data={'confirm': True, 'namespace': 'bobspace'})
 
     def test_cache_image(self):
-        client = apiclient.Client(suppress_configuration_lookup=True)
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
         client.cache_image('imageurl')
 
         self.mock_request.assert_called_with(
@@ -159,7 +175,8 @@ class ApiClientTestCase(testtools.TestCase):
             data={'url': 'imageurl'})
 
     def test_get_image_meta(self):
-        client = apiclient.Client(suppress_configuration_lookup=True)
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
         client.get_image_meta('sf-2')
 
         self.mock_request.assert_called_with(
@@ -167,7 +184,8 @@ class ApiClientTestCase(testtools.TestCase):
             data={'node': 'sf-2'})
 
     def test_create_namespace(self):
-        client = apiclient.Client(suppress_configuration_lookup=True)
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
         client.create_namespace('testspace')
 
         self.mock_request.assert_called_with(
@@ -175,14 +193,16 @@ class ApiClientTestCase(testtools.TestCase):
             data={'namespace': 'testspace'})
 
     def test_get_namespace_keynames(self):
-        client = apiclient.Client(suppress_configuration_lookup=True)
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
         client.get_namespace_keynames('testspace')
 
         self.mock_request.assert_called_with(
             'GET', 'http://localhost:13000/auth/namespaces/testspace/keys')
 
     def test_add_namespace_key(self):
-        client = apiclient.Client(suppress_configuration_lookup=True)
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
         client.add_namespace_key('testspace', 'testkeyname', 'secretkey')
 
         self.mock_request.assert_called_with(
@@ -191,7 +211,8 @@ class ApiClientTestCase(testtools.TestCase):
             data={'key_name': 'testkeyname', 'key': 'secretkey'})
 
     def test_delete_namespace_key(self):
-        client = apiclient.Client(suppress_configuration_lookup=True)
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
         client.delete_namespace_key('testspace', 'keyname')
 
         self.mock_request.assert_called_with(
@@ -199,14 +220,16 @@ class ApiClientTestCase(testtools.TestCase):
             'http://localhost:13000/auth/namespaces/testspace/keys/keyname')
 
     def test_get_namespace_metadata(self):
-        client = apiclient.Client(suppress_configuration_lookup=True)
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
         client.get_namespace_metadata('testspace')
 
         self.mock_request.assert_called_with(
             'GET', 'http://localhost:13000/auth/namespaces/testspace/metadata')
 
     def test_set_namespace_metadata_item(self):
-        client = apiclient.Client(suppress_configuration_lookup=True)
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
         client.set_namespace_metadata_item('testspace', 'billy', 'bob')
 
         self.mock_request.assert_called_with(
@@ -215,7 +238,8 @@ class ApiClientTestCase(testtools.TestCase):
             data={'value': 'bob'})
 
     def test_delete_namespace_metadata_item(self):
-        client = apiclient.Client(suppress_configuration_lookup=True)
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
         client.delete_namespace_metadata_item('testspace', 'billy')
 
         self.mock_request.assert_called_with(
@@ -223,7 +247,8 @@ class ApiClientTestCase(testtools.TestCase):
             'http://localhost:13000/auth/namespaces/testspace/metadata/billy')
 
     def test_delete_instance_metadata_item(self):
-        client = apiclient.Client(suppress_configuration_lookup=True)
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
         client.delete_instance_metadata_item('instance1', 'petname')
 
         self.mock_request.assert_called_with(
@@ -231,35 +256,40 @@ class ApiClientTestCase(testtools.TestCase):
             'http://localhost:13000/instances/instance1/metadata/petname')
 
     def test_delete_network_metadata_item(self):
-        client = apiclient.Client(suppress_configuration_lookup=True)
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
         client.delete_network_metadata_item('net1', 'herd')
 
         self.mock_request.assert_called_with(
             'DELETE', 'http://localhost:13000/networks/net1/metadata/herd')
 
     def test_get_networks(self):
-        client = apiclient.Client(suppress_configuration_lookup=True)
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
         client.get_networks()
 
         self.mock_request.assert_called_with(
             'GET', 'http://localhost:13000/networks', data={'all': False})
 
     def test_get_network(self):
-        client = apiclient.Client(suppress_configuration_lookup=True)
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
         client.get_network('notreallyauuid')
 
         self.mock_request.assert_called_with(
             'GET', 'http://localhost:13000/networks/notreallyauuid')
 
     def test_delete_network(self):
-        client = apiclient.Client(suppress_configuration_lookup=True)
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
         client.delete_network('notreallyauuid')
 
         self.mock_request.assert_called_with(
             'DELETE', 'http://localhost:13000/networks/notreallyauuid')
 
     def test_delete_all_networks(self):
-        client = apiclient.Client(suppress_configuration_lookup=True)
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
         client.delete_all_networks(None)
 
         self.mock_request.assert_called_with(
@@ -267,7 +297,8 @@ class ApiClientTestCase(testtools.TestCase):
             data={'confirm': True, 'namespace': None})
 
     def test_delete_all_networks_namespace(self):
-        client = apiclient.Client(suppress_configuration_lookup=True)
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
         client.delete_all_networks('bobspace')
 
         self.mock_request.assert_called_with(
@@ -275,7 +306,8 @@ class ApiClientTestCase(testtools.TestCase):
             data={'confirm': True, 'namespace': 'bobspace'})
 
     def test_allocate_network(self):
-        client = apiclient.Client(suppress_configuration_lookup=True)
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
         client.allocate_network('192.168.1.0/24', True, True, 'gerkin', None)
 
         self.mock_request.assert_called_with(
@@ -289,7 +321,8 @@ class ApiClientTestCase(testtools.TestCase):
             })
 
     def test_get_existing_locks(self):
-        client = apiclient.Client(suppress_configuration_lookup=True)
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
         client.get_existing_locks()
 
         self.mock_request.assert_called_with(
@@ -317,7 +350,8 @@ class ApiClientGetNodesTestCase(testtools.TestCase):
     @mock.patch('shakenfist_client.apiclient.Client._request_url',
                 return_value=GetNodesMock())
     def test_get_nodes(self, mock_request):
-        client = apiclient.Client(suppress_configuration_lookup=True)
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
         list(client.get_nodes())
 
         mock_request.assert_called_with(
