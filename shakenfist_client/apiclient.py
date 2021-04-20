@@ -12,6 +12,10 @@ LOG = logging.getLogger(__name__)
 LOG.setLevel(logging.INFO)
 
 
+class UnconfiguredException(Exception):
+    pass
+
+
 class APIException(Exception):
     def __init__(self, message, method, url, status_code, text):
         self.message = message
@@ -66,7 +70,7 @@ STATUS_CODES_TO_ERRORS = {
 
 
 class Client(object):
-    def __init__(self, base_url='http://localhost:13000', verbose=False,
+    def __init__(self, base_url=None, verbose=False,
                  namespace=None, key=None, sync_request_timeout=300,
                  suppress_configuration_lookup=False):
         self.sync_request_timeout = sync_request_timeout
@@ -74,8 +78,8 @@ class Client(object):
         if not suppress_configuration_lookup:
             # Where do we find authentication details? First off, we try command line
             # flags; then environment variables (thanks for doing this for free click);
-            # and finally ~/.shakenfist (which is a JSON file).
-            if not namespace:
+            # ~/.shakenfist (which is a JSON file); and finally /etc/sf/shakenfist.json.
+            if not base_url:
                 user_conf = os.path.expanduser('~/.shakenfist')
                 if os.path.exists(user_conf):
                     with open(user_conf) as f:
@@ -84,7 +88,7 @@ class Client(object):
                         key = d['key']
                         base_url = d['apiurl']
 
-            if not namespace:
+            if not base_url:
                 try:
                     if os.path.exists('/etc/sf/shakenfist.json'):
                         with open('/etc/sf/shakenfist.json') as f:
@@ -95,6 +99,10 @@ class Client(object):
                 except IOError as e:
                     if e.errno != errno.EACCES:
                         raise
+
+        if not base_url:
+            raise UnconfiguredException(
+                'You have not specified the server to communicate with')
 
         self.base_url = base_url
         self.namespace = namespace
