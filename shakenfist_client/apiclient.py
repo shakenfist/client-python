@@ -84,18 +84,24 @@ class Client(object):
                 if os.path.exists(user_conf):
                     with open(user_conf) as f:
                         d = json.loads(f.read())
-                        namespace = d['namespace']
-                        key = d['key']
-                        base_url = d['apiurl']
+                        if not namespace:
+                            namespace = d['namespace']
+                        if not key:
+                            key = d['key']
+                        if not base_url:
+                            base_url = d['apiurl']
 
             if not base_url:
                 try:
                     if os.path.exists('/etc/sf/shakenfist.json'):
                         with open('/etc/sf/shakenfist.json') as f:
                             d = json.loads(f.read())
-                            namespace = d['namespace']
-                            key = d['key']
-                            base_url = d['apiurl']
+                            if not namespace:
+                                namespace = d['namespace']
+                            if not key:
+                                key = d['key']
+                            if not base_url:
+                                base_url = d['apiurl']
                 except IOError as e:
                     if e.errno != errno.EACCES:
                         raise
