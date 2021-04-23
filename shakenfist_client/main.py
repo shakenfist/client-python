@@ -619,9 +619,13 @@ def _summarize_interfaces(instance_uuid):
     ifaces = []
     for iface in CLIENT.get_instance_interfaces(instance_uuid):
         if iface.get('floating'):
-            ifaces.append('%s (%s)' % (iface['ipv4'], iface['floating']))
+            ifaces.append('%s: %s (%s)'
+                          % (iface['order'], iface.get('ipv4', ''), iface.get('floating', '')))
         else:
-            ifaces.append(iface['ipv4'])
+            addr = iface.get('ipv4')
+            if addr is None:
+                addr = 'No address asssigned'
+            ifaces.append('%s: %s' % (iface['order'], addr))
     return ifaces
 
 
@@ -1147,14 +1151,15 @@ def _show_interface(ctx, interface, out=[]):
         print(format_string % ('network', interface['network_uuid']))
         print(format_string % ('macaddr', interface['macaddr']))
         print(format_string % ('order', interface['order']))
-        print(format_string % ('ipv4', interface['ipv4']))
-        print(format_string % ('floating', interface['floating']))
+        print(format_string % ('ipv4', interface.get('ipv4', '')))
+        print(format_string % ('floating', interface.get('floating', '')))
         print(format_string % ('model', interface['model']))
     else:
         print('iface,%s,%s,%s,%s,%s,%s,%s'
               % (interface['uuid'], interface['network_uuid'],
-                 interface['macaddr'], interface['order'], interface['ipv4'],
-                 interface['floating'], interface['model']))
+                 interface['macaddr'], interface['order'], interface.get(
+                     'ipv4', ''),
+                 interface.get('floating', ''), interface['model']))
 
 
 @interface.command(name='show', help='Show an interface')
