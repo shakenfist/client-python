@@ -72,7 +72,13 @@ STATUS_CODES_TO_ERRORS = {
 class Client(object):
     def __init__(self, base_url=None, verbose=False,
                  namespace=None, key=None, sync_request_timeout=300,
-                 suppress_configuration_lookup=False):
+                 suppress_configuration_lookup=False, logger=None):
+        global LOG
+        if verbose:
+            LOG.setLevel(logging.DEBUG)
+        if logger:
+            LOG = logger
+
         self.sync_request_timeout = sync_request_timeout
 
         if not suppress_configuration_lookup:
@@ -113,17 +119,18 @@ class Client(object):
         self.base_url = base_url
         self.namespace = namespace
         self.key = key
+        LOG.debug('Client configured with apiurl of %s for namespace %s'
+                  % (self.base_url, self.namespace))
 
         self.cached_auth = None
-        if verbose:
-            LOG.setLevel(logging.DEBUG)
 
-    def _actual_request_url(self, method, url, data=None):
+    def _actual_request_url(self, method, url, data=None, allow_redirects=True):
         h = {'Authorization': self.cached_auth,
              'User-Agent': get_user_agent()}
         if data:
             h['Content-Type'] = 'application/json'
-        r = requests.request(method, url, data=json.dumps(data), headers=h)
+        r = requests.request(method, url, data=json.dumps(data), headers=h,
+                             allow_redirects=allow_redirects)
 
         LOG.debug('-------------------------------------------------------')
         LOG.debug('API client requested: %s %s' % (method, url))
@@ -132,6 +139,9 @@ class Client(object):
                       % ('\n    '.join(json.dumps(data,
                                                   indent=4,
                                                   sort_keys=True).split('\n'))))
+        for h in r.history:
+            LOG.debug('URL request history: %s --> %s %s'
+                      % (h.url, h.status_code, h.headers.get('Location')))
         LOG.debug('API client response: code = %s' % r.status_code)
         if r.text:
             try:
@@ -148,7 +158,10 @@ class Client(object):
             raise STATUS_CODES_TO_ERRORS[r.status_code](
                 'API request failed', method, url, r.status_code, r.text)
 
-        if r.status_code != 200:
+        acceptable = [200]
+        if not allow_redirects:
+            acceptable.append(301)
+        if r.status_code not in acceptable:
             raise APIException(
                 'API request failed', method, url, r.status_code, r.text)
         return r
@@ -167,7 +180,16 @@ class Client(object):
         return 'Bearer %s' % r.json()['access_token']
 
     def _request_url(self, method, url, data=None):
+        # NOTE(mikal): if we are not authenticated, probe the base_url looking
+        # for redirections. If we are redirected, rewrite our base_url to the
+        # redirection target.
         if not self.cached_auth:
+            probe = self._actual_request_url('GET', self.base_url,
+                                             allow_redirects=False)
+            if probe.status_code == 301:
+                LOG.debug('API server redirects to %s'
+                          % probe.headers['Location'])
+                self.base_url = probe.headers['Location']
             self.cached_auth = self._authenticate()
 
         start_time = time.time()
