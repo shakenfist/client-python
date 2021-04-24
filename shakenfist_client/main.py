@@ -1278,18 +1278,20 @@ def image_list(ctx, node=None):
         x.align['url'] = 'l'
         x.sortby = 'url'
         for meta in images:
-            x.add_row([meta['ref'], meta['node'], meta['url'], meta['size'],
-                       meta['modified'], meta['fetched'], meta['file_version'],
-                       meta['checksum']])
+            x.add_row([meta.get('ref', ''), meta.get('node', ''),
+                       meta.get('url', ''), meta.get('size', ''),
+                       meta.get('modified', ''), meta.get('fetched', ''),
+                       meta.get('file_version', ''), meta.get('checksum', '')])
         print(x)
 
     elif ctx.obj['OUTPUT'] == 'simple':
         print('ref,node,url,size,modified,fetched,file_version,checksum')
         for meta in images:
             print('%s,%s,%s,%s,%s,%s,%s,%s' % (
-                meta['ref'], meta['node'], meta['url'], meta['size'],
-                meta['modified'], meta['fetched'], meta['file_version'],
-                meta['checksum']))
+                meta.get('ref', ''), meta.get('node', ''),
+                meta.get('url', ''), meta.get('size', ''),
+                meta.get('modified', ''), meta.get('fetched', ''),
+                meta.get('file_version', ''), meta.get('checksum', '')))
 
     elif ctx.obj['OUTPUT'] == 'json':
         print(json.dumps(images))
