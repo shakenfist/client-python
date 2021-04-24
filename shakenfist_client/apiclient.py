@@ -125,6 +125,8 @@ class Client(object):
         self.cached_auth = None
 
     def _actual_request_url(self, method, url, data=None, allow_redirects=True):
+        url = self.base_url + url
+
         h = {'Authorization': self.cached_auth,
              'User-Agent': get_user_agent()}
         if data:
@@ -167,6 +169,7 @@ class Client(object):
         return r
 
     def _authenticate(self):
+        LOG.debug('Authentication request made, contents not logged')
         auth_url = self.base_url + '/auth'
         r = requests.request('POST', auth_url,
                              data=json.dumps(
@@ -184,8 +187,7 @@ class Client(object):
         # for redirections. If we are redirected, rewrite our base_url to the
         # redirection target.
         if not self.cached_auth:
-            probe = self._actual_request_url('GET', self.base_url,
-                                             allow_redirects=False)
+            probe = self._actual_request_url('GET', '', allow_redirects=False)
             if probe.status_code == 301:
                 LOG.debug('API server redirects to %s'
                           % probe.headers['Location'])
@@ -210,38 +212,36 @@ class Client(object):
                 time.sleep(1)
 
     def get_instances(self, all=False):
-        r = self._request_url('GET', self.base_url +
-                              '/instances', data={'all': all})
+        r = self._request_url('GET', '/instances', data={'all': all})
         return r.json()
 
     def delete_all_instances(self, namespace):
-        r = self._request_url('DELETE', self.base_url + '/instances',
+        r = self._request_url('DELETE', '/instances',
                               data={'confirm': True,
                                     'namespace': namespace})
         return r.json()
 
     def get_instance(self, instance_uuid):
-        r = self._request_url('GET', self.base_url +
-                              '/instances/' + instance_uuid)
+        r = self._request_url('GET', '/instances/' + instance_uuid)
         return r.json()
 
     def get_instance_interfaces(self, instance_uuid):
-        r = self._request_url('GET', self.base_url + '/instances/' + instance_uuid +
+        r = self._request_url('GET', '/instances/' + instance_uuid +
                               '/interfaces')
         return r.json()
 
     def get_instance_metadata(self, instance_uuid):
-        r = self._request_url('GET', self.base_url + '/instances/' + instance_uuid +
+        r = self._request_url('GET', '/instances/' + instance_uuid +
                               '/metadata')
         return r.json()
 
     def set_instance_metadata_item(self, instance_uuid, key, value):
-        r = self._request_url('PUT', self.base_url + '/instances/' + instance_uuid +
+        r = self._request_url('PUT', '/instances/' + instance_uuid +
                               '/metadata/' + key, data={'value': value})
         return r.json()
 
     def delete_instance_metadata_item(self, instance_uuid, key):
-        r = self._request_url('DELETE', self.base_url + '/instances/' + instance_uuid +
+        r = self._request_url('DELETE', '/instances/' + instance_uuid +
                               '/metadata/' + key)
         return r.json()
 
@@ -269,7 +269,7 @@ class Client(object):
             clean_disks.append(d)
         body['disk'] = clean_disks
 
-        r = self._request_url('POST', self.base_url + '/instances',
+        r = self._request_url('POST', '/instances',
                               data=body)
         i = r.json()
         if not async_request:
@@ -283,12 +283,12 @@ class Client(object):
         return i
 
     def snapshot_instance(self, instance_uuid, all=False):
-        r = self._request_url('POST', self.base_url + '/instances/' + instance_uuid +
+        r = self._request_url('POST', '/instances/' + instance_uuid +
                               '/snapshot', data={'all': all})
         return r.json()
 
     def get_instance_snapshots(self, instance_uuid):
-        r = self._request_url('GET', self.base_url + '/instances/' + instance_uuid +
+        r = self._request_url('GET', '/instances/' + instance_uuid +
                               '/snapshot')
         return r.json()
 
@@ -296,33 +296,32 @@ class Client(object):
         style = 'soft'
         if hard:
             style = 'hard'
-        r = self._request_url('POST', self.base_url + '/instances/' + instance_uuid +
+        r = self._request_url('POST', '/instances/' + instance_uuid +
                               '/reboot' + style)
         return r.json()
 
     def power_off_instance(self, instance_uuid):
-        r = self._request_url('POST', self.base_url + '/instances/' + instance_uuid +
+        r = self._request_url('POST', '/instances/' + instance_uuid +
                               '/poweroff')
         return r.json()
 
     def power_on_instance(self, instance_uuid):
-        r = self._request_url('POST', self.base_url + '/instances/' + instance_uuid +
+        r = self._request_url('POST', '/instances/' + instance_uuid +
                               '/poweron')
         return r.json()
 
     def pause_instance(self, instance_uuid):
-        r = self._request_url('POST', self.base_url + '/instances/' + instance_uuid +
+        r = self._request_url('POST', '/instances/' + instance_uuid +
                               '/pause')
         return r.json()
 
     def unpause_instance(self, instance_uuid):
-        r = self._request_url('POST', self.base_url + '/instances/' + instance_uuid +
+        r = self._request_url('POST', '/instances/' + instance_uuid +
                               '/unpause')
         return r.json()
 
     def delete_instance(self, instance_uuid, async_request=False):
-        self._request_url('DELETE', self.base_url +
-                          '/instances/' + instance_uuid)
+        self._request_url('DELETE', '/instances/' + instance_uuid)
         if async_request:
             return
 
@@ -337,17 +336,16 @@ class Client(object):
         return
 
     def get_instance_events(self, instance_uuid):
-        r = self._request_url('GET', self.base_url +
-                              '/instances/' + instance_uuid + '/events')
+        r = self._request_url('GET', '/instances/' + instance_uuid + '/events')
         return r.json()
 
     def cache_image(self, image_url):
-        r = self._request_url('POST', self.base_url + '/images',
+        r = self._request_url('POST', '/images',
                               data={'url': image_url})
         return r.json()
 
     def get_images(self, node=None):
-        r = self._request_url('GET', self.base_url + '/images',
+        r = self._request_url('GET', '/images',
                               data={'node': node})
         return r.json()
 
@@ -358,38 +356,34 @@ class Client(object):
         return self.get_images(node=node)
 
     def get_image_events(self, image_url):
-        r = self._request_url('GET', self.base_url + '/images/events',
+        r = self._request_url('GET', '/images/events',
                               data={'url': image_url})
         return r.json()
 
     def get_networks(self, all=False):
-        r = self._request_url('GET', self.base_url +
-                              '/networks', data={'all': all})
+        r = self._request_url('GET', '/networks', data={'all': all})
         return r.json()
 
     def get_network(self, network_uuid):
-        r = self._request_url('GET', self.base_url +
-                              '/networks/' + network_uuid)
+        r = self._request_url('GET', '/networks/' + network_uuid)
         return r.json()
 
     def delete_network(self, network_uuid):
-        r = self._request_url('DELETE', self.base_url +
-                              '/networks/' + network_uuid)
+        r = self._request_url('DELETE', '/networks/' + network_uuid)
         return r.json()
 
     def delete_all_networks(self, namespace):
-        r = self._request_url('DELETE', self.base_url + '/networks',
+        r = self._request_url('DELETE', '/networks',
                               data={'confirm': True,
                                     'namespace': namespace})
         return r.json()
 
     def get_network_events(self, instance_uuid):
-        r = self._request_url('GET', self.base_url +
-                              '/networks/' + instance_uuid + '/events')
+        r = self._request_url('GET', '/networks/' + instance_uuid + '/events')
         return r.json()
 
     def allocate_network(self, netblock, provide_dhcp, provide_nat, name, namespace=None):
-        r = self._request_url('POST', self.base_url + '/networks',
+        r = self._request_url('POST', '/networks',
                               data={
                                   'netblock': netblock,
                                   'provide_dhcp': provide_dhcp,
@@ -400,46 +394,45 @@ class Client(object):
         return r.json()
 
     def get_network_interfaces(self, network_uuid):
-        r = self._request_url('GET', self.base_url + '/networks/'
-                              + network_uuid + '/interfaces')
+        r = self._request_url('GET', '/networks/' +
+                              network_uuid + '/interfaces')
         return r.json()
 
     def get_network_metadata(self, network_uuid):
-        r = self._request_url('GET', self.base_url + '/networks/' + network_uuid +
+        r = self._request_url('GET', '/networks/' + network_uuid +
                               '/metadata')
         return r.json()
 
     def set_network_metadata_item(self, network_uuid, key, value):
-        r = self._request_url('PUT', self.base_url + '/networks/' + network_uuid +
+        r = self._request_url('PUT', '/networks/' + network_uuid +
                               '/metadata/' + key, data={'value': value})
         return r.json()
 
     def delete_network_metadata_item(self, network_uuid, key):
-        r = self._request_url('DELETE', self.base_url + '/networks/' + network_uuid +
+        r = self._request_url('DELETE', '/networks/' + network_uuid +
                               '/metadata/' + key)
         return r.json()
 
     def get_nodes(self):
-        r = self._request_url('GET', self.base_url + '/nodes')
+        r = self._request_url('GET', '/nodes')
         return r.json()
 
     def get_interface(self, interface_uuid):
-        r = self._request_url('GET', self.base_url +
-                              '/interfaces/' + interface_uuid)
+        r = self._request_url('GET', '/interfaces/' + interface_uuid)
         return r.json()
 
     def float_interface(self, interface_uuid):
-        r = self._request_url('POST', self.base_url + '/interfaces/' + interface_uuid +
+        r = self._request_url('POST', '/interfaces/' + interface_uuid +
                               '/float')
         return r.json()
 
     def defloat_interface(self, interface_uuid):
-        r = self._request_url('POST', self.base_url + '/interfaces/' + interface_uuid +
+        r = self._request_url('POST', '/interfaces/' + interface_uuid +
                               '/defloat')
         return r.json()
 
     def get_console_data(self, instance_uuid, length=None):
-        url = self.base_url + '/instances/' + instance_uuid + '/consoledata'
+        url = '/instances/' + instance_uuid + '/consoledata'
         if length:
             d = {'length': length}
         else:
@@ -448,57 +441,54 @@ class Client(object):
         return r.text
 
     def get_namespaces(self):
-        r = self._request_url('GET', self.base_url + '/auth/namespaces')
+        r = self._request_url('GET', '/auth/namespaces')
         return r.json()
 
     def create_namespace(self, namespace):
-        r = self._request_url('POST', self.base_url + '/auth/namespaces',
+        r = self._request_url('POST', '/auth/namespaces',
                               data={'namespace': namespace})
         return r.json()
 
     def delete_namespace(self, namespace):
         if not namespace:
             namespace = self.namespace
-        self._request_url(
-            'DELETE', self.base_url + '/auth/namespaces/' + namespace)
+        self._request_url('DELETE', '/auth/namespaces/' + namespace)
 
     def get_namespace_keynames(self, namespace):
-        r = self._request_url('GET', self.base_url + '/auth/namespaces/' +
-                              namespace + '/keys')
+        r = self._request_url('GET', '/auth/namespaces/' + namespace + '/keys')
         return r.json()
 
     def add_namespace_key(self, namespace, key_name, key):
-        r = self._request_url('POST', self.base_url + '/auth/namespaces/' +
-                              namespace + '/keys',
+        r = self._request_url('POST', '/auth/namespaces/' + namespace + '/keys',
                               data={'key_name': key_name, 'key': key})
         return r.json()
 
     def delete_namespace_key(self, namespace, key_name):
         self._request_url(
-            'DELETE', self.base_url + '/auth/namespaces/' + namespace + '/keys/' + key_name)
+            'DELETE', '/auth/namespaces/' + namespace + '/keys/' + key_name)
 
     def get_namespace_metadata(self, namespace):
-        r = self._request_url('GET', self.base_url + '/auth/namespaces/' + namespace +
+        r = self._request_url('GET', '/auth/namespaces/' + namespace +
                               '/metadata')
         return r.json()
 
     def set_namespace_metadata_item(self, namespace, key, value):
-        r = self._request_url('PUT', self.base_url + '/auth/namespaces/' + namespace +
+        r = self._request_url('PUT', '/auth/namespaces/' + namespace +
                               '/metadata/' + key, data={'value': value})
         return r.json()
 
     def delete_namespace_metadata_item(self, namespace, key):
-        r = self._request_url('DELETE', self.base_url + '/auth/namespaces/' + namespace +
-                              '/metadata/' + key)
+        r = self._request_url(
+            'DELETE', '/auth/namespaces/' + namespace + '/metadata/' + key)
         return r.json()
 
     def get_existing_locks(self):
-        r = self._request_url('GET', self.base_url + '/admin/locks')
+        r = self._request_url('GET', '/admin/locks')
         return r.json()
 
     def ping(self, network_uuid, address):
-        r = self._request_url('GET', self.base_url +
-                              '/networks/' + network_uuid + '/ping/' + address)
+        r = self._request_url('GET', '/networks/' +
+                              network_uuid + '/ping/' + address)
         return r.json()
 
 
