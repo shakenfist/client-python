@@ -720,7 +720,7 @@ def _pretty_dict(lead_space, rows, space_rules):
     if rows:
         ret += _pretty_data(rows[0], space_rules)
     for r in rows[1:]:
-        ret += '\n'.ljust(lead_space) + _pretty_data(r, space_rules)
+        ret += '\n'.ljust(lead_space + 1) + _pretty_data(r, space_rules)
 
     return ret
 
