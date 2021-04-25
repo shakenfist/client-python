@@ -15,6 +15,10 @@ class ApiClientTestCase(testtools.TestCase):
         self.mock_request = self.request_url.start()
         self.addCleanup(self.request_url.stop)
 
+        self.sleep = mock.patch('time.sleep')
+        self.mock_sleep = self.sleep.start()
+        self.addCleanup(self.sleep.stop)
+
     def test_get_instances(self):
         client = apiclient.Client(suppress_configuration_lookup=True,
                                   base_url='http://localhost:13000')
@@ -149,7 +153,8 @@ class ApiClientTestCase(testtools.TestCase):
 
     def test_delete_all_instances(self):
         client = apiclient.Client(suppress_configuration_lookup=True,
-                                  base_url='http://localhost:13000')
+                                  base_url='http://localhost:13000',
+                                  async_strategy=apiclient.ASYNC_CONTINUE)
         client.delete_all_instances(None)
 
         self.mock_request.assert_called_with(
@@ -158,7 +163,8 @@ class ApiClientTestCase(testtools.TestCase):
 
     def test_delete_all_instances_namespace(self):
         client = apiclient.Client(suppress_configuration_lookup=True,
-                                  base_url='http://localhost:13000')
+                                  base_url='http://localhost:13000',
+                                  async_strategy=apiclient.ASYNC_CONTINUE)
         client.delete_all_instances('bobspace')
 
         self.mock_request.assert_called_with(
@@ -174,10 +180,10 @@ class ApiClientTestCase(testtools.TestCase):
             'POST', '/images',
             data={'url': 'imageurl'})
 
-    def test_get_image_meta(self):
+    def test_get_images(self):
         client = apiclient.Client(suppress_configuration_lookup=True,
                                   base_url='http://localhost:13000')
-        client.get_image_meta('sf-2')
+        client.get_images('sf-2')
 
         self.mock_request.assert_called_with(
             'GET', '/images',
@@ -206,8 +212,7 @@ class ApiClientTestCase(testtools.TestCase):
         client.add_namespace_key('testspace', 'testkeyname', 'secretkey')
 
         self.mock_request.assert_called_with(
-            'POST',
-            'http://localhost:13000/auth/namespaces/testspace/keys',
+            'POST', '/auth/namespaces/testspace/keys',
             data={'key_name': 'testkeyname', 'key': 'secretkey'})
 
     def test_delete_namespace_key(self):
@@ -216,8 +221,7 @@ class ApiClientTestCase(testtools.TestCase):
         client.delete_namespace_key('testspace', 'keyname')
 
         self.mock_request.assert_called_with(
-            'DELETE',
-            'http://localhost:13000/auth/namespaces/testspace/keys/keyname')
+            'DELETE', '/auth/namespaces/testspace/keys/keyname')
 
     def test_get_namespace_metadata(self):
         client = apiclient.Client(suppress_configuration_lookup=True,
@@ -233,8 +237,7 @@ class ApiClientTestCase(testtools.TestCase):
         client.set_namespace_metadata_item('testspace', 'billy', 'bob')
 
         self.mock_request.assert_called_with(
-            'PUT',
-            'http://localhost:13000/auth/namespaces/testspace/metadata/billy',
+            'PUT', '/auth/namespaces/testspace/metadata/billy',
             data={'value': 'bob'})
 
     def test_delete_namespace_metadata_item(self):
@@ -243,8 +246,7 @@ class ApiClientTestCase(testtools.TestCase):
         client.delete_namespace_metadata_item('testspace', 'billy')
 
         self.mock_request.assert_called_with(
-            'DELETE',
-            'http://localhost:13000/auth/namespaces/testspace/metadata/billy')
+            'DELETE', '/auth/namespaces/testspace/metadata/billy')
 
     def test_delete_instance_metadata_item(self):
         client = apiclient.Client(suppress_configuration_lookup=True,
@@ -252,8 +254,7 @@ class ApiClientTestCase(testtools.TestCase):
         client.delete_instance_metadata_item('instance1', 'petname')
 
         self.mock_request.assert_called_with(
-            'DELETE',
-            'http://localhost:13000/instances/instance1/metadata/petname')
+            'DELETE', '/instances/instance1/metadata/petname')
 
     def test_delete_network_metadata_item(self):
         client = apiclient.Client(suppress_configuration_lookup=True,

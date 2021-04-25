@@ -1,3 +1,4 @@
+import copy
 import errno
 import json
 import logging
@@ -10,6 +11,12 @@ import sys
 
 LOG = logging.getLogger(__name__)
 LOG.setLevel(logging.INFO)
+
+
+# Async strategies
+ASYNC_CONTINUE = 'continue'
+ASYNC_PAUSE = 'pause'
+ASYNC_BLOCK = 'block'
 
 
 class UnconfiguredException(Exception):
@@ -57,6 +64,10 @@ class InsufficientResourcesException(APIException):
     pass
 
 
+class UnknownAsyncStrategy(APIException):
+    pass
+
+
 STATUS_CODES_TO_ERRORS = {
     400: RequestMalformedException,
     401: UnauthorizedException,
@@ -69,10 +80,21 @@ STATUS_CODES_TO_ERRORS = {
 }
 
 
+def _calculate_async_deadline(strategy):
+    if strategy == ASYNC_CONTINUE:
+        return -1
+    if strategy == ASYNC_PAUSE:
+        return 60
+    if strategy == ASYNC_BLOCK:
+        return 3600
+    raise UnknownAsyncStrategy('Async strategy %s is unknown' % strategy)
+
+
 class Client(object):
     def __init__(self, base_url=None, verbose=False,
                  namespace=None, key=None, sync_request_timeout=300,
-                 suppress_configuration_lookup=False, logger=None):
+                 suppress_configuration_lookup=False, logger=None,
+                 async_strategy=ASYNC_BLOCK):
         global LOG
         if verbose:
             LOG.setLevel(logging.DEBUG)
@@ -119,8 +141,10 @@ class Client(object):
         self.base_url = base_url
         self.namespace = namespace
         self.key = key
-        LOG.debug('Client configured with apiurl of %s for namespace %s'
-                  % (self.base_url, self.namespace))
+        self.async_strategy = async_strategy
+        LOG.debug('Client configured with apiurl of %s for namespace %s '
+                  'and async strategy %s'
+                  % (self.base_url, self.namespace, self.async_strategy))
 
         self.cached_auth = None
 
@@ -194,7 +218,7 @@ class Client(object):
                 self.base_url = probe.headers['Location']
             self.cached_auth = self._authenticate()
 
-        start_time = time.time()
+        deadline = time.time() + _calculate_async_deadline(self.async_strategy)
         while True:
             try:
                 try:
@@ -202,13 +226,16 @@ class Client(object):
                 except UnauthorizedException:
                     self.cached_auth = self._authenticate()
                     return self._actual_request_url(method, url, data=data)
+
             except DependenciesNotReadyException as e:
                 # The API server will return a 406 exception when we have
                 # specified an operation which depends on a resource and
-                # that resource is not in the created state. We retry
-                # for a while before we give up.
-                if time.time() - start_time > 60:
+                # that resource is not in the created state.
+                if time.time() > deadline:
+                    LOG.debug('Deadline exceeded waiting for dependancies')
                     raise e
+
+                LOG.debug('Dependancies not ready, retrying')
                 time.sleep(1)
 
     def get_instances(self, all=False):
@@ -219,7 +246,25 @@ class Client(object):
         r = self._request_url('DELETE', '/instances',
                               data={'confirm': True,
                                     'namespace': namespace})
-        return r.json()
+        deleted = r.json()
+        waiting_for = copy.copy(deleted)
+
+        deadline = time.time() + _calculate_async_deadline(self.async_strategy)
+        while waiting_for:
+            LOG.debug('Waiting for instances to deleted: %s'
+                      % ', '.join(waiting_for))
+            if time.time() > deadline:
+                LOG.debug('Deadline exceeded waiting for instances to delete')
+                break
+
+            time.sleep(1)
+            for uuid in copy.copy(waiting_for):
+                inst = self.get_instance(uuid)
+                if not inst or inst['state'] == 'deleted':
+                    LOG.debug('Instance %s is now deleted' % uuid)
+                    del waiting_for[uuid]
+
+        return deleted
 
     def get_instance(self, instance_uuid):
         r = self._request_url('GET', '/instances/' + instance_uuid)
@@ -246,7 +291,7 @@ class Client(object):
         return r.json()
 
     def create_instance(self, name, cpus, memory, network, disk, sshkey, userdata,
-                        namespace=None, force_placement=None, video=None, async_request=False):
+                        namespace=None, force_placement=None, video=None):
         body = {
             'name': name,
             'cpus': cpus,
@@ -272,15 +317,19 @@ class Client(object):
         r = self._request_url('POST', '/instances',
                               data=body)
         i = r.json()
-        if not async_request:
-            start_time = time.time()
-            rounds = 1
-            while (time.time() - start_time < self.sync_request_timeout and
-                   i.get('state') in ['initial', 'creating']):
-                time.sleep(min(rounds, 10))
-                rounds += 1
-                i = self.get_instance(i['uuid'])
-        return i
+
+        deadline = time.time() + _calculate_async_deadline(self.async_strategy)
+        while True:
+            if i['state'] not in ['initial', 'creating']:
+                return i
+
+            LOG.debug('Waiting for instance to be created')
+            if time.time() > deadline:
+                LOG.debug('Deadline exceeded waiting for instance to be created')
+                return i
+
+            time.sleep(1)
+            i = self.get_instance(i['uuid'])
 
     def snapshot_instance(self, instance_uuid, all=False):
         r = self._request_url('POST', '/instances/' + instance_uuid +
@@ -326,14 +375,18 @@ class Client(object):
             return
 
         i = self.get_instance(instance_uuid)
-        start_time = time.time()
-        rounds = 1
-        while (time.time() - start_time < self.sync_request_timeout and
-               i and i.get('state') not in ['deleted', 'error']):
-            time.sleep(min(rounds, 10))
-            rounds += 1
+        deadline = time.time() + _calculate_async_deadline(self.async_strategy)
+        while True:
+            if i['state'] == 'deleted':
+                return
+
+            LOG.debug('Waiting for instance to be deleted')
+            if time.time() > deadline:
+                LOG.debug('Deadline exceeded waiting for instance to delete')
+                return
+
+            time.sleep(1)
             i = self.get_instance(instance_uuid)
-        return
 
     def get_instance_events(self, instance_uuid):
         r = self._request_url('GET', '/instances/' + instance_uuid + '/events')
