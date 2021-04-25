@@ -12,10 +12,43 @@ import sys
 from shakenfist_client import apiclient
 
 
-logging.basicConfig(level=logging.INFO)
+class LogFormatter(logging.Formatter):
+    def format(self, record):
+        level_to_color = {
+            logging.DEBUG: 'blue',
+            logging.INFO: None,
+            logging.WARNING: 'yellow',
+            logging.ERROR: 'red'
+        }
+
+        if not record.exc_info:
+            colour = level_to_color.get(record.levelno)
+            msg = record.getMessage()
+            if colour:
+                return '%s: %s' % (click.style(logging._levelToName[record.levelno],
+                                               level_to_color[record.levelno]),
+                                   msg)
+            return msg
+        return logging.Formatter.format(self, record)
+
+
+class LoggingHandler(logging.Handler):
+    level = logging.INFO
+
+    def emit(self, record):
+        try:
+            # NOTE(mikal): level looks unused, but is used by the python
+            # logging handler
+            self.level = logging._nameToLevel[record.levelname.upper()]
+            click.echo(self.format(record), err=True)
+        except Exception:
+            self.handleError(record)
+
 
 LOG = logging.getLogger(__name__)
-LOG.setLevel(logging.INFO)
+handler = LoggingHandler()
+handler.formatter = LogFormatter()
+LOG.handlers = [handler]
 
 
 CLIENT = None
@@ -27,38 +60,38 @@ class GroupCatchExceptions(click.Group):
             return self.main(*args, **kwargs)
 
         except apiclient.RequestMalformedException as e:
-            click.echo('ERROR: Malformed Request: %s' % error_text(e.text))
+            LOG.error('Malformed Request: %s' % error_text(e.text))
             sys.exit(1)
 
-        except apiclient.UnauthorizedException:
-            click.echo('ERROR: Not authorized')
+        except apiclient.UnauthorizedException as e:
+            LOG.error('Not authorized: %s' % e)
             sys.exit(1)
 
         except apiclient.ResourceCannotBeDeletedException as e:
-            click.echo('ERROR: Cannot delete resource: %s' %
-                       error_text(e.text))
+            LOG.error('Cannot delete resource: %s' % error_text(e.text))
             sys.exit(1)
 
         except apiclient.ResourceNotFoundException as e:
-            click.echo('ERROR: Resource not found: %s' % error_text(e.text))
+            LOG.error('Resource not found: %s' % error_text(e.text))
             sys.exit(1)
 
         except apiclient.ResourceInUseException as e:
-            click.echo('ERROR: Resource in use: %s' % error_text(e.text))
+            LOG.error('Resource in use: %s' % error_text(e.text))
             sys.exit(1)
 
         except apiclient.InternalServerError as e:
             # Print full error since server should not fail
-            click.echo('ERROR: Internal Server Error: %s' % e.text)
+            LOG.error('Internal Server Error: %s' % e.text)
             sys.exit(1)
 
         except apiclient.InsufficientResourcesException as e:
-            click.echo('ERROR: Insufficient Resources: %s' %
-                       error_text(e.text))
+            LOG.error('Insufficient Resources: %s' %
+                      error_text(e.text))
             sys.exit(1)
 
         except apiclient.requests.exceptions.ConnectionError as e:
-            click.echo('ERROR: Unable to connect to server: %s' % e)
+            LOG.error('Unable to connect to server: %s' % e)
+            sys.exit(1)
 
 
 def error_text(json_text):
@@ -114,6 +147,9 @@ def cli(ctx, output, verbose, namespace, key, apiurl):
     ctx.obj['OUTPUT'] = output
 
     if verbose:
+        LOG.setLevel(logging.DEBUG)
+        LOG.debug('Set log level to DEBUG')
+    else:
         LOG.setLevel(logging.INFO)
 
     global CLIENT
@@ -121,7 +157,8 @@ def cli(ctx, output, verbose, namespace, key, apiurl):
         namespace=namespace,
         key=key,
         base_url=apiurl,
-        verbose=verbose)
+        logger=LOG)
+    LOG.debug('Client for %s constructed' % apiurl)
 
 
 @click.group(help='Node commands')
@@ -152,7 +189,8 @@ def node_list(ctx):
         for n in nodes:
             filtered_nodes.append(
                 filter_dict(n, ['name', 'ip', 'lastseen', 'version']))
-        print(json.dumps({'nodes': filtered_nodes}, indent=4, sort_keys=True))
+        print(json.dumps({'nodes': filtered_nodes},
+                         indent=4, sort_keys=True))
 
 
 cli.add_command(node)
@@ -682,7 +720,7 @@ def _pretty_dict(lead_space, rows, space_rules):
     if rows:
         ret += _pretty_data(rows[0], space_rules)
     for r in rows[1:]:
-        ret += '\n'.ljust(lead_space) + _pretty_data(r, space_rules)
+        ret += '\n'.ljust(lead_space + 1) + _pretty_data(r, space_rules)
 
     return ret
 
@@ -1240,18 +1278,20 @@ def image_list(ctx, node=None):
         x.align['url'] = 'l'
         x.sortby = 'url'
         for meta in images:
-            x.add_row([meta['ref'], meta['node'], meta['url'], meta['size'],
-                       meta['modified'], meta['fetched'], meta['file_version'],
-                       meta['checksum']])
+            x.add_row([meta.get('ref', ''), meta.get('node', ''),
+                       meta.get('url', ''), meta.get('size', ''),
+                       meta.get('modified', ''), meta.get('fetched', ''),
+                       meta.get('file_version', ''), meta.get('checksum', '')])
         print(x)
 
     elif ctx.obj['OUTPUT'] == 'simple':
         print('ref,node,url,size,modified,fetched,file_version,checksum')
         for meta in images:
             print('%s,%s,%s,%s,%s,%s,%s,%s' % (
-                meta['ref'], meta['node'], meta['url'], meta['size'],
-                meta['modified'], meta['fetched'], meta['file_version'],
-                meta['checksum']))
+                meta.get('ref', ''), meta.get('node', ''),
+                meta.get('url', ''), meta.get('size', ''),
+                meta.get('modified', ''), meta.get('fetched', ''),
+                meta.get('file_version', ''), meta.get('checksum', '')))
 
     elif ctx.obj['OUTPUT'] == 'json':
         print(json.dumps(images))
