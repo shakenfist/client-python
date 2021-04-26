@@ -140,8 +140,10 @@ def longest_str(d):
 @click.option('--namespace', envvar='SHAKENFIST_NAMESPACE', default=None)
 @click.option('--key', envvar='SHAKENFIST_KEY', default=None)
 @click.option('--apiurl', envvar='SHAKENFIST_API_URL', default='http://localhost:13000')
+@click.option('--async', envvar='SHAKENFIST_ASYNC', default='pause',
+              type=click.Choice(['continue', 'pause', 'block'], case_sensitive=False))
 @click.pass_context
-def cli(ctx, output, verbose, namespace, key, apiurl):
+def cli(ctx, output, verbose, namespace, key, apiurl, async_strategy):
     if not ctx.obj:
         ctx.obj = {}
     ctx.obj['OUTPUT'] = output
@@ -157,7 +159,8 @@ def cli(ctx, output, verbose, namespace, key, apiurl):
         namespace=namespace,
         key=key,
         base_url=apiurl,
-        logger=LOG)
+        logger=LOG,
+        async_strategy=async_strategy)
     LOG.debug('Client for %s constructed' % apiurl)
 
 

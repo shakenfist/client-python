@@ -38,7 +38,7 @@ def present(module):
         if not module.params.get(required):
             return error('You must specify a %s when creating an instance' % required)
 
-    cmd = ('sf-client --json network create %(name)s %(netblock)s'
+    cmd = ('sf-client --json --async=block network create %(name)s %(netblock)s'
            % module.params)
     rc, stdout, stderr = module.run_command(
         cmd, check_rc=False, use_unsafe_shell=True)
@@ -63,7 +63,8 @@ def absent(module):
     if not module.params.get('uuid'):
         return error('You must specify a uuid when deleting a network')
 
-    cmd = ('sf-client --json network delete %(uuid)s' % module.params)
+    cmd = ('sf-client --json --async=block network delete %(uuid)s' %
+           module.params)
     rc, stdout, stderr = module.run_command(
         cmd, check_rc=False, use_unsafe_shell=True)
 
