@@ -108,7 +108,7 @@ def present(module):
         extra += ' -U "%s"' % module.params['user_data']
     params['extra'] = extra
 
-    cmd = ('sf-client --json instance create %(name)s %(cpu)s %(ram)s '
+    cmd = ('sf-client --json --async=block instance create %(name)s %(cpu)s %(ram)s '
            '%(disks)s %(diskspecs)s %(networks)s %(networkspecs)s %(placement)s '
            '%(extra)s' % params)
     rc, stdout, stderr = module.run_command(
@@ -147,7 +147,8 @@ def absent(module):
     if not module.params.get('uuid'):
         return error('You must specify a uuid when deleting an instance')
 
-    cmd = ('sf-client --json instance delete %(uuid)s' % module.params)
+    cmd = ('sf-client --json --async=block instance delete %(uuid)s'
+           % module.params)
     rc, stdout, stderr = module.run_command(
         cmd, check_rc=False, use_unsafe_shell=True)
 
