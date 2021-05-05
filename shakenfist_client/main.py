@@ -140,7 +140,7 @@ def longest_str(d):
 @click.option('--namespace', envvar='SHAKENFIST_NAMESPACE', default=None)
 @click.option('--key', envvar='SHAKENFIST_KEY', default=None)
 @click.option('--apiurl', envvar='SHAKENFIST_API_URL', default='http://localhost:13000')
-@click.option('--async', envvar='SHAKENFIST_ASYNC', default='pause',
+@click.option('--async-strategy', '--async', envvar='SHAKENFIST_ASYNC', default='pause',
               type=click.Choice(['continue', 'pause', 'block'], case_sensitive=False))
 @click.pass_context
 def cli(ctx, output, verbose, namespace, key, apiurl, async_strategy):
@@ -967,19 +967,21 @@ def instance_create(ctx, name=None, cpus=None, memory=None, network=None, floate
         network_uuid, address = _parse_spec(n)
         netdefs.append({
             'network_uuid': network_uuid,
-            'address': address,
             'macaddress': None,
             'model': 'virtio',
             'float': True
         })
+        if address:
+            netdefs[-1]['address'] = address
     for n in network:
         network_uuid, address = _parse_spec(n)
         netdefs.append({
             'network_uuid': network_uuid,
-            'address': address,
             'macaddress': None,
             'model': 'virtio'
         })
+        if address:
+            netdefs[-1]['address'] = address
     for n in networkspec:
         defn = {}
         for elem in n.split(','):
