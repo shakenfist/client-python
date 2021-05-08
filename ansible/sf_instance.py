@@ -113,6 +113,8 @@ def present(module):
            '%(extra)s' % params)
     rc, stdout, stderr = module.run_command(
         cmd, check_rc=False, use_unsafe_shell=True)
+    if rc != 0:
+        return True, False, 'Command failed: %s' % stderr
 
     finalized = False
     while not finalized:
@@ -151,6 +153,8 @@ def absent(module):
            % module.params)
     rc, stdout, stderr = module.run_command(
         cmd, check_rc=False, use_unsafe_shell=True)
+    if rc != 0:
+        return True, False, 'Command failed: %s' % stderr
 
     try:
         j = json.loads(stdout)
