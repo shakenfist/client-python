@@ -232,7 +232,7 @@ class Client(object):
                 # specified an operation which depends on a resource and
                 # that resource is not in the created state.
                 if time.time() > deadline:
-                    LOG.debug('Deadline exceeded waiting for dependancies')
+                    LOG.warning('Deadline exceeded waiting for dependancies')
                     raise e
 
                 LOG.debug('Dependancies not ready, retrying')
@@ -254,7 +254,7 @@ class Client(object):
             LOG.debug('Waiting for instances to deleted: %s'
                       % ', '.join(waiting_for))
             if time.time() > deadline:
-                LOG.debug('Deadline exceeded waiting for instances to delete')
+                LOG.warning('Deadline exceeded waiting for instances to delete')
                 break
 
             time.sleep(1)
@@ -266,8 +266,9 @@ class Client(object):
 
         return deleted
 
-    def get_instance(self, instance_uuid):
-        r = self._request_url('GET', '/instances/' + instance_uuid)
+    def get_instance(self, instance_uuid, all=False):
+        r = self._request_url('GET', '/instances/' + instance_uuid,
+                              data={'all': all})
         return r.json()
 
     def get_instance_interfaces(self, instance_uuid):
@@ -325,7 +326,7 @@ class Client(object):
 
             LOG.debug('Waiting for instance to be created')
             if time.time() > deadline:
-                LOG.debug('Deadline exceeded waiting for instance to be created')
+                LOG.warning('Deadline exceeded waiting for instance to be created')
                 return i
 
             time.sleep(1)
@@ -374,7 +375,9 @@ class Client(object):
         if async_request:
             return
 
-        i = self.get_instance(instance_uuid)
+        # We need to pass _all_ here because otherwise deleted instances are
+        # filtered away and we never exit this loop.
+        i = self.get_instance(instance_uuid, all=True)
         deadline = time.time() + _calculate_async_deadline(self.async_strategy)
         while True:
             if i['state'] == 'deleted':
@@ -382,11 +385,11 @@ class Client(object):
 
             LOG.debug('Waiting for instance to be deleted')
             if time.time() > deadline:
-                LOG.debug('Deadline exceeded waiting for instance to delete')
+                LOG.warning('Deadline exceeded waiting for instance to delete')
                 return
 
             time.sleep(1)
-            i = self.get_instance(instance_uuid)
+            i = self.get_instance(instance_uuid, all=Truerue)
 
     def get_instance_events(self, instance_uuid):
         r = self._request_url('GET', '/instances/' + instance_uuid + '/events')
