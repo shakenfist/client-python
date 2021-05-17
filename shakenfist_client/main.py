@@ -665,7 +665,7 @@ def _summarize_interfaces(instance_uuid):
         else:
             addr = iface.get('ipv4')
             if addr is None:
-                addr = 'No address asssigned'
+                addr = 'No address assigned'
             ifaces.append('%s: %s' % (iface['order'], addr))
     return ifaces
 
