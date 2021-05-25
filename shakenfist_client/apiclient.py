@@ -148,6 +148,20 @@ class Client(object):
 
         self.cached_auth = None
 
+    def _async_poller(self, obj_now, desirable, obj_refresh):
+        deadline = time.time() + _calculate_async_deadline(self.async_strategy)
+        while True:
+            if desirable(obj_now):
+                return obj_now
+
+            LOG.debug('Waiting on object %s' % obj_now['uuid'])
+            if time.time() > deadline:
+                LOG.debug('Deadline exceeded waiting for object')
+                return obj_now
+
+            time.sleep(1)
+            obj_now = obj_refresh(obj_now['uuid'])
+
     def _actual_request_url(self, method, url, data=None, allow_redirects=True):
         url = self.base_url + url
 
@@ -314,22 +328,12 @@ class Client(object):
             clean_disks.append(d)
         body['disk'] = clean_disks
 
-        r = self._request_url('POST', '/instances',
-                              data=body)
+        r = self._request_url('POST', '/instances', data=body)
         i = r.json()
 
-        deadline = time.time() + _calculate_async_deadline(self.async_strategy)
-        while True:
-            if i['state'] not in ['initial', 'creating']:
-                return i
-
-            LOG.debug('Waiting for instance to be created')
-            if time.time() > deadline:
-                LOG.debug('Deadline exceeded waiting for instance to be created')
-                return i
-
-            time.sleep(1)
-            i = self.get_instance(i['uuid'])
+        def _desirable(o):
+            return o['state'] not in ['initial', 'creating']
+        return self._async_poller(i, _desirable, self.get_instance)
 
     def snapshot_instance(self, instance_uuid, all=False):
         r = self._request_url('POST', '/instances/' + instance_uuid +
@@ -369,24 +373,13 @@ class Client(object):
                               '/unpause')
         return r.json()
 
-    def delete_instance(self, instance_uuid, async_request=False):
+    def delete_instance(self, instance_uuid):
         self._request_url('DELETE', '/instances/' + instance_uuid)
-        if async_request:
-            return
-
         i = self.get_instance(instance_uuid)
-        deadline = time.time() + _calculate_async_deadline(self.async_strategy)
-        while True:
-            if i['state'] == 'deleted':
-                return
 
-            LOG.debug('Waiting for instance to be deleted')
-            if time.time() > deadline:
-                LOG.debug('Deadline exceeded waiting for instance to delete')
-                return
-
-            time.sleep(1)
-            i = self.get_instance(instance_uuid)
+        def _desirable(o):
+            return o['state'] == 'deleted'
+        return self._async_poller(i, _desirable, self.get_instance)
 
     def get_instance_events(self, instance_uuid):
         r = self._request_url('GET', '/instances/' + instance_uuid + '/events')
@@ -422,14 +415,35 @@ class Client(object):
         return r.json()
 
     def delete_network(self, network_uuid):
-        r = self._request_url('DELETE', '/networks/' + network_uuid)
-        return r.json()
+        n = self._request_url('DELETE', '/networks/' + network_uuid)
+
+        def _desirable(o):
+            return o['state'] == 'deleted'
+        return self._async_poller(n, _desirable, self.get_network)
 
     def delete_all_networks(self, namespace):
         r = self._request_url('DELETE', '/networks',
                               data={'confirm': True,
                                     'namespace': namespace})
-        return r.json()
+        deleted = r.json()
+        waiting_for = copy.copy(deleted)
+
+        deadline = time.time() + _calculate_async_deadline(self.async_strategy)
+        while waiting_for:
+            LOG.debug('Waiting for networks to deleted: %s'
+                      % ', '.join(waiting_for))
+            if time.time() > deadline:
+                LOG.debug('Deadline exceeded waiting for networks to delete')
+                break
+
+            time.sleep(1)
+            for uuid in copy.copy(waiting_for):
+                n = self.get_network(uuid)
+                if not n or n['state'] == 'deleted':
+                    LOG.debug('Network %s is now deleted' % uuid)
+                    del waiting_for[uuid]
+
+        return deleted
 
     def get_network_events(self, instance_uuid):
         r = self._request_url('GET', '/networks/' + instance_uuid + '/events')
