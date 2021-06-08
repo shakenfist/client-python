@@ -148,19 +148,22 @@ class Client(object):
 
         self.cached_auth = None
 
-    def _async_poller(self, obj_now, desirable, obj_refresh):
+    def _async_poller(self, obj_now, desirable, obj_refresh, obj_uuid):
+        if self.async_strategy == ASYNC_CONTINUE:
+            return obj_now
+
         deadline = time.time() + _calculate_async_deadline(self.async_strategy)
         while True:
-            if desirable(obj_now):
-                return obj_now
-
-            LOG.debug('Waiting on object %s' % obj_now['uuid'])
+            LOG.debug('Waiting on object %s' % obj_uuid)
             if time.time() > deadline:
                 LOG.debug('Deadline exceeded waiting for object')
                 return obj_now
 
+            if obj_now and desirable(obj_now):
+                return obj_now
+
             time.sleep(1)
-            obj_now = obj_refresh(obj_now['uuid'])
+            obj_now = obj_refresh(obj_uuid)
 
     def _actual_request_url(self, method, url, data=None, allow_redirects=True):
         url = self.base_url + url
@@ -333,7 +336,7 @@ class Client(object):
 
         def _desirable(o):
             return o['state'] not in ['initial', 'creating']
-        return self._async_poller(i, _desirable, self.get_instance)
+        return self._async_poller(i, _desirable, self.get_instance, i['uuid'])
 
     def snapshot_instance(self, instance_uuid, all=False):
         r = self._request_url('POST', '/instances/' + instance_uuid +
@@ -375,11 +378,10 @@ class Client(object):
 
     def delete_instance(self, instance_uuid):
         self._request_url('DELETE', '/instances/' + instance_uuid)
-        i = self.get_instance(instance_uuid)
 
         def _desirable(o):
             return o['state'] == 'deleted'
-        return self._async_poller(i, _desirable, self.get_instance)
+        return self._async_poller(None, _desirable, self.get_instance, instance_uuid)
 
     def get_instance_events(self, instance_uuid):
         r = self._request_url('GET', '/instances/' + instance_uuid + '/events')
@@ -415,11 +417,11 @@ class Client(object):
         return r.json()
 
     def delete_network(self, network_uuid):
-        n = self._request_url('DELETE', '/networks/' + network_uuid)
+        self._request_url('DELETE', '/networks/' + network_uuid)
 
         def _desirable(o):
             return o['state'] == 'deleted'
-        return self._async_poller(n, _desirable, self.get_network)
+        return self._async_poller(None, _desirable, self.get_network, network_uuid)
 
     def delete_all_networks(self, namespace):
         r = self._request_url('DELETE', '/networks',

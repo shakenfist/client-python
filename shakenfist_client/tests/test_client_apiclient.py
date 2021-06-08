@@ -145,8 +145,9 @@ class ApiClientTestCase(testtools.TestCase):
 
     def test_delete_instance(self):
         client = apiclient.Client(suppress_configuration_lookup=True,
-                                  base_url='http://localhost:13000')
-        client.delete_instance('notreallyauuid', async_request=True)
+                                  base_url='http://localhost:13000',
+                                  async_strategy=apiclient.ASYNC_CONTINUE)
+        client.delete_instance('notreallyauuid')
 
         self.mock_request.assert_called_with(
             'DELETE', '/instances/notreallyauuid')
@@ -282,7 +283,8 @@ class ApiClientTestCase(testtools.TestCase):
 
     def test_delete_network(self):
         client = apiclient.Client(suppress_configuration_lookup=True,
-                                  base_url='http://localhost:13000')
+                                  base_url='http://localhost:13000',
+                                  async_strategy=apiclient.ASYNC_CONTINUE)
         client.delete_network('notreallyauuid')
 
         self.mock_request.assert_called_with(
@@ -290,7 +292,8 @@ class ApiClientTestCase(testtools.TestCase):
 
     def test_delete_all_networks(self):
         client = apiclient.Client(suppress_configuration_lookup=True,
-                                  base_url='http://localhost:13000')
+                                  base_url='http://localhost:13000',
+                                  async_strategy=apiclient.ASYNC_CONTINUE)
         client.delete_all_networks(None)
 
         self.mock_request.assert_called_with(
@@ -299,7 +302,8 @@ class ApiClientTestCase(testtools.TestCase):
 
     def test_delete_all_networks_namespace(self):
         client = apiclient.Client(suppress_configuration_lookup=True,
-                                  base_url='http://localhost:13000')
+                                  base_url='http://localhost:13000',
+                                  async_strategy=apiclient.ASYNC_CONTINUE)
         client.delete_all_networks('bobspace')
 
         self.mock_request.assert_called_with(
