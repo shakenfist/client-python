@@ -331,14 +331,27 @@ class Client(object):
             time.sleep(1)
             i = self.get_instance(i['uuid'])
 
-    def snapshot_instance(self, instance_uuid, all=False):
-        r = self._request_url('POST', '/instances/' + instance_uuid +
-                              '/snapshot', data={'all': all})
-        return r.json()
+    def snapshot_instance(self, instance_uuid, all=False, label_name=None):
+        r = self._request_url(
+            'POST', '/instances/' + instance_uuid + '/snapshot', data={'all': all})
+        out = r.json()
+
+        if not all and label_name:
+            # It only makes sense to update a label if we've snapshotted a single
+            # disk. Otherwise we'd immediately clobber the label with the last
+            # disk in the snapshot series.
+            self.update_label(label_name, out['vda']['blob_uuid'])
+
+        return out
 
     def get_instance_snapshots(self, instance_uuid):
         r = self._request_url('GET', '/instances/' + instance_uuid +
                               '/snapshot')
+        return r.json()
+
+    def update_label(self, label_name, blob_uuid):
+        r = self.test_client._request_url(
+            'POST', '/label/%s' % label_name, data={'blob_uuid': blob_uuid})
         return r.json()
 
     def reboot_instance(self, instance_uuid, hard=False):
