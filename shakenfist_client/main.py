@@ -742,7 +742,7 @@ def _show_instance(ctx, i, include_snapshots=False):
         out = filter_dict(i, ['uuid', 'name', 'namespace', 'cpus', 'memory',
                               'disk_spec', 'video', 'node', 'console_port',
                               'vdi_port', 'ssh_key', 'user_data',
-                              'power_state', 'state'])
+                              'power_state', 'state', 'uefi'])
         out['network_interfaces'] = []
         for interface in interfaces:
             _show_interface(ctx, interface, out)
@@ -770,6 +770,7 @@ def _show_instance(ctx, i, include_snapshots=False):
     print(format_string % ('namespace', i['namespace']))
     print(format_string % ('cpus', i['cpus']))
     print(format_string % ('memory', i['memory']))
+    print(format_string % ('uefi', i.get('uefi', False)))
     if ctx.obj['OUTPUT'] == 'pretty':
         print(format_string % ('disk spec',
                                _pretty_dict(15, i['disk_spec'], d_space)))
@@ -892,7 +893,8 @@ def _parse_spec(spec):
                         '\n'
                         '--placement/-p:   Force placement of instance on specified node.\n'
                         '--namespace:      If you are an admin, you can create this object in a\n'
-                        '                  different namespace.'))
+                        '                  different namespace.\n'
+                        '--uefi:           Boot using UEFI instead of BIOS.\n'))
 @click.argument('name', type=click.STRING)
 @click.argument('cpus', type=click.INT)
 @click.argument('memory', type=click.INT)
@@ -909,15 +911,20 @@ def _parse_spec(spec):
 @click.option('-U', '--encodeduserdata', type=click.STRING)
 @click.option('-p', '--placement', type=click.STRING)
 @click.option('-V', '--videospec', type=click.STRING)
+@click.option('--bios/--uefi', is_flag=True, default=True)
 @click.option('--namespace', type=click.STRING)
 @click.pass_context
 def instance_create(ctx, name=None, cpus=None, memory=None, network=None, floated=None,
                     networkspec=None, disk=None, diskspec=None, sshkey=None, sshkeydata=None,
                     userdata=None, encodeduserdata=None, placement=None, videospec=None,
-                    namespace=None):
+                    namespace=None, bios=True):
     if len(disk) < 1 and len(diskspec) < 1:
         print('You must specify at least one disk')
         return
+
+    # Because of the way click works, the logic for the BIOS vs UEFI boot flag is a
+    # bit weird. Fix it up to what the API expects...
+    uefi = not bios
 
     sshkey_content = None
     if sshkey:
@@ -1012,7 +1019,7 @@ def instance_create(ctx, name=None, cpus=None, memory=None, network=None, floate
         ctx,
         CLIENT.create_instance(name, cpus, memory, netdefs, diskdefs, sshkey_content,
                                userdata_content, force_placement=placement,
-                               namespace=namespace, video=video))
+                               namespace=namespace, video=video, uefi=uefi))
 
 
 @instance.command(name='delete', help='Delete an instance')

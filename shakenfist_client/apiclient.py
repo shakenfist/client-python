@@ -291,7 +291,7 @@ class Client(object):
         return r.json()
 
     def create_instance(self, name, cpus, memory, network, disk, sshkey, userdata,
-                        namespace=None, force_placement=None, video=None):
+                        namespace=None, force_placement=None, video=None, uefi=False):
         body = {
             'name': name,
             'cpus': cpus,
@@ -300,7 +300,8 @@ class Client(object):
             'ssh_key': sshkey,
             'user_data': userdata,
             'namespace': namespace,
-            'video': video
+            'video': video,
+            'uefi': uefi
         }
 
         if force_placement:
@@ -350,7 +351,7 @@ class Client(object):
         return r.json()
 
     def update_label(self, label_name, blob_uuid):
-        r = self.test_client._request_url(
+        r = self._request_url(
             'POST', '/label/%s' % label_name, data={'blob_uuid': blob_uuid})
         return r.json()
 
