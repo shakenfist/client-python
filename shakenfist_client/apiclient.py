@@ -350,7 +350,7 @@ class Client(object):
         return r.json()
 
     def update_label(self, label_name, blob_uuid):
-        r = self.test_client._request_url(
+        r = self._request_url(
             'POST', '/label/%s' % label_name, data={'blob_uuid': blob_uuid})
         return r.json()
 
