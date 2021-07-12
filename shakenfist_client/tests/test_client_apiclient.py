@@ -61,7 +61,8 @@ class ApiClientTestCase(testtools.TestCase):
                 'ssh_key': 'sshkey',
                 'user_data': None,
                 'namespace': None,
-                'video': {'memory': 16384, 'model': 'cirrus'}
+                'video': {'memory': 16384, 'model': 'cirrus'},
+                'uefi': False
             })
 
     def test_create_instance_user_data(self):
@@ -83,7 +84,8 @@ class ApiClientTestCase(testtools.TestCase):
                 'ssh_key': 'sshkey',
                 'user_data': 'userdatabeforebase64',
                 'namespace': None,
-                'video': {'memory': 16384, 'model': 'cirrus'}
+                'video': {'memory': 16384, 'model': 'cirrus'},
+                'uefi': False
             })
 
     def test_snapshot_instance(self):
