@@ -4,7 +4,6 @@
 # https://blog.toast38coza.me/custom-ansible-module-hello-world/
 
 import json
-import time
 
 from ansible.module_utils.basic import AnsibleModule
 
