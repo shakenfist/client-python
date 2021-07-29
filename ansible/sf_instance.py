@@ -102,10 +102,11 @@ def present(module):
         params['placement'] = '-p  %s' % module.params['placement']
 
     extra = ''
-    if module.params.get('ssh_key'):
-        extra += ' -I "%s"' % module.params['ssh_key']
-    if module.params.get('user_data'):
-        extra += ' -U "%s"' % module.params['user_data']
+    for flag, key in [('-I', 'ssh_key'), ('-U', 'user_data'), ('-V', 'video')]:
+        if module.params.get(key):
+            extra += ' %s "%s"' % (flag, module.params[key])
+    if module.params.get('uefi') and module.params['uefi']:
+        extra += ' --uefi'
     params['extra'] = extra
 
     cmd = ('sf-client --json --async=block instance create %(name)s %(cpu)s %(ram)s '
@@ -186,6 +187,8 @@ def main():
         'ssh_key': {'required': False, 'type': 'str'},
         'user_data': {'required': False, 'type': 'str'},
         'placement': {'required': False, 'type': 'str'},
+        'uefi': {'required': False, 'type': 'bool'},
+        'video': {'required': False, 'type': 'str'},
         'state': {
             'default': 'present',
             'choices': ['present', 'absent'],
