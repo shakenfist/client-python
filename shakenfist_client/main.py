@@ -912,12 +912,18 @@ def _parse_spec(spec):
 @click.option('-p', '--placement', type=click.STRING)
 @click.option('-V', '--videospec', type=click.STRING)
 @click.option('--bios/--uefi', is_flag=True, default=True)
+@click.option('--force', is_flag=True, default=False)
 @click.option('--namespace', type=click.STRING)
 @click.pass_context
 def instance_create(ctx, name=None, cpus=None, memory=None, network=None, floated=None,
                     networkspec=None, disk=None, diskspec=None, sshkey=None, sshkeydata=None,
                     userdata=None, encodeduserdata=None, placement=None, videospec=None,
-                    namespace=None, bios=True):
+                    namespace=None, bios=True, force=False):
+    if memory < 128 and not force:
+        print('Specified memory size is %dMB. This is very small.' % memory)
+        print('Use the --force flag if this is deliberate')
+        return
+
     if len(disk) < 1 and len(diskspec) < 1:
         print('You must specify at least one disk')
         return
