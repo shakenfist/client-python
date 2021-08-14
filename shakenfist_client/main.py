@@ -1165,7 +1165,7 @@ def instance_consoledata(ctx, instance_uuid=None, length=None):
 @click.pass_context
 def instance_snapshot(ctx, instance_uuid=None, all=False, label_name=None):
     snapshot_uuid = CLIENT.snapshot_instance(
-        instance_uuid, all, label_name=None)
+        instance_uuid, all, label_name=label_name)
     if ctx.obj['OUTPUT'] == 'json':
         print(json.dumps({'uuid': snapshot_uuid}, indent=4, sort_keys=True))
     else:
