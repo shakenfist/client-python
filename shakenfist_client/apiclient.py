@@ -341,7 +341,8 @@ class Client(object):
             # It only makes sense to update a label if we've snapshotted a single
             # disk. Otherwise we'd immediately clobber the label with the last
             # disk in the snapshot series.
-            self.update_label(label_name, out['vda']['blob_uuid'])
+            out['label'] = self.update_label(
+                label_name, out['vda']['blob_uuid'])
 
         return out
 
