@@ -1164,12 +1164,12 @@ def instance_consoledata(ctx, instance_uuid=None, length=None):
               help='Label this snapshot with the specified name.')
 @click.pass_context
 def instance_snapshot(ctx, instance_uuid=None, all=False, label_name=None):
-    snapshot_uuid = CLIENT.snapshot_instance(
+    snapshot = CLIENT.snapshot_instance(
         instance_uuid, all, label_name=label_name)
     if ctx.obj['OUTPUT'] == 'json':
-        print(json.dumps({'uuid': snapshot_uuid}, indent=4, sort_keys=True))
+        print(json.dumps(snapshot, indent=4, sort_keys=True))
     else:
-        print('Created snapshot %s' % snapshot_uuid)
+        print('Created snapshot %s' % snapshot)
 
 
 cli.add_command(instance)

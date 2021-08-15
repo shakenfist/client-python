@@ -337,6 +337,24 @@ class Client(object):
             'POST', '/instances/' + instance_uuid + '/snapshot', data={'all': all})
         out = r.json()
 
+        waiting_for = []
+        for s in out:
+            waiting_for.append(out[s]['blob_uuid'])
+
+        deadline = time.time() + _calculate_async_deadline(self.async_strategy)
+        while waiting_for:
+            LOG.debug('Waiting for snapshots: %s' % ', '.join(waiting_for))
+            if time.time() > deadline:
+                LOG.debug('Deadline exceeded waiting for snapshots')
+                break
+
+            time.sleep(1)
+            snaps = self.get_instance_snapshots(instance_uuid)
+            for s in snaps:
+                if s.get('blob_uuid') in waiting_for:
+                    LOG.debug('Blob %s now present' % s['blob_uuid'])
+                    waiting_for.remove(s['blob_uuid'])
+
         if not all and label_name:
             # It only makes sense to update a label if we've snapshotted a single
             # disk. Otherwise we'd immediately clobber the label with the last
