@@ -4,9 +4,6 @@ from prettytable import PrettyTable
 import sys
 
 
-from shakenfist_client import util
-
-
 def longest_str(d):
     if not d:
         return 0
@@ -18,7 +15,6 @@ def namespace():
     pass
 
 
-@util.auto_complete
 def _get_namespaces(ctx, args, incomplete):
     choices = ctx.obj['CLIENT'].get_namespaces()
     return [arg for arg in choices if arg.startswith(incomplete)]
