@@ -10,7 +10,6 @@ def interface():
     pass
 
 
-@util.auto_complete
 def _get_instance_interfaces(ctx, args, incomplete):
     choices = []
     for i in ctx.obj['CLIENT'].get_instances():

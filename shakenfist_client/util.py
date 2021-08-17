@@ -1,20 +1,4 @@
-import os
 import sys
-
-from shakenfist_client import apiclient
-
-
-def auto_complete(func):
-    global CLIENT
-
-    if not CLIENT:
-        CLIENT = apiclient.Client(
-            namespace=os.getenv('SHAKENFIST_NAMESPACE'),
-            key=os.getenv('SHAKENFIST_KEY'),
-            base_url=os.getenv('SHAKENFIST_API_URL', 'http://localhost:13000'),
-        )
-
-    return func
 
 
 def filter_dict(d, allowed_keys):
@@ -57,7 +41,6 @@ def show_interface(ctx, interface, out=[]):
                  interface.get('floating', ''), interface['model']))
 
 
-@auto_complete
 def get_networks(ctx, args, incomplete):
     choices = [i['uuid'] for i in ctx.obj['CLIENT'].get_networks()]
     return [arg for arg in choices if arg.startswith(incomplete)]

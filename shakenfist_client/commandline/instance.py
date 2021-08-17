@@ -14,7 +14,6 @@ def instance():
     pass
 
 
-@util.auto_complete
 def _get_instances(ctx, args, incomplete):
     choices = [i['uuid'] for i in ctx.obj['CLIENT'].get_instances()]
     return [arg for arg in choices if arg.startswith(incomplete)]
