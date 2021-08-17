@@ -20,18 +20,25 @@ def _get_instances(ctx, args, incomplete):
     return [arg for arg in choices if arg.startswith(incomplete)]
 
 
-def _summarize_interfaces(ctx, instance_uuid):
-    ifaces = []
-    for iface in ctx.obj['CLIENT'].get_instance_interfaces(instance_uuid):
+def _summarize_interfaces(ctx, instance):
+    interfaces = []
+    if instance.get('interfaces'):
+        interfaces = instance['interfaces']
+    else:
+        interfaces = ctx.obj['CLIENT'].get_instance_interfaces(
+            instance['uuid'])
+
+    out = []
+    for iface in interfaces:
         if iface.get('floating'):
-            ifaces.append('%s: %s (%s)'
-                          % (iface['order'], iface.get('ipv4', ''), iface.get('floating', '')))
+            out.append('%s: %s (%s)'
+                       % (iface['order'], iface.get('ipv4', ''), iface.get('floating', '')))
         else:
             addr = iface.get('ipv4')
             if addr is None:
                 addr = 'No address assigned'
-            ifaces.append('%s: %s' % (iface['order'], addr))
-    return ifaces
+            out.append('%s: %s' % (iface['order'], addr))
+    return out
 
 
 @instance.command(name='list', help='List instances')
@@ -47,7 +54,7 @@ def instance_list(ctx, all=False):
                          'cpus', 'memory', 'hypervisor',
                          'power state', 'state', 'interfaces']
         for i in insts:
-            ifaces = _summarize_interfaces(ctx, i['uuid'])
+            ifaces = _summarize_interfaces(ctx, i)
             x.add_row([i['uuid'], i['name'], i['namespace'],
                        i['cpus'], i['memory'], i['node'],
                        i.get('power_state', 'unknown'), i['state'],
@@ -57,7 +64,7 @@ def instance_list(ctx, all=False):
     elif ctx.obj['OUTPUT'] == 'simple':
         print('uuid,name,namespace,cpus,memory,hypervisor,power state,state')
         for i in insts:
-            ifaces = _summarize_interfaces(ctx, i['uuid'])
+            ifaces = _summarize_interfaces(ctx, i)
             print('%s,%s,%s,%s,%s,%s,%s,%s,%s'
                   % (i['uuid'], i['name'], i['namespace'],
                      i['cpus'], i['memory'], i['node'],
