@@ -26,6 +26,12 @@ EXAMPLES = """
     uuid: '1ebc5020-6cfd-4641-8f3b-175596a19de0'
     state: absent
   register: result
+
+- name: Create Shaken Fist network in different namespace
+  sf_network:
+    netblock: '192.168.242.0/24'
+    name: 'mynet'
+    namespace: 'mynamespace'
 """
 
 
@@ -40,6 +46,9 @@ def present(module):
 
     cmd = ('sf-client --json --async=block network create %(name)s %(netblock)s'
            % module.params)
+    if 'namespace' in module.params:
+        cmd += ' --namespace ' + module.params['namespace']
+
     rc, stdout, stderr = module.run_command(
         cmd, check_rc=False, use_unsafe_shell=True)
     if rc != 0:
@@ -67,6 +76,9 @@ def absent(module):
 
     cmd = ('sf-client --json --async=block network delete %(uuid)s' %
            module.params)
+    if 'namespace' in module.params:
+        cmd += ' --namespace ' + module.params['namespace']
+
     rc, stdout, stderr = module.run_command(
         cmd, check_rc=False, use_unsafe_shell=True)
     if rc != 0:
@@ -99,6 +111,7 @@ def main():
             'choices': ['present', 'absent'],
             'type': 'str'
         },
+        'namespace': {'type': 'str'},
     }
 
     choice_map = {

@@ -53,6 +53,15 @@ EXAMPLES = """
     state: present
   register: result
 
+- name: Create Shaken Fist instance in namespace someuser
+  sf_instance:
+    name: 'myinstance'
+    cpu: 1
+    ram: 1024
+    disks:
+      - 8@cirros
+    namespace: someuser
+
 - name: Delete an instance
   sf_instance:
     uuid: 'afb68328-6ff0-498f-bdaa-27d3fcc97f31'
@@ -112,6 +121,9 @@ def present(module):
     cmd = ('sf-client --json --async=block instance create %(name)s %(cpu)s %(ram)s '
            '%(disks)s %(diskspecs)s %(networks)s %(networkspecs)s %(placement)s '
            '%(extra)s' % params)
+    if 'namespace' in module.params:
+        cmd += ' --namespace ' + module.params['namespace']
+
     rc, stdout, stderr = module.run_command(
         cmd, check_rc=False, use_unsafe_shell=True)
     if rc != 0:
@@ -152,6 +164,9 @@ def absent(module):
 
     cmd = ('sf-client --json --async=block instance delete %(uuid)s'
            % module.params)
+    if 'namespace' in module.params:
+        cmd += ' --namespace ' + module.params['namespace']
+
     rc, stdout, stderr = module.run_command(
         cmd, check_rc=False, use_unsafe_shell=True)
     if rc != 0:
@@ -194,6 +209,7 @@ def main():
             'choices': ['present', 'absent'],
             'type': 'str'
         },
+        'namespace': {'type': 'str'},
     }
 
     choice_map = {
