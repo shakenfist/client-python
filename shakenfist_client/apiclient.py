@@ -235,7 +235,7 @@ class Client(object):
                     LOG.debug('Deadline exceeded waiting for dependancies')
                     raise e
 
-                LOG.debug('Dependancies not ready, retrying')
+                LOG.debug('Dependencies not ready, retrying')
                 time.sleep(1)
 
     def get_instances(self, all=False):
@@ -247,7 +247,7 @@ class Client(object):
                               data={'confirm': True,
                                     'namespace': namespace})
         deleted = r.json()
-        waiting_for = copy.copy(deleted)
+        waiting_for = set(deleted)
 
         deadline = time.time() + _calculate_async_deadline(self.async_strategy)
         while waiting_for:
@@ -262,7 +262,7 @@ class Client(object):
                 inst = self.get_instance(uuid)
                 if not inst or inst['state'] == 'deleted':
                     LOG.debug('Instance %s is now deleted' % uuid)
-                    del waiting_for[uuid]
+                    waiting_for.remove(uuid)
 
         return deleted
 
