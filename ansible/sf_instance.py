@@ -53,7 +53,7 @@ EXAMPLES = """
     state: present
   register: result
 
-- name: Create Shaken Fist instance in namespace someuser
+- name: Create Shaken Fist instance in namespace someuser asynchronously
   sf_instance:
     name: 'myinstance'
     cpu: 1
@@ -61,6 +61,7 @@ EXAMPLES = """
     disks:
       - 8@cirros
     namespace: someuser
+    async: true
 
 - name: Delete an instance
   sf_instance:
@@ -118,8 +119,13 @@ def present(module):
         extra += ' --uefi'
     params['extra'] = extra
 
-    cmd = ('sf-client --json --async=block instance create %(name)s %(cpu)s %(ram)s '
-           '%(disks)s %(diskspecs)s %(networks)s %(networkspecs)s %(placement)s '
+    params['async_strategy'] = 'block'
+    if module.params.get('async') and not module.params('async'):
+        params['async_strategy'] = 'continue'
+
+    cmd = ('sf-client --json --async=%(async_strategy)s instance create '
+           '%(name)s %(cpu)s %(ram)s %(disks)s %(diskspecs)s '
+           '%(networks)s %(networkspecs)s %(placement)s '
            '%(extra)s' % params)
     if 'namespace' in module.params:
         cmd += ' --namespace ' + module.params['namespace']
@@ -133,6 +139,9 @@ def present(module):
     while not finalized:
         try:
             j = json.loads(stdout)
+
+            if params['async_strategy'] == 'continue':
+                finalized = True
             if j['state'] == 'created':
                 finalized = True
             elif j['state'].endswith('error'):
@@ -195,8 +204,10 @@ def main():
         'name': {'required': False, 'type': 'str'},
         'cpu': {'required': False, 'type': 'str'},
         'ram': {'required': False, 'type': 'str'},
+
         'disks': {'required': False, 'type': 'list', 'elements': 'str'},
         'diskspecs': {'required': False, 'type': 'list', 'elements': 'str'},
+        'namespace': {'type': 'str'},
         'networks': {'required': False, 'type': 'list', 'elements': 'str'},
         'networkspecs': {'required': False, 'type': 'list', 'elements': 'str'},
         'ssh_key': {'required': False, 'type': 'str'},
@@ -204,12 +215,14 @@ def main():
         'placement': {'required': False, 'type': 'str'},
         'uefi': {'required': False, 'type': 'bool'},
         'video': {'required': False, 'type': 'str'},
+
+        'async': {'required': False, 'type': 'bool'},
+
         'state': {
             'default': 'present',
             'choices': ['present', 'absent'],
             'type': 'str'
         },
-        'namespace': {'type': 'str'},
     }
 
     choice_map = {
