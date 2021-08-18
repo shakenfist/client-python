@@ -482,7 +482,20 @@ class Client(object):
                                   'name': name,
                                   'namespace': namespace
                               })
-        return r.json()
+        n = r.json()
+
+        deadline = time.time() + _calculate_async_deadline(self.async_strategy)
+        while True:
+            if n['state'] not in ['initial', 'creating']:
+                return n
+
+            LOG.debug('Waiting for network to be created')
+            if time.time() > deadline:
+                LOG.debug('Deadline exceeded waiting for network to be created')
+                return n
+
+            time.sleep(1)
+            n = self.get_network(n['uuid'])
 
     def get_network_interfaces(self, network_uuid):
         r = self._request_url('GET', '/networks/' +

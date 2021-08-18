@@ -44,8 +44,17 @@ def present(module):
         if not module.params.get(required):
             return error('You must specify a %s when creating an instance' % required)
 
-    cmd = ('sf-client --json --async=block network create %(name)s %(netblock)s'
-           % module.params)
+    params = {}
+    for key in ['name', 'netblock']:
+        params[key] = module.params.get(key)
+
+    params['async_strategy'] = 'block'
+    if module.params.get('async') and module.params['async']:
+        params['async_strategy'] = 'continue'
+
+    cmd = ('sf-client --json --async=%(async_strategy)s '
+           'network create %(name)s %(netblock)s'
+           % params)
     if 'namespace' in module.params:
         cmd += ' --namespace ' + module.params['namespace']
 
@@ -106,12 +115,15 @@ def main():
         'uuid': {'required': False, 'type': 'str'},
         'netblock': {'required': False, 'type': 'str'},
         'name': {'required': False, 'type': 'str'},
+        'namespace': {'type': 'str'},
+
+        'async': {'required': False, 'type': 'bool'},
+
         'state': {
             'default': 'present',
             'choices': ['present', 'absent'],
             'type': 'str'
         },
-        'namespace': {'type': 'str'},
     }
 
     choice_map = {
