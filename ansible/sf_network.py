@@ -55,7 +55,7 @@ def present(module):
     cmd = ('sf-client --json --async=%(async_strategy)s '
            'network create %(name)s %(netblock)s'
            % params)
-    if 'namespace' in module.params:
+    if 'namespace' in module.params and module.params['namespace']:
         cmd += ' --namespace ' + module.params['namespace']
 
     rc, stdout, stderr = module.run_command(
