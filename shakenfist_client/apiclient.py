@@ -155,8 +155,11 @@ class Client(object):
              'User-Agent': get_user_agent()}
         if data:
             h['Content-Type'] = 'application/json'
+
+        start_time = time.time()
         r = requests.request(method, url, data=json.dumps(data), headers=h,
                              allow_redirects=allow_redirects)
+        end_time = time.time()
 
         LOG.debug('-------------------------------------------------------')
         LOG.debug('API client requested: %s %s' % (method, url))
@@ -168,7 +171,9 @@ class Client(object):
         for h in r.history:
             LOG.debug('URL request history: %s --> %s %s'
                       % (h.url, h.status_code, h.headers.get('Location')))
-        LOG.debug('API client response: code = %s' % r.status_code)
+        LOG.debug('API client response: code = %s (took %.02f seconds)'
+                  % (r.status_code, (end_time - start_time)))
+
         if r.text:
             try:
                 LOG.debug('Data:\n    %s'
@@ -198,7 +203,7 @@ class Client(object):
         r = requests.request('POST', auth_url,
                              data=json.dumps(
                                  {'namespace': self.namespace,
-                                     'key': self.key}),
+                                  'key': self.key}),
                              headers={'Content-Type': 'application/json',
                                       'User-Agent': get_user_agent()})
         if r.status_code != 200:
