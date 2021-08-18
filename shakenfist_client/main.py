@@ -1,6 +1,7 @@
 # Copyright 2020 Michael Still
 
 import click
+import datetime
 import json
 import logging
 import sys
@@ -24,14 +25,16 @@ class LogFormatter(logging.Formatter):
             logging.ERROR: 'red'
         }
 
+        timestamp = str(datetime.datetime.now())
         if not record.exc_info:
             colour = level_to_color.get(record.levelno)
             msg = record.getMessage()
             if colour:
-                return '%s: %s' % (click.style(logging._levelToName[record.levelno],
-                                               level_to_color[record.levelno]),
-                                   msg)
-            return msg
+                return '%s %s: %s' % (timestamp,
+                                      click.style(logging._levelToName[record.levelno],
+                                                  level_to_color[record.levelno]),
+                                      msg)
+            return '%s %s' % (timestamp, msg)
         return logging.Formatter.format(self, record)
 
 
