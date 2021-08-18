@@ -120,14 +120,14 @@ def present(module):
     params['extra'] = extra
 
     params['async_strategy'] = 'block'
-    if module.params.get('async') and not module.params('async'):
+    if module.params.get('async') and module.params['async']:
         params['async_strategy'] = 'continue'
 
     cmd = ('sf-client --json --async=%(async_strategy)s instance create '
            '%(name)s %(cpu)s %(ram)s %(disks)s %(diskspecs)s '
            '%(networks)s %(networkspecs)s %(placement)s '
            '%(extra)s' % params)
-    if 'namespace' in module.params:
+    if 'namespace' in module.params and module.params['namespace']:
         cmd += ' --namespace ' + module.params['namespace']
 
     rc, stdout, stderr = module.run_command(
