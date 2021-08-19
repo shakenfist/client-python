@@ -85,7 +85,7 @@ def absent(module):
 
     cmd = ('sf-client --json --async=block network delete %(uuid)s' %
            module.params)
-    if 'namespace' in module.params:
+    if 'namespace' in module.params and module.params['namespace']:
         cmd += ' --namespace ' + module.params['namespace']
 
     rc, stdout, stderr = module.run_command(
