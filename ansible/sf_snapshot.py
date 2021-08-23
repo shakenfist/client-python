@@ -15,10 +15,24 @@ short_description: Create and delete Shaken Fist instance snapshots.
 """
 
 EXAMPLES = """
-- name: Snapshot a Shaken Fist instance
+- name: Snapshot just the primary disk a Shaken Fist instance
+  sf_snapshot:
+    instance_uuid: '9cd9ca86-0dd4-4ddd-aa28-822855ea4318'
+    state: present
+  register: result
+
+- name: Snapshot all disks on a Shaken Fist instance, without blocking
   sf_snapshot:
     instance_uuid: '9cd9ca86-0dd4-4ddd-aa28-822855ea4318'
     all: true
+    async: true
+    state: present
+  register: result
+
+- name: Snapshot and update the "ciimage" label
+  sf_snapshot:
+    instance_uuid: '9cd9ca86-0dd4-4ddd-aa28-822855ea4318'
+    label: ciimage
     state: present
   register: result
 """
@@ -39,10 +53,16 @@ def present(module):
     extra = ''
     if module.params.get('all') and module.params['all']:
         extra += ' --all'
+    if module.params.get('label'):
+        extra += ' --label_name %s' % module.params['label']
     params['extra'] = extra
 
-    cmd = ('sf-client --json --async=block instance snapshot %(instance_uuid)s '
-           '%(extra)s' % params)
+    params['async_strategy'] = 'block'
+    if module.params.get('async') and module.params['async']:
+        params['async_strategy'] = 'continue'
+
+    cmd = ('sf-client --json --async=%(async_strategy)s '
+           'instance snapshot %(instance_uuid)s %(extra)s' % params)
     rc, stdout, stderr = module.run_command(
         cmd, check_rc=False, use_unsafe_shell=True)
     if rc != 0:
@@ -60,6 +80,9 @@ def main():
         'uuid': {'required': False, 'type': 'str'},
         'instance_uuid': {'required': False, 'type': 'str'},
         'all': {'required': False, 'type': 'bool'},
+
+        'async': {'required': False, 'type': 'bool'},
+
         'state': {
             'default': 'present',
             'choices': ['present', 'absent'],
