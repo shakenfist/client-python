@@ -297,7 +297,7 @@ class ApiClientTestCase(testtools.TestCase):
 
         self.mock_request.assert_called_with(
             'DELETE', '/networks',
-            data={'confirm': True, 'namespace': None})
+            data={'confirm': True, 'namespace': None, 'clean_wait': False})
 
     def test_delete_all_networks_namespace(self):
         client = apiclient.Client(suppress_configuration_lookup=True,
@@ -306,7 +306,9 @@ class ApiClientTestCase(testtools.TestCase):
 
         self.mock_request.assert_called_with(
             'DELETE', '/networks',
-            data={'confirm': True, 'namespace': 'bobspace'})
+            data={'confirm': True,
+                  'namespace': 'bobspace',
+                  'clean_wait': False})
 
     def test_allocate_network(self):
         client = apiclient.Client(suppress_configuration_lookup=True,

@@ -81,6 +81,10 @@ class GroupCatchExceptions(click.Group):
             LOG.error('Resource not found: %s' % error_text(e.text))
             sys.exit(1)
 
+        except apiclient.DependenciesNotReadyException as e:
+            LOG.error('Dependencies not ready: %s' % error_text(e.text))
+            sys.exit(1)
+
         except apiclient.ResourceInUseException as e:
             LOG.error('Resource in use: %s' % error_text(e.text))
             sys.exit(1)

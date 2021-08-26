@@ -463,10 +463,12 @@ class Client(object):
         r = self._request_url('DELETE', '/networks/' + network_uuid)
         return r.json()
 
-    def delete_all_networks(self, namespace):
+    def delete_all_networks(self, namespace, clean_wait=False):
         r = self._request_url('DELETE', '/networks',
                               data={'confirm': True,
-                                    'namespace': namespace})
+                                    'namespace': namespace,
+                                    'clean_wait': clean_wait,
+                                    })
         return r.json()
 
     def get_network_events(self, instance_uuid):
