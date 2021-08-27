@@ -58,6 +58,11 @@ def present(module):
     if 'namespace' in module.params and module.params['namespace']:
         cmd += ' --namespace ' + module.params['namespace']
 
+    if 'nat' in module.params and not module.params['nat']:
+        cmd += ' --no-nat'
+    if 'dhcp' in module.params and not module.params['dhcp']:
+        cmd += ' --no-dhcp'
+
     rc, stdout, stderr = module.run_command(
         cmd, check_rc=False, use_unsafe_shell=True)
     if rc != 0:
@@ -116,6 +121,8 @@ def main():
         'netblock': {'required': False, 'type': 'str'},
         'name': {'required': False, 'type': 'str'},
         'namespace': {'type': 'str'},
+        'nat': {'required': False, 'type': 'bool', default=True},
+        'dhcp': {'required': False, 'type': 'bool', default=True},
 
         'async': {'required': False, 'type': 'bool'},
 
