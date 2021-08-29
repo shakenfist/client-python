@@ -251,7 +251,7 @@ def _parse_spec(spec):
                         '                  size@image_url where size is in GB and @image_url\n'
                         '                  is optional.\n'
                         '--diskspec/-D:    A long form "diskspec" definition of a disk to create.\n'
-                        '--video/-V:       The video configuration for the instance.\n'
+                        '--videospec/-V:   The video configuration for the instance.\n'
                         '--sshkey/-i:      The path to a ssh public key to configure on the\n'
                         '                  instance via config drive / cloud-init.\n'
                         '--sshkeydata/-I:  A ssh public key as a string to configure on the\n'
