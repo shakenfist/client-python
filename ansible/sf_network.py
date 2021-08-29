@@ -121,8 +121,8 @@ def main():
         'netblock': {'required': False, 'type': 'str'},
         'name': {'required': False, 'type': 'str'},
         'namespace': {'type': 'str'},
-        'nat': {'required': False, 'type': 'bool', default=True},
-        'dhcp': {'required': False, 'type': 'bool', default=True},
+        'nat': {'required': False, 'type': 'bool', 'default': True},
+        'dhcp': {'required': False, 'type': 'bool', 'default': True},
 
         'async': {'required': False, 'type': 'bool'},
 
