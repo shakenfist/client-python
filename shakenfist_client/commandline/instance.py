@@ -19,25 +19,10 @@ def _get_instances(ctx, args, incomplete):
     return [arg for arg in choices if arg.startswith(incomplete)]
 
 
-def _summarize_interfaces(ctx, instance):
-    interfaces = []
+def _get_interfaces(ctx, instance):
     if instance.get('interfaces'):
-        interfaces = instance['interfaces']
-    else:
-        interfaces = ctx.obj['CLIENT'].get_instance_interfaces(
-            instance['uuid'])
-
-    out = []
-    for iface in interfaces:
-        if iface.get('floating'):
-            out.append('%s: %s (%s)'
-                       % (iface['order'], iface.get('ipv4', ''), iface.get('floating', '')))
-        else:
-            addr = iface.get('ipv4')
-            if addr is None:
-                addr = 'No address assigned'
-            out.append('%s: %s' % (iface['order'], addr))
-    return out
+        return instance['interfaces']
+    return ctx.obj['CLIENT'].get_instance_interfaces(instance['uuid'])
 
 
 @instance.command(name='list', help='List instances')
@@ -52,8 +37,17 @@ def instance_list(ctx, all=False):
         x.field_names = ['uuid', 'name', 'namespace',
                          'cpus', 'memory', 'hypervisor',
                          'power state', 'state', 'interfaces']
+        x.align['interfaces'] = 'l'
+
         for i in insts:
-            ifaces = _summarize_interfaces(ctx, i)
+            ifaces = []
+            for interface in _get_interfaces(ctx, i):
+                iface = '%s: %s' % (interface['order'],
+                                    interface.get('ipv4', 'No address assigned'))
+                if interface.get('floating'):
+                    iface += ' (%s)' % (interface['floating'],)
+                ifaces.append(iface)
+
             x.add_row([i['uuid'], i['name'], i['namespace'],
                        i['cpus'], i['memory'], i['node'],
                        i.get('power_state', 'unknown'), i['state'],
@@ -61,9 +55,17 @@ def instance_list(ctx, all=False):
         print(x)
 
     elif ctx.obj['OUTPUT'] == 'simple':
-        print('uuid,name,namespace,cpus,memory,hypervisor,power state,state')
+        print('uuid,name,namespace,cpus,memory,hypervisor,power state,state,'
+              'interfaces')
         for i in insts:
-            ifaces = _summarize_interfaces(ctx, i)
+            ifaces = []
+            for interface in _get_interfaces(ctx, i):
+                iface = '%s:%s' % (interface['order'],
+                                   interface.get('ipv4', 'None'))
+                if interface.get('floating'):
+                    iface += '(%s)' % (interface['floating'],)
+                ifaces.append(iface)
+
             print('%s,%s,%s,%s,%s,%s,%s,%s,%s'
                   % (i['uuid'], i['name'], i['namespace'],
                      i['cpus'], i['memory'], i['node'],
@@ -73,9 +75,11 @@ def instance_list(ctx, all=False):
     elif ctx.obj['OUTPUT'] == 'json':
         filtered_insts = []
         for i in insts:
-            filtered_insts.append(util.filter_dict(
+            next_inst = util.filter_dict(
                 i, ['uuid', 'name', 'namespace', 'cpus', 'memory', 'node',
-                    'power_state', 'state']))
+                    'power_state', 'state'])
+            next_inst['interfaces'] = _get_interfaces(ctx, i)
+            filtered_insts.append(next_inst)
         print(json.dumps({'instances': filtered_insts},
                          indent=4, sort_keys=True))
 
