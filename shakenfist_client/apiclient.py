@@ -6,7 +6,6 @@ import os
 from pbr.version import VersionInfo
 import requests
 import time
-import sys
 
 
 LOG = logging.getLogger(__name__)
@@ -430,24 +429,18 @@ class Client(object):
         r = self._request_url('GET', '/instances/' + instance_uuid + '/events')
         return r.json()
 
-    def cache_image(self, image_url):
-        r = self._request_url('POST', '/images',
+    def cache_artifact(self, image_url):
+        r = self._request_url('POST', '/artifacts',
                               data={'url': image_url})
         return r.json()
 
-    def get_images(self, node=None):
-        r = self._request_url('GET', '/images',
+    def get_artifacts(self, node=None):
+        r = self._request_url('GET', '/artifacts',
                               data={'node': node})
         return r.json()
 
-    def get_image_meta(self, node=None):
-        sys.stderr.write('get_image_meta() is deprecated and will be removed in '
-                         'Shaken Fist 0.5. Please convert to get_images().')
-        sys.stderr.flush()
-        return self.get_images(node=node)
-
-    def get_image_events(self, image_url):
-        r = self._request_url('GET', '/images/events',
+    def get_artifact_events(self, image_url):
+        r = self._request_url('GET', '/artifacts/events',
                               data={'url': image_url})
         return r.json()
 
