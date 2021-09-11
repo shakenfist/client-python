@@ -434,14 +434,19 @@ class Client(object):
                               data={'url': image_url})
         return r.json()
 
+    def get_artifact(self, artifact_uuid):
+        r = self._request_url('GET', '/artifacts/' + artifact_uuid)
+        return r.json()
+
     def get_artifacts(self, node=None):
         r = self._request_url('GET', '/artifacts',
                               data={'node': node})
         return r.json()
 
-    def get_artifact_events(self, image_url):
+    # TODO(mikal): this method is wrong.
+    def get_artifact_events(self, artifact_uuid):
         r = self._request_url('GET', '/artifacts/events',
-                              data={'url': image_url})
+                              data={'artifact_uuid': artifact_uuid})
         return r.json()
 
     def get_networks(self, all=False):
