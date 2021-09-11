@@ -430,8 +430,7 @@ class Client(object):
         return r.json()
 
     def cache_artifact(self, image_url):
-        r = self._request_url('POST', '/artifacts',
-                              data={'url': image_url})
+        r = self._request_url('POST', '/artifacts', data={'url': image_url})
         return r.json()
 
     def get_artifact(self, artifact_uuid):
@@ -439,14 +438,11 @@ class Client(object):
         return r.json()
 
     def get_artifacts(self, node=None):
-        r = self._request_url('GET', '/artifacts',
-                              data={'node': node})
+        r = self._request_url('GET', '/artifacts', data={'node': node})
         return r.json()
 
-    # TODO(mikal): this method is wrong.
     def get_artifact_events(self, artifact_uuid):
-        r = self._request_url('GET', '/artifacts/events',
-                              data={'artifact_uuid': artifact_uuid})
+        r = self._request_url('GET', '/artifacts/events/' + artifact_uuid)
         return r.json()
 
     def get_networks(self, all=False):
