@@ -28,7 +28,7 @@ def artifact_list(ctx, node=None):
         x = PrettyTable()
         x.field_names = ['uuid', 'type', 'source url', 'versions', 'state']
         for meta in artifacts:
-            x.add_row([meta.get('uuid', ''), meta.get('type', ''),
+            x.add_row([meta.get('uuid', ''), meta.get('artifact_type', ''),
                        meta.get('source_url', ''), meta.get('index', ''),
                        meta.get('state', '')])
         print(x)
@@ -37,7 +37,7 @@ def artifact_list(ctx, node=None):
         print('uuid,type,source_url,versions,state')
         for meta in artifacts:
             print('%s,%s,%s,%s,%s' % (
-                meta.get('uuid', ''), meta.get('type', ''),
+                meta.get('uuid', ''), meta.get('artifact_type', ''),
                 meta.get('source_url', ''), meta.get('index', ''),
                 meta.get('state', '')))
 
