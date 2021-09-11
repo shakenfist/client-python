@@ -8,7 +8,7 @@ import sys
 
 from shakenfist_client import apiclient
 from shakenfist_client.commandline import admin
-from shakenfist_client.commandline import image
+from shakenfist_client.commandline import artifact
 from shakenfist_client.commandline import instance
 from shakenfist_client.commandline import interface
 from shakenfist_client.commandline import namespace
@@ -149,7 +149,7 @@ def cli(ctx, output, verbose, namespace, key, apiurl, async_strategy):
 
 
 cli.add_command(admin.admin)
-cli.add_command(image.image)
+cli.add_command(artifact.artifact)
 cli.add_command(instance.instance)
 cli.add_command(interface.interface)
 cli.add_command(namespace.namespace)

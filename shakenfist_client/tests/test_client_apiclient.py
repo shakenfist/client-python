@@ -173,22 +173,22 @@ class ApiClientTestCase(testtools.TestCase):
             'DELETE', '/instances',
             data={'confirm': True, 'namespace': 'bobspace'})
 
-    def test_cache_image(self):
+    def test_cache_artifact(self):
         client = apiclient.Client(suppress_configuration_lookup=True,
                                   base_url='http://localhost:13000')
-        client.cache_image('imageurl')
+        client.cache_artifact('imageurl')
 
         self.mock_request.assert_called_with(
-            'POST', '/images',
+            'POST', '/artifacts',
             data={'url': 'imageurl'})
 
-    def test_get_images(self):
+    def test_get_artifacts(self):
         client = apiclient.Client(suppress_configuration_lookup=True,
                                   base_url='http://localhost:13000')
-        client.get_images('sf-2')
+        client.get_artifacts('sf-2')
 
         self.mock_request.assert_called_with(
-            'GET', '/images',
+            'GET', '/artifacts',
             data={'node': 'sf-2'})
 
     def test_create_namespace(self):
