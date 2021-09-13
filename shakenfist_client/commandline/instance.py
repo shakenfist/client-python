@@ -77,7 +77,7 @@ def instance_list(ctx, all=False):
         for i in insts:
             next_inst = util.filter_dict(
                 i, ['uuid', 'name', 'namespace', 'cpus', 'memory', 'node',
-                    'power_state', 'state'])
+                    'power_state', 'state', 'console_port', 'vdi_port'])
             next_inst['interfaces'] = _get_interfaces(ctx, i)
             filtered_insts.append(next_inst)
         print(json.dumps({'instances': filtered_insts},
