@@ -5,10 +5,17 @@ from prettytable import PrettyTable
 from tqdm import tqdm
 import sys
 
+from shakenfist_client import util
+
 
 @click.group(help='Artifact commands')
 def artifact():
     pass
+
+
+def _get_artifacts(ctx, args, incomplete):
+    choices = [a['uuid'] for a in ctx.obj['CLIENT'].get_artifacts()]
+    return [arg for arg in choices if arg.startswith(incomplete)]
 
 
 @artifact.command(name='cache',
@@ -77,3 +84,41 @@ def artifact_list(ctx, node=None):
 
     elif ctx.obj['OUTPUT'] == 'json':
         print(json.dumps(artifacts))
+
+
+@artifact.command(name='show', help='Show an artifact')
+@click.argument('artifact_uuid', type=click.STRING, autocompletion=_get_artifacts)
+@click.pass_context
+def artifact_show(ctx, artifact_uuid=None):
+    a = ctx.obj['CLIENT'].get_artifact(artifact_uuid)
+
+    if not a:
+        print('Artifact not found')
+        sys.exit(1)
+
+    if ctx.obj['OUTPUT'] == 'json':
+        out = util.filter_dict(a, ['uuid', 'artifact_type', 'state', 'source_url',
+                                   'blob_uuid', 'index'])
+        print(json.dumps(out, indent=4, sort_keys=True))
+        return
+
+    if ctx.obj['OUTPUT'] == 'simple':
+        format_string = '%s:%s'
+    else:
+        format_string = '%-25s: %s'
+
+    print(format_string % ('uuid', a['uuid']))
+    print(format_string % ('type', a['artifact_type']))
+    print(format_string % ('state', a['state']))
+    print(format_string % ('source url', a['source_url']))
+    print(format_string
+          % ('current version blob uuid', a.get('blob_uuid', 'None')))
+    print(format_string % ('number of versions', a['index']))
+
+
+@artifact.command(name='versions', help='Show versions of an artifact')
+@click.argument('artifact_uuid', type=click.STRING, autocompletion=_get_artifacts)
+@click.pass_context
+def artifact_versions(ctx, artifact_uuid=None):
+    vers = ctx.obj['CLIENT'].get_artifact_versions(artifact_uuid)
+    print(json.dumps(vers, indent=4, sort_keys=True))

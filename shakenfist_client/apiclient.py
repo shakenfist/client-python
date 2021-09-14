@@ -467,7 +467,12 @@ class Client(object):
         return r.json()
 
     def get_artifact_events(self, artifact_uuid):
-        r = self._request_url('GET', '/artifacts/events/' + artifact_uuid)
+        r = self._request_url('GET', '/artifacts/' + artifact_uuid + '/events')
+        return r.json()
+
+    def get_artifact_versions(self, artifact_uuid):
+        r = self._request_url(
+            'GET', '/artifacts/' + artifact_uuid + '/versions')
         return r.json()
 
     def get_networks(self, all=False):
