@@ -6,7 +6,7 @@ from prettytable import PrettyTable
 import sys
 
 
-from shakenfist_client import util
+from shakenfist_client import apiclient, util
 
 
 @click.group(help='Instance commands')
@@ -22,7 +22,10 @@ def _get_instances(ctx, args, incomplete):
 def _get_interfaces(ctx, instance):
     if instance.get('interfaces'):
         return instance['interfaces']
-    return ctx.obj['CLIENT'].get_instance_interfaces(instance['uuid'])
+    try:
+        return ctx.obj['CLIENT'].get_instance_interfaces(instance['uuid'])
+    except apiclient.ResourceNotFoundException:
+        return []
 
 
 @instance.command(name='list', help='List instances')
