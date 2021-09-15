@@ -406,8 +406,15 @@ class Client(object):
                               '/unpause')
         return r.json()
 
-    def delete_instance(self, instance_uuid, async_request=False):
-        self._request_url('DELETE', '/instances/' + instance_uuid)
+    def delete_instance(self, instance_uuid, namespace=None, async_request=False):
+        # Why pass a namespace when you're passing an exact UUID? The idea here
+        # is that it provides a consistent interface, but also a safety check
+        # against overly zealous loops deleting things.
+        data = None
+        if namespace:
+            data = {'namespace': namespace}
+        self._request_url('DELETE', '/instances/' + instance_uuid, data=data)
+
         if async_request:
             return
 

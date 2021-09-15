@@ -408,9 +408,10 @@ def instance_create(ctx, name=None, cpus=None, memory=None, network=None, floate
 
 @instance.command(name='delete', help='Delete an instance')
 @click.argument('instance_uuid', type=click.STRING, autocompletion=_get_instances)
+@click.option('--namespace', type=click.STRING)
 @click.pass_context
-def instance_delete(ctx, instance_uuid=None):
-    ctx.obj['CLIENT'].delete_instance(instance_uuid)
+def instance_delete(ctx, instance_uuid=None, namespace=None):
+    ctx.obj['CLIENT'].delete_instance(instance_uuid, namespace=namespace)
     if ctx.obj['OUTPUT'] == 'json':
         print('{}')
 
