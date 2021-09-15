@@ -160,9 +160,10 @@ def network_events(ctx, network_uuid=None):
 
 @network.command(name='delete', help='Delete a network')
 @click.argument('network_uuid', type=click.STRING, autocompletion=util.get_networks)
+@click.option('--namespace', type=click.STRING)
 @click.pass_context
-def network_delete(ctx, network_uuid=None):
-    ctx.obj['CLIENT'].delete_network(network_uuid)
+def network_delete(ctx, network_uuid=None, namespace=None):
+    ctx.obj['CLIENT'].delete_network(network_uuid, namespace=None)
     if ctx.obj['OUTPUT'] == 'json':
         print('{}')
 
