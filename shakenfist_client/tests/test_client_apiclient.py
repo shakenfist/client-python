@@ -151,7 +151,7 @@ class ApiClientTestCase(testtools.TestCase):
         client.delete_instance('notreallyauuid', async_request=True)
 
         self.mock_request.assert_called_with(
-            'DELETE', '/instances/notreallyauuid')
+            'DELETE', '/instances/notreallyauuid', data=None)
 
     def test_delete_all_instances(self):
         client = apiclient.Client(suppress_configuration_lookup=True,
