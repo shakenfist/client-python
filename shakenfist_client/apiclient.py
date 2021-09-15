@@ -460,8 +460,14 @@ class Client(object):
         r = self._request_url('GET', '/networks/' + network_uuid)
         return r.json()
 
-    def delete_network(self, network_uuid):
-        r = self._request_url('DELETE', '/networks/' + network_uuid)
+    def delete_network(self, network_uuid, namespace=None):
+        # Why pass a namespace when you're passing an exact UUID? The idea here
+        # is that it provides a consistent interface, but also a safety check
+        # against overly zealous loops deleting things.
+        data = None
+        if namespace:
+            data = {'namespace': namespace}
+        r = self._request_url('DELETE', '/networks/' + network_uuid, data=data)
         return r.json()
 
     def delete_all_networks(self, namespace, clean_wait=False):

@@ -288,7 +288,7 @@ class ApiClientTestCase(testtools.TestCase):
         client.delete_network('notreallyauuid')
 
         self.mock_request.assert_called_with(
-            'DELETE', '/networks/notreallyauuid')
+            'DELETE', '/networks/notreallyauuid', data=None)
 
     def test_delete_all_networks(self):
         client = apiclient.Client(suppress_configuration_lookup=True,
