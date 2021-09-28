@@ -147,26 +147,31 @@ class Client(object):
 
         self.cached_auth = None
 
-    def _actual_request_url(self, method, url, data=None, allow_redirects=True):
+    def _actual_request_url(self, method, url, data=None, data_is_binary=False,
+                            allow_redirects=True):
         url = self.base_url + url
 
         h = {'Authorization': self.cached_auth,
              'User-Agent': get_user_agent()}
         if data:
-            h['Content-Type'] = 'application/json'
+            if data_is_binary:
+                h['Content-Type'] = 'application/octet-stream'
+            else:
+                h['Content-Type'] = 'application/json'
+                data = json.dumps(data, indent=4, sort_keys=True)
 
         start_time = time.time()
-        r = requests.request(method, url, data=json.dumps(data), headers=h,
+        r = requests.request(method, url, data=data, headers=h,
                              allow_redirects=allow_redirects)
         end_time = time.time()
 
         LOG.debug('-------------------------------------------------------')
         LOG.debug('API client requested: %s %s' % (method, url))
         if data:
-            LOG.debug('Data:\n    %s'
-                      % ('\n    '.join(json.dumps(data,
-                                                  indent=4,
-                                                  sort_keys=True).split('\n'))))
+            if data_is_binary:
+                LOG.debug('Data: ...binary omitted...')
+            else:
+                LOG.debug('Data:\n    %s' % '\n    '.join(data.split('\n')))
         for h in r.history:
             LOG.debug('URL request history: %s --> %s %s'
                       % (h.url, h.status_code, h.headers.get('Location')))
@@ -174,14 +179,17 @@ class Client(object):
                   % (r.status_code, (end_time - start_time)))
 
         if r.text:
-            try:
-                LOG.debug('Data:\n    %s'
-                          % ('\n    '.join(json.dumps(json.loads(r.text),
-                                                      indent=4,
-                                                      sort_keys=True).split('\n'))))
-            except Exception:
-                LOG.debug('Text:\n    %s'
-                          % ('\n    '.join(r.text.split('\n'))))
+            if data_is_binary:
+                LOG.debug('Data: ...binary omitted...')
+            else:
+                try:
+                    LOG.debug('Data:\n    %s'
+                              % ('\n    '.join(json.dumps(json.loads(r.text),
+                                                          indent=4,
+                                                          sort_keys=True).split('\n'))))
+                except Exception:
+                    LOG.debug('Text:\n    %s'
+                              % ('\n    '.join(r.text.split('\n'))))
         LOG.debug('-------------------------------------------------------')
 
         if r.status_code in STATUS_CODES_TO_ERRORS:
@@ -210,7 +218,7 @@ class Client(object):
                                         r.status_code, r.text)
         return 'Bearer %s' % r.json()['access_token']
 
-    def _request_url(self, method, url, data=None):
+    def _request_url(self, method, url, data=None, data_is_binary=False):
         # NOTE(mikal): if we are not authenticated, probe the base_url looking
         # for redirections. If we are redirected, rewrite our base_url to the
         # redirection target.
@@ -226,10 +234,12 @@ class Client(object):
         while True:
             try:
                 try:
-                    return self._actual_request_url(method, url, data=data)
+                    return self._actual_request_url(
+                        method, url, data=data, data_is_binary=data_is_binary)
                 except UnauthorizedException:
                     self.cached_auth = self._authenticate()
-                    return self._actual_request_url(method, url, data=data)
+                    return self._actual_request_url(
+                        method, url, data=data, data_is_binary=data_is_binary)
 
             except DependenciesNotReadyException as e:
                 # The API server will return a 406 exception when we have
@@ -440,6 +450,11 @@ class Client(object):
         r = self._request_url('POST', '/artifacts', data={'url': image_url})
         return r.json()
 
+    def upload_artifact(self, name, file_like_object):
+        r = self._request_url('POST', '/artifacts/upload/%s' % name,
+                              data=file_like_object, data_is_binary=True)
+        return r.json()
+
     def get_artifact(self, artifact_uuid):
         r = self._request_url('GET', '/artifacts/' + artifact_uuid)
         return r.json()
@@ -602,6 +617,15 @@ class Client(object):
     def ping(self, network_uuid, address):
         r = self._request_url('GET', '/networks/' +
                               network_uuid + '/ping/' + address)
+        return r.json()
+
+    def create_upload(self):
+        r = self._request_url('POST', '/upload')
+        return r.json()
+
+    def send_upload(self, upload_uuid, data):
+        r = self._request_url('POST', '/upload/' + upload_uuid,
+                              data=data, data_is_binary=True)
         return r.json()
 
 
