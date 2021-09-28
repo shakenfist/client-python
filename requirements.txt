@@ -4,3 +4,4 @@ tox                 # mit
 flake8              # mit
 testtools           # mit
 requests            # apache2
+tqdm                # mit / mozilla
