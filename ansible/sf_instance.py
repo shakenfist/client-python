@@ -3,6 +3,7 @@
 # A simple Shaken Fist ansible module, with thanks to
 # https://blog.toast38coza.me/custom-ansible-module-hello-world/
 
+import datetime
 import json
 import time
 
@@ -75,9 +76,20 @@ def error(message):
     return True, False, {'error': message}
 
 
+def log(message):
+    with open('/tmp/sf_ansible.log', 'a') as logfile:
+        logfile.write('%s: sf-instance %s\n'
+                      % (datetime.datetime.now(), message))
+        logfile.flush()
+
+
 def present(module):
+    log('present starting')
+
     for required in ['name', 'cpu', 'ram']:
         if not module.params.get(required):
+            log.write('%s sf-instance required param %s missing\n'
+                      % (datetime.datetime.now(), required))
             return error('You must specify a %s when creating an instance' % required)
 
     params = {}
@@ -123,15 +135,18 @@ def present(module):
     if module.params.get('async') and module.params['async']:
         params['async_strategy'] = 'continue'
 
+    log('params: %s' % params)
     cmd = ('sf-client --json --async=%(async_strategy)s instance create '
            '%(name)s %(cpu)s %(ram)s %(disks)s %(diskspecs)s '
            '%(networks)s %(networkspecs)s %(placement)s '
            '%(extra)s' % params)
     if 'namespace' in module.params and module.params['namespace']:
         cmd += ' --namespace ' + module.params['namespace']
+    log('command: %s' % cmd)
 
     rc, stdout, stderr = module.run_command(
         cmd, check_rc=False, use_unsafe_shell=True)
+    log('exit code: %d' % rc)
     if rc != 0:
         return True, False, 'Command failed: %s' % stderr
 
@@ -139,6 +154,7 @@ def present(module):
     while not finalized:
         try:
             j = json.loads(stdout)
+            log('%s has state %s' % (j['uuid'], j['state']))
 
             if params['async_strategy'] == 'continue':
                 finalized = True
@@ -148,18 +164,23 @@ def present(module):
                 return error('Instance %s failed to create' % j['uuid'])
 
             if not finalized:
+                log('polling for finalization of uuid %s' % j['uuid'])
                 rc, stdout, stderr = module.run_command(
                     'sf-client --json instance show %s' % j['uuid'],
                     check_rc=False, use_unsafe_shell=True)
                 time.sleep(5)
 
-        except ValueError:
+        except ValueError as e:
+            log('json parse failure: %s' % e)
             rc = -1
             j = ('Failed to parse JSON:\n'
                  '[[command: %s]]\n'
                  '[[stdout: %s]]\n'
                  '[[stderr: %s]]'
                  % (cmd, stdout, stderr))
+            log('json parse failure: %s' % j)
+            break
+    log('finalized')
 
     if rc != 0:
         return True, False, j
