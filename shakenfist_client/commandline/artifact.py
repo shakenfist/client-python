@@ -49,7 +49,7 @@ def artifact_upload(ctx, name=None, source=None):
 
                 d = f.read(buffer_size)
 
-    artifact = ctx.obj['CLIENT'].upload_artifact(name, f)
+    artifact = ctx.obj['CLIENT'].upload_artifact(name, upload['uuid'])
     print('Created artifact %s' % artifact['uuid'])
 
 

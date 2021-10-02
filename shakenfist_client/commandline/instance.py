@@ -539,12 +539,14 @@ def instance_consoledata(ctx, instance_uuid=None, length=None):
 @click.argument('instance_uuid', type=click.STRING, autocompletion=_get_instances)
 @click.option('-a', '--all', is_flag=True,
               help='Snapshot all disks, not just disk 0.')
+@click.option('-d', '--device', default=None,
+              help='Snapshot this specific device, instead of disk 0.')
 @click.option('-l', '--label_name', default=None,
               help='Label this snapshot with the specified name.')
 @click.pass_context
-def instance_snapshot(ctx, instance_uuid=None, all=False, label_name=None):
+def instance_snapshot(ctx, instance_uuid=None, all=False, device=None, label_name=None):
     snapshot = ctx.obj['CLIENT'].snapshot_instance(
-        instance_uuid, all, label_name=label_name)
+        instance_uuid, all, device=device, label_name=label_name)
     if ctx.obj['OUTPUT'] == 'json':
         print(json.dumps(snapshot, indent=4, sort_keys=True))
     else:
