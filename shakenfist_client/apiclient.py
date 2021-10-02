@@ -346,9 +346,10 @@ class Client(object):
             time.sleep(1)
             i = self.get_instance(i['uuid'])
 
-    def snapshot_instance(self, instance_uuid, all=False, label_name=None):
+    def snapshot_instance(self, instance_uuid, all=False, device=None, label_name=None):
         r = self._request_url(
-            'POST', '/instances/' + instance_uuid + '/snapshot', data={'all': all})
+            'POST', '/instances/' + instance_uuid + '/snapshot',
+            data={'all': all, 'device': device})
         out = r.json()
 
         waiting_for = []
@@ -450,9 +451,9 @@ class Client(object):
         r = self._request_url('POST', '/artifacts', data={'url': image_url})
         return r.json()
 
-    def upload_artifact(self, name, file_like_object):
+    def upload_artifact(self, name, upload_uuid):
         r = self._request_url('POST', '/artifacts/upload/%s' % name,
-                              data=file_like_object, data_is_binary=True)
+                              data={'upload_uuid': upload_uuid})
         return r.json()
 
     def get_artifact(self, artifact_uuid):
