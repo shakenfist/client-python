@@ -11,6 +11,7 @@ from shakenfist_client.commandline import admin
 from shakenfist_client.commandline import artifact
 from shakenfist_client.commandline import instance
 from shakenfist_client.commandline import interface
+from shakenfist_client.commandline import label
 from shakenfist_client.commandline import namespace
 from shakenfist_client.commandline import network
 from shakenfist_client.commandline import node
@@ -152,6 +153,7 @@ cli.add_command(admin.admin)
 cli.add_command(artifact.artifact)
 cli.add_command(instance.instance)
 cli.add_command(interface.interface)
+cli.add_command(label.label)
 cli.add_command(namespace.namespace)
 cli.add_command(network.network)
 cli.add_command(node.node)
