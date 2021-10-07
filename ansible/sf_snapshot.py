@@ -80,6 +80,7 @@ def main():
         'uuid': {'required': False, 'type': 'str'},
         'instance_uuid': {'required': False, 'type': 'str'},
         'all': {'required': False, 'type': 'bool'},
+        'label': {'required': False, 'type': 'str'},
 
         'async': {'required': False, 'type': 'bool'},
 
