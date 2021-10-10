@@ -98,7 +98,7 @@ def artifact_show(ctx, artifact_uuid=None):
 
     if ctx.obj['OUTPUT'] == 'json':
         out = util.filter_dict(a, ['uuid', 'artifact_type', 'state', 'source_url',
-                                   'blob_uuid', 'index'])
+                                   'blob_uuid', 'index', 'blobs'])
         print(json.dumps(out, indent=4, sort_keys=True))
         return
 
@@ -114,6 +114,22 @@ def artifact_show(ctx, artifact_uuid=None):
     print(format_string
           % ('current version blob uuid', a.get('blob_uuid', 'None')))
     print(format_string % ('number of versions', a['index']))
+
+    if ctx.obj['OUTPUT'] == 'simple':
+        print('version,size,instance')
+        format_string = '%s:%0.1fMB,%s'
+        for ver, info in a.get('blobs', {}).items():
+            print(format_string % (ver,
+                                   int(info['size'])/1024/1024,
+                                   ','.join(info['instances'])))
+
+    else:
+        print('\nVersions used by Instances:')
+        format_string = '    %-2s : %0.1fMB  %s'
+        for ver, info in a.get('blobs', {}).items():
+            print(format_string % (ver,
+                                   int(info['size'])/1024/1024,
+                                   ', '.join(info['instances'])))
 
 
 @artifact.command(name='versions', help='Show versions of an artifact')
