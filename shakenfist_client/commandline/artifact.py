@@ -140,8 +140,16 @@ def artifact_versions(ctx, artifact_uuid=None):
     print(json.dumps(vers, indent=4, sort_keys=True))
 
 
-@artifact.command(name='delete', help='Delete an artifact (only snapshots at the moment')
+@artifact.command(name='delete', help='Delete an artifact')
 @click.argument('artifact_uuid', type=click.STRING, autocompletion=_get_artifacts)
 @click.pass_context
 def artifact_delete(ctx, artifact_uuid=None):
     ctx.obj['CLIENT'].delete_artifact(artifact_uuid)
+
+
+@artifact.command(name='delete-version', help='Delete an artifact version')
+@click.argument('artifact_uuid', type=click.STRING, autocompletion=_get_artifacts)
+@click.argument('version_id', type=click.INT)
+@click.pass_context
+def artifact_delete_version(ctx, artifact_uuid=None, version_id=0):
+    ctx.obj['CLIENT'].delete_artifact_version(artifact_uuid, str(version_id))
