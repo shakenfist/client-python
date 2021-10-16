@@ -475,6 +475,15 @@ class Client(object):
             'GET', '/artifacts/' + artifact_uuid + '/versions')
         return r.json()
 
+    def delete_artifact(self, artifact_uuid):
+        r = self._request_url('DELETE', '/artifacts/' + artifact_uuid)
+        return r.json()
+
+    def delete_artifact_version(self, artifact_uuid, version_id):
+        r = self._request_url('DELETE', '/artifacts/' + artifact_uuid +
+                              '/versions/' + version_id)
+        return r.json()
+
     def get_networks(self, all=False):
         r = self._request_url('GET', '/networks', data={'all': all})
         return r.json()
