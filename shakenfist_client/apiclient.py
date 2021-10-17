@@ -481,7 +481,7 @@ class Client(object):
 
     def delete_artifact_version(self, artifact_uuid, version_id):
         r = self._request_url('DELETE', '/artifacts/' + artifact_uuid +
-                              '/versions/' + version_id)
+                              '/versions/' + str(version_id))
         return r.json()
 
     def get_networks(self, all=False):
