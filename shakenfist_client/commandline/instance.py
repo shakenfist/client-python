@@ -535,6 +535,13 @@ def instance_consoledata(ctx, instance_uuid=None, length=None):
     print(ctx.obj['CLIENT'].get_console_data(instance_uuid, length=length))
 
 
+@instance.command(name='consoledelete', help='Clear the console log for this instance')
+@click.argument('instance_uuid', type=click.STRING, autocompletion=_get_instances)
+@click.pass_context
+def instance_consoledelete(ctx, instance_uuid=None):
+    ctx.obj['CLIENT'].get_console_delete(instance_uuid)
+
+
 @instance.command(name='snapshot', help='Snapshot instance')
 @click.argument('instance_uuid', type=click.STRING, autocompletion=_get_instances)
 @click.option('-a', '--all', is_flag=True,

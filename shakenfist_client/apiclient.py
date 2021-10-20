@@ -367,8 +367,11 @@ class Client(object):
             snaps = self.get_instance_snapshots(instance_uuid)
             for s in snaps:
                 if s.get('blob_uuid') in waiting_for:
-                    LOG.debug('Blob %s now present' % s['blob_uuid'])
-                    waiting_for.remove(s['blob_uuid'])
+                    if s.get('state') == 'created':
+                        LOG.debug('Blob %s now present' % s['blob_uuid'])
+                        waiting_for.remove(s['blob_uuid'])
+                    else:
+                        LOG.debug('Blob %s not yet created' % s['blob_uuid'])
 
         if not all and label_name:
             # It only makes sense to update a label if we've snapshotted a single
@@ -584,6 +587,10 @@ class Client(object):
             d = {}
         r = self._request_url('GET', url, data=d)
         return r.text
+
+    def delete_console_data(self, instance_uuid):
+        url = '/instances/' + instance_uuid + '/consoledata'
+        self._request_url('DELETE', url)
 
     def get_namespaces(self):
         r = self._request_url('GET', '/auth/namespaces')
