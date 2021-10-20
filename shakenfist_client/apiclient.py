@@ -588,6 +588,10 @@ class Client(object):
         r = self._request_url('GET', url, data=d)
         return r.text
 
+    def delete_console_data(self, instance_uuid):
+        url = '/instances/' + instance_uuid + '/consoledata'
+        self._request_url('DELETE', url)
+
     def get_namespaces(self):
         r = self._request_url('GET', '/auth/namespaces')
         return r.json()
