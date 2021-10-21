@@ -74,6 +74,34 @@ def present(module):
     return False, True, j
 
 
+def absent(module):
+    if not module.params.get('uuid'):
+        return error('You must specify a uuid when deleting a snapshot')
+
+    cmd = ('sf-client --json --async=block artifact delete %(uuid)s'
+           % module.params)
+
+    rc, stdout, stderr = module.run_command(
+        cmd, check_rc=False, use_unsafe_shell=True)
+    if rc != 0:
+        return True, False, 'Command failed: %s' % stderr
+
+    try:
+        j = json.loads(stdout)
+    except ValueError:
+        rc = -1
+        j = ('Failed to parse JSON:\n'
+             '[[command: %s]]\n'
+             '[[stdout: %s]]\n'
+             '[[stderr: %s]]'
+             % (cmd, stdout, stderr))
+
+    if rc != 0:
+        return True, False, j
+
+    return False, True, j
+
+
 def main():
 
     fields = {
@@ -93,6 +121,7 @@ def main():
 
     choice_map = {
         'present': present,
+        'absent': absent
     }
 
     module = AnsibleModule(argument_spec=fields)
