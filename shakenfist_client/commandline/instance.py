@@ -290,13 +290,16 @@ def _parse_spec(spec):
 @click.option('-p', '--placement', type=click.STRING)
 @click.option('-V', '--videospec', type=click.STRING)
 @click.option('--bios/--uefi', is_flag=True, default=True)
+@click.option('--configdrive', type=click.Choice(['openstack-disk', 'none'],
+                                                 case_sensitive=False),
+              default='openstack-disk')
 @click.option('--force', is_flag=True, default=False)
 @click.option('--namespace', type=click.STRING)
 @click.pass_context
 def instance_create(ctx, name=None, cpus=None, memory=None, network=None, floated=None,
                     networkspec=None, disk=None, diskspec=None, sshkey=None, sshkeydata=None,
                     userdata=None, encodeduserdata=None, placement=None, videospec=None,
-                    namespace=None, bios=True, force=False):
+                    namespace=None, bios=True, force=False, configdrive=None):
     if memory < 128 and not force:
         print('Specified memory size is %dMB. This is very small.' % memory)
         print('Use the --force flag if this is deliberate')
@@ -403,7 +406,8 @@ def instance_create(ctx, name=None, cpus=None, memory=None, network=None, floate
         ctx,
         ctx.obj['CLIENT'].create_instance(name, cpus, memory, netdefs, diskdefs, sshkey_content,
                                           userdata_content, force_placement=placement,
-                                          namespace=namespace, video=video, uefi=uefi))
+                                          namespace=namespace, video=video, uefi=uefi,
+                                          configdrive=configdrive))
 
 
 @instance.command(name='delete', help='Delete an instance')

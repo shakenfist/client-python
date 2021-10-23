@@ -62,7 +62,8 @@ class ApiClientTestCase(testtools.TestCase):
                 'user_data': None,
                 'namespace': None,
                 'video': {'memory': 16384, 'model': 'cirrus'},
-                'uefi': False
+                'uefi': False,
+                'configdrive': None
             })
 
     def test_create_instance_user_data(self):
@@ -85,7 +86,8 @@ class ApiClientTestCase(testtools.TestCase):
                 'user_data': 'userdatabeforebase64',
                 'namespace': None,
                 'video': {'memory': 16384, 'model': 'cirrus'},
-                'uefi': False
+                'uefi': False,
+                'configdrive': None
             })
 
     def test_snapshot_instance(self):
