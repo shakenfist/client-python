@@ -305,7 +305,8 @@ class Client(object):
         return r.json()
 
     def create_instance(self, name, cpus, memory, network, disk, sshkey, userdata,
-                        namespace=None, force_placement=None, video=None, uefi=False):
+                        namespace=None, force_placement=None, video=None, uefi=False,
+                        configdrive=None):
         body = {
             'name': name,
             'cpus': cpus,
@@ -315,7 +316,8 @@ class Client(object):
             'user_data': userdata,
             'namespace': namespace,
             'video': video,
-            'uefi': uefi
+            'uefi': uefi,
+            'configdrive': configdrive
         }
 
         if force_placement:

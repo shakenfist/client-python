@@ -129,6 +129,8 @@ def present(module):
             extra += ' %s "%s"' % (flag, module.params[key])
     if module.params.get('uefi') and module.params['uefi']:
         extra += ' --uefi'
+    if module.params.get('configdrive'):
+        extra += ' --configdrive %s' % module.params['configdrive']
     params['extra'] = extra
 
     params['async_strategy'] = 'block'
@@ -236,6 +238,7 @@ def main():
         'placement': {'required': False, 'type': 'str'},
         'uefi': {'required': False, 'type': 'bool'},
         'video': {'required': False, 'type': 'str'},
+        'configdrive': {'required': False, 'type': 'str'},
 
         'async': {'required': False, 'type': 'bool'},
 
