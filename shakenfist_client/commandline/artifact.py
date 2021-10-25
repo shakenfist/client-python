@@ -60,6 +60,42 @@ def artifact_upload(ctx, name=None, source=None):
     print('Created artifact %s' % artifact['uuid'])
 
 
+@artifact.command(name='download', help='Download an artifact.')
+@click.argument('artifact_uuid', type=click.STRING, autocompletion=_get_artifacts)
+@click.argument('destination', type=click.Path(exists=False))
+@click.pass_context
+def artifact_download(ctx, artifact_uuid=None, destination=None):
+    a = ctx.obj['CLIENT'].get_artifact(artifact_uuid)
+
+    if not a:
+        print('Artifact not found')
+        sys.exit(1)
+
+    blob_uuid = a.get('blob_uuid')
+    blob_index = a.get('index')
+    if not blob_uuid:
+        print('Artifact has no verions')
+
+    size = a['blobs'][blob_index]['size']
+    print('%s -> %s of %d bytes' % (artifact_uuid, blob_uuid, size))
+
+    total = 0
+    with tqdm(total=size, unit='B', unit_scale=True,
+              desc='Downloading %s to %s' % (artifact_uuid, destination)) as pbar:
+        with open(destination, 'wb') as f:
+            for chunk in ctx.obj['CLIENT'].get_blob(blob_uuid):
+                received = len(chunk)
+                f.write(chunk)
+                pbar.update(received)
+                total += received
+
+    if total != size:
+        print('Remote side has %d, we have sent %d!' % (size, total))
+        sys.exit(1)
+
+    print('Download complete')
+
+
 @artifact.command(name='list', help='List artifacts.')
 @click.pass_context
 def artifact_list(ctx, node=None):

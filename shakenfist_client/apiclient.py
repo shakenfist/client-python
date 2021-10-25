@@ -148,7 +148,7 @@ class Client(object):
         self.cached_auth = None
 
     def _actual_request_url(self, method, url, data=None, data_is_binary=False,
-                            allow_redirects=True):
+                            allow_redirects=True, stream=False):
         url = self.base_url + url
 
         h = {'Authorization': self.cached_auth,
@@ -162,7 +162,7 @@ class Client(object):
 
         start_time = time.time()
         r = requests.request(method, url, data=data, headers=h,
-                             allow_redirects=allow_redirects)
+                             allow_redirects=allow_redirects, stream=stream)
         end_time = time.time()
 
         LOG.debug('-------------------------------------------------------')
@@ -178,7 +178,7 @@ class Client(object):
         LOG.debug('API client response: code = %s (took %.02f seconds)'
                   % (r.status_code, (end_time - start_time)))
 
-        if r.text:
+        if not stream and r.text:
             if data_is_binary:
                 LOG.debug('Data: ...binary omitted...')
             else:
@@ -218,7 +218,8 @@ class Client(object):
                                         r.status_code, r.text)
         return 'Bearer %s' % r.json()['access_token']
 
-    def _request_url(self, method, url, data=None, data_is_binary=False):
+    def _request_url(self, method, url, data=None, data_is_binary=False,
+                     stream=False):
         # NOTE(mikal): if we are not authenticated, probe the base_url looking
         # for redirections. If we are redirected, rewrite our base_url to the
         # redirection target.
@@ -235,11 +236,13 @@ class Client(object):
             try:
                 try:
                     return self._actual_request_url(
-                        method, url, data=data, data_is_binary=data_is_binary)
+                        method, url, data=data, data_is_binary=data_is_binary,
+                        stream=stream)
                 except UnauthorizedException:
                     self.cached_auth = self._authenticate()
                     return self._actual_request_url(
-                        method, url, data=data, data_is_binary=data_is_binary)
+                        method, url, data=data, data_is_binary=data_is_binary,
+                        stream=stream)
 
             except DependenciesNotReadyException as e:
                 # The API server will return a 406 exception when we have
@@ -358,7 +361,13 @@ class Client(object):
         for s in out:
             waiting_for.append(out[s]['blob_uuid'])
 
-        deadline = time.time() + _calculate_async_deadline(self.async_strategy)
+        # If we are going to apply a label, then we must block for the snapshot
+        # to complete before we can apply the label.
+        async_strategy = self.async_strategy
+        if label_name:
+            async_strategy = ASYNC_BLOCK
+
+        deadline = time.time() + _calculate_async_deadline(async_strategy)
         while waiting_for:
             LOG.debug('Waiting for snapshots: %s' % ', '.join(waiting_for))
             if time.time() > deadline:
@@ -488,6 +497,11 @@ class Client(object):
         r = self._request_url('DELETE', '/artifacts/' + artifact_uuid +
                               '/versions/' + str(version_id))
         return r.json()
+
+    def get_blob(self, blob_uuid):
+        r = self._request_url('GET', '/blob/' + blob_uuid, stream=True)
+        for chunk in r.iter_content(chunk_size=8192):
+            yield chunk
 
     def get_networks(self, all=False):
         r = self._request_url('GET', '/networks', data={'all': all})
