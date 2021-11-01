@@ -49,7 +49,7 @@ def present(module):
         params[key] = module.params.get(key)
 
     params['async_strategy'] = 'block'
-    if module.params.get('async') and module.params['async']:
+    if module.params.get('async'):
         params['async_strategy'] = 'continue'
 
     cmd = ('sf-client --json --async=%(async_strategy)s '

@@ -348,7 +348,8 @@ class Client(object):
             time.sleep(1)
             i = self.get_instance(i['uuid'])
 
-    def snapshot_instance(self, instance_uuid, all=False, device=None, label_name=None):
+    def snapshot_instance(self, instance_uuid, all=False, device=None, label_name=None,
+                          delete_snapshot_after_label=False):
         r = self._request_url(
             'POST', '/instances/' + instance_uuid + '/snapshot',
             data={'all': all, 'device': device})
@@ -383,6 +384,9 @@ class Client(object):
                 device = 'vda'
             out['label'] = self.update_label(
                 label_name, out[device]['blob_uuid'])
+
+            if delete_snapshot_after_label:
+                self.delete_artifact(out['uuid'])
 
         return out
 
