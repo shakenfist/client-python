@@ -55,6 +55,8 @@ def present(module):
         extra += ' --all'
     if module.params.get('label'):
         extra += ' --label_name %s' % module.params['label']
+    if module.params.get('delete_after_label') and module.params['delete_after_label']:
+        extra += ' --delete-snapshot-after-label'
     params['extra'] = extra
 
     params['async_strategy'] = 'block'
@@ -109,6 +111,7 @@ def main():
         'instance_uuid': {'required': False, 'type': 'str'},
         'all': {'required': False, 'type': 'bool'},
         'label': {'required': False, 'type': 'str'},
+        'delete_after_label': {'required': False, 'type': 'bool'},
 
         'async': {'required': False, 'type': 'bool'},
 
