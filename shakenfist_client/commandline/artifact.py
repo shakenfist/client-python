@@ -69,17 +69,21 @@ def artifact_list(ctx, node=None):
         x = PrettyTable()
         x.field_names = ['uuid', 'type', 'source url', 'versions', 'state']
         for meta in artifacts:
+            versions = '%d of %d' % (len(meta.get('blobs', [])),
+                                     meta.get('index', 'unknown'))
             x.add_row([meta.get('uuid', ''), meta.get('artifact_type', ''),
-                       meta.get('source_url', ''), meta.get('index', ''),
+                       meta.get('source_url', ''), versions,
                        meta.get('state', '')])
         print(x)
 
     elif ctx.obj['OUTPUT'] == 'simple':
         print('uuid,type,source_url,versions,state')
         for meta in artifacts:
+            versions = '%d of %d' % (len(meta.get('blobs', [])),
+                                     meta.get('index', 'unknown'))
             print('%s,%s,%s,%s,%s' % (
                 meta.get('uuid', ''), meta.get('artifact_type', ''),
-                meta.get('source_url', ''), meta.get('index', ''),
+                meta.get('source_url', ''), versions,
                 meta.get('state', '')))
 
     elif ctx.obj['OUTPUT'] == 'json':
