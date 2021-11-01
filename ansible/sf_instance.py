@@ -127,14 +127,14 @@ def present(module):
     for flag, key in [('-I', 'ssh_key'), ('-U', 'user_data'), ('-V', 'video')]:
         if module.params.get(key):
             extra += ' %s "%s"' % (flag, module.params[key])
-    if module.params.get('uefi') and module.params['uefi']:
+    if module.params.get('uefi', False):
         extra += ' --uefi'
     if module.params.get('configdrive'):
         extra += ' --configdrive %s' % module.params['configdrive']
     params['extra'] = extra
 
     params['async_strategy'] = 'block'
-    if module.params.get('async') and module.params['async']:
+    if module.params.get('async'):
         params['async_strategy'] = 'continue'
 
     log('params: %s' % params)

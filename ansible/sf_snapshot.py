@@ -51,16 +51,16 @@ def present(module):
     }
 
     extra = ''
-    if module.params.get('all') and module.params['all']:
+    if module.params.get('all', False):
         extra += ' --all'
     if module.params.get('label'):
         extra += ' --label_name %s' % module.params['label']
-    if module.params.get('delete_after_label') and module.params['delete_after_label']:
+    if module.params.get('delete_after_label', False):
         extra += ' --delete-snapshot-after-label'
     params['extra'] = extra
 
     params['async_strategy'] = 'block'
-    if module.params.get('async') and module.params['async']:
+    if module.params.get('async'):
         params['async_strategy'] = 'continue'
 
     cmd = ('sf-client --json --async=%(async_strategy)s '
