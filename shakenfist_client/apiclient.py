@@ -386,7 +386,7 @@ class Client(object):
                 label_name, out[device]['blob_uuid'])
 
             if delete_snapshot_after_label:
-                self.delete_artifact(out['uuid'])
+                self.delete_artifact(out[device]['artifact_uuid'])
 
         return out
 
