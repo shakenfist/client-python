@@ -88,20 +88,7 @@ def absent(module):
     if rc != 0:
         return True, False, 'Command failed: %s' % stderr
 
-    try:
-        j = json.loads(stdout)
-    except ValueError:
-        rc = -1
-        j = ('Failed to parse JSON:\n'
-             '[[command: %s]]\n'
-             '[[stdout: %s]]\n'
-             '[[stderr: %s]]'
-             % (cmd, stdout, stderr))
-
-    if rc != 0:
-        return True, False, j
-
-    return False, True, j
+    return False, True, None
 
 
 def main():
@@ -134,7 +121,7 @@ def main():
     if not is_error:
         module.exit_json(changed=has_changed, meta=result)
     else:
-        module.fail_json(msg='Error manipulating instance',
+        module.fail_json(msg='Error manipulating artifact',
                          params=module.params,
                          meta=result)
 
