@@ -390,7 +390,7 @@ class Client(object):
             # disk. Otherwise we'd immediately clobber the label with the last
             # disk in the snapshot series.
             if not device:
-                device = 'vda'
+                device = list(out.keys())[0]
             out['label'] = self.update_label(
                 label_name, out[device]['blob_uuid'])
 
