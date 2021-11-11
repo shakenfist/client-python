@@ -138,7 +138,7 @@ def artifact_show(ctx, artifact_uuid=None):
 
     if ctx.obj['OUTPUT'] == 'json':
         out = util.filter_dict(a, ['uuid', 'artifact_type', 'state', 'source_url',
-                                   'blob_uuid', 'index', 'blobs'])
+                                   'blob_uuid', 'index', 'blobs', 'max_versions'])
         print(json.dumps(out, indent=4, sort_keys=True))
         return
 
@@ -153,7 +153,8 @@ def artifact_show(ctx, artifact_uuid=None):
     print(format_string % ('source url', a['source_url']))
     print(format_string
           % ('current version blob uuid', a.get('blob_uuid', 'None')))
-    print(format_string % ('number of versions', a['index']))
+    print(format_string % ('number of versions', len(a.get('blobs'))))
+    print(format_string % ('maximum versions', a['max_versions']))
 
     if ctx.obj['OUTPUT'] == 'simple':
         print('version,size,instance')
@@ -193,3 +194,12 @@ def artifact_delete(ctx, artifact_uuid=None):
 @click.pass_context
 def artifact_delete_version(ctx, artifact_uuid=None, version_id=0):
     ctx.obj['CLIENT'].delete_artifact_version(artifact_uuid, str(version_id))
+
+
+@artifact.command(name='max_versions',
+                  help='Set the maximum versions of an artifact')
+@click.argument('artifact_uuid', type=click.STRING, autocompletion=_get_artifacts)
+@click.argument('max_versions', type=click.INT)
+@click.pass_context
+def max_versions(ctx, artifact_uuid, max_versions):
+    ctx.obj['CLIENT'].set_artifact_max_versions(artifact_uuid, max_versions)
