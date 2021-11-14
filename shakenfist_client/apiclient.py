@@ -523,6 +523,10 @@ class Client(object):
         for chunk in r.iter_content(chunk_size=8192):
             yield chunk
 
+    def get_blobs(self, node=None):
+        r = self._request_url('GET', '/blob', data={'node': node})
+        return r.json()
+
     def get_networks(self, all=False):
         r = self._request_url('GET', '/networks', data={'all': all})
         return r.json()
