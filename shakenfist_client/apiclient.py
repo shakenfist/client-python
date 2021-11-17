@@ -493,6 +493,12 @@ class Client(object):
             'GET', '/artifacts/' + artifact_uuid + '/versions')
         return r.json()
 
+    def set_artifact_max_versions(self, artifact_uuid, max_versions):
+        r = self._request_url('POST',
+                              '/artifacts/' + artifact_uuid + '/versions',
+                              data={'max_versions': max_versions})
+        return r.json()
+
     def delete_artifact(self, artifact_uuid):
         r = self._request_url('DELETE', '/artifacts/' + artifact_uuid)
         return r.json()
