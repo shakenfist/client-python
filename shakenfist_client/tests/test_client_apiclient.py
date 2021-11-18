@@ -65,7 +65,8 @@ class ApiClientTestCase(testtools.TestCase):
                 'uefi': False,
                 'secure_boot': False,
                 'nvram_template': None,
-                'configdrive': None
+                'configdrive': None,
+                'metadata': None,
             })
 
     def test_create_instance_user_data(self):
@@ -91,7 +92,8 @@ class ApiClientTestCase(testtools.TestCase):
                 'uefi': False,
                 'secure_boot': False,
                 'nvram_template': None,
-                'configdrive': None
+                'configdrive': None,
+                'metadata': None,
             })
 
     def test_snapshot_instance(self):

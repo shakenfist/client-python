@@ -27,6 +27,18 @@ def _get_interfaces(ctx, instance):
         return []
 
 
+def _convert_metadata(key, value):
+    RESERVED_TAGS = ['tags', 'affinity']
+    if key in RESERVED_TAGS:
+        try:
+            value = json.loads(value)
+        except json.decoder.JSONDecodeError as e:
+            print('Reserved metadata keys (%s) must contain valid JSON: %s' % (
+                  ', '.join(RESERVED_TAGS), e))
+            raise e
+    return value
+
+
 @instance.command(name='list', help='List instances')
 @click.option('-a', '--all', is_flag=True,
               help='Include instances in error and deleted instances')
@@ -268,7 +280,7 @@ order you specify them being significant."""))
 @click.option('-d', '--disk', type=click.STRING, multiple=True,
               help='A short from definition of a disk to attach.')
 @click.option('-D', '--diskspec', type=click.STRING, multiple=True,
-              help='A long form "diskpec" definition of a disk to attach.')
+              help='A long form "diskspec" definition of a disk to attach.')
 @click.option('-i', '--sshkey', type=click.Path(exists=True),
               help='The path to a ssh public key to configure via config drive.')
 @click.option('-I', '--sshkeydata', type=click.STRING,
@@ -299,12 +311,14 @@ order you specify them being significant."""))
                     'This is sometimes required for secure boot.'))
 @click.option('--force', is_flag=True, default=False,
               help='Allow very small memory instances.')
+@click.option('-m', '--metadata', type=click.STRING, multiple=True,
+              help='Add key=value pair to instance metadata eg. affinity=\'{"fastdisk":10}\'')
 @click.pass_context
 def instance_create(ctx, name=None, cpus=None, memory=None, network=None, floated=None,
                     networkspec=None, disk=None, diskspec=None, sshkey=None, sshkeydata=None,
                     userdata=None, encodeduserdata=None, placement=None, videospec=None,
                     namespace=None, bios=True, force=False, configdrive=None,
-                    no_secure_boot=True, nvram_template=None):
+                    no_secure_boot=True, nvram_template=None, metadata=None):
     if memory < 128 and not force:
         print('Specified memory size is %dMB. This is very small.' % memory)
         print('Use the --force flag if this is deliberate')
@@ -408,6 +422,19 @@ def instance_create(ctx, name=None, cpus=None, memory=None, network=None, floate
                 return
             video[s[0]] = s[1]
 
+    metadata_def = {}
+    for m in metadata:
+        try:
+            key, val = m.split('=')
+        except ValueError:
+            print('Unable split metadata, correct format is key=value')
+            return
+        try:
+            val = _convert_metadata(key, val)
+        except json.decoder.JSONDecodeError:
+            return
+        metadata_def[key] = val
+
     _show_instance(
         ctx,
         ctx.obj['CLIENT'].create_instance(
@@ -415,7 +442,7 @@ def instance_create(ctx, name=None, cpus=None, memory=None, network=None, floate
             userdata_content, force_placement=placement,
             namespace=namespace, video=video, uefi=uefi,
             configdrive=configdrive, secure_boot=secure_boot,
-            nvram_template=nvram_template))
+            nvram_template=nvram_template, metadata=metadata_def))
 
 
 @instance.command(name='delete', help='Delete an instance')
@@ -478,6 +505,10 @@ def instance_events(ctx, instance_uuid=None):
 @click.argument('value', type=click.STRING)
 @click.pass_context
 def instance_set_metadata(ctx, instance_uuid=None, key=None, value=None):
+    try:
+        value = _convert_metadata(key, value)
+    except json.decoder.JSONDecodeError:
+        return
     ctx.obj['CLIENT'].set_instance_metadata_item(instance_uuid, key, value)
     if ctx.obj['OUTPUT'] == 'json':
         print('{}')
