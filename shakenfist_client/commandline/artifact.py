@@ -35,7 +35,7 @@ def artifact_cache(ctx, image_url=None):
 @click.pass_context
 def artifact_upload(ctx, name=None, source=None):
     st = os.stat(source)
-    buffer_size = 102400
+    buffer_size = 10240000
 
     upload = ctx.obj['CLIENT'].create_upload()
     total = 0
