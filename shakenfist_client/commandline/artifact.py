@@ -32,8 +32,10 @@ def artifact_cache(ctx, image_url=None):
 @artifact.command(name='upload', help='Upload an artifact.')
 @click.argument('name', type=click.STRING)
 @click.argument('source', type=click.Path(exists=True))
+@click.option('--source_url', default=None,
+              help='A URL to act as if this artifact was downloaded from.')
 @click.pass_context
-def artifact_upload(ctx, name=None, source=None):
+def artifact_upload(ctx, name=None, source=None, source_url=None):
     st = os.stat(source)
     buffer_size = 10240000
 
@@ -56,7 +58,8 @@ def artifact_upload(ctx, name=None, source=None):
 
                 d = f.read(buffer_size)
 
-    artifact = ctx.obj['CLIENT'].upload_artifact(name, upload['uuid'])
+    artifact = ctx.obj['CLIENT'].upload_artifact(name, upload['uuid'],
+                                                 source_url=source_url)
     print('Created artifact %s' % artifact['uuid'])
 
 
