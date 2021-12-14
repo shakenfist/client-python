@@ -543,7 +543,7 @@ def instance_consoledata(ctx, instance_uuid=None, length=None):
 @click.argument('instance_uuid', type=click.STRING, autocompletion=_get_instances)
 @click.pass_context
 def instance_consoledelete(ctx, instance_uuid=None):
-    ctx.obj['CLIENT'].get_console_delete(instance_uuid)
+    ctx.obj['CLIENT'].delete_console_data(instance_uuid)
 
 
 @instance.command(name='snapshot', help='Snapshot instance')
