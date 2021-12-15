@@ -471,9 +471,12 @@ class Client(object):
         r = self._request_url('POST', '/artifacts', data={'url': image_url})
         return r.json()
 
-    def upload_artifact(self, name, upload_uuid):
+    def upload_artifact(self, name, upload_uuid, source_url=None):
         r = self._request_url('POST', '/artifacts/upload/%s' % name,
-                              data={'upload_uuid': upload_uuid})
+                              data={
+                                  'upload_uuid': upload_uuid,
+                                  'source_url': source_url
+                              })
         return r.json()
 
     def get_artifact(self, artifact_uuid):
