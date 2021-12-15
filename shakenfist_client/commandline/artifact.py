@@ -4,7 +4,9 @@ import os
 from prettytable import PrettyTable
 from tqdm import tqdm
 import sys
+import time
 
+from shakenfist_client import apiclient
 from shakenfist_client import util
 
 
@@ -37,16 +39,41 @@ def artifact_cache(ctx, image_url=None):
 @click.pass_context
 def artifact_upload(ctx, name=None, source=None, source_url=None):
     st = os.stat(source)
-    buffer_size = 10240000
+    buffer_size = 4096
 
     upload = ctx.obj['CLIENT'].create_upload()
     total = 0
+    retries = 0
     with tqdm(total=st.st_size, unit='B', unit_scale=True,
               desc='Uploading %s to %s' % (upload['uuid'], upload['node'])) as pbar:
         with open(source, 'rb') as f:
             d = f.read(buffer_size)
             while d:
-                remote_total = ctx.obj['CLIENT'].send_upload(upload['uuid'], d)
+                start_time = time.time()
+                try:
+                    remote_total = ctx.obj['CLIENT'].send_upload(
+                        upload['uuid'], d)
+                    retries = 0
+                except apiclient.APIException as e:
+                    retries += 1
+
+                    if retries > 5:
+                        print('Repeated failures, aborting')
+                        raise e
+
+                    print('Upload error, retrying...')
+                    ctx.obj['CLIENT'].truncate_upload(upload['uuid'], total)
+                    f.seek(total)
+                    buffer_size = 4096
+                    d = f.read(buffer_size)
+                    continue
+
+                # We aim for each chunk to take three seconds to transfer. This is
+                # partially because of the API timeout on the other end, but also
+                # so that uploads don't appear to stall over very slow networks.
+                elapsed = time.time() - start_time
+                buffer_size = int(buffer_size * 3.0 / elapsed)
+
                 sent = len(d)
                 total += sent
                 pbar.update(sent)

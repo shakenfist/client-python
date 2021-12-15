@@ -147,14 +147,16 @@ class Client(object):
 
         self.cached_auth = None
 
-    def _actual_request_url(self, method, url, data=None, data_is_binary=False,
+    def _actual_request_url(self, method, url, data=None,
+                            request_body_is_binary=False,
+                            response_body_is_binary=False,
                             allow_redirects=True, stream=False):
         url = self.base_url + url
 
         h = {'Authorization': self.cached_auth,
              'User-Agent': get_user_agent()}
         if data:
-            if data_is_binary:
+            if request_body_is_binary:
                 h['Content-Type'] = 'application/octet-stream'
             else:
                 h['Content-Type'] = 'application/json'
@@ -168,8 +170,8 @@ class Client(object):
         LOG.debug('-------------------------------------------------------')
         LOG.debug('API client requested: %s %s' % (method, url))
         if data:
-            if data_is_binary:
-                LOG.debug('Data: ...binary omitted...')
+            if request_body_is_binary:
+                LOG.debug('Data: ...%d bytes of binary omitted...' % len(data))
             else:
                 LOG.debug('Data:\n    %s' % '\n    '.join(data.split('\n')))
         for h in r.history:
@@ -179,8 +181,9 @@ class Client(object):
                   % (r.status_code, (end_time - start_time)))
 
         if not stream and r.text:
-            if data_is_binary:
-                LOG.debug('Data: ...binary omitted...')
+            if response_body_is_binary:
+                LOG.debug('Data: ...%d bytes of binary omitted...'
+                          % len(r.text))
             else:
                 try:
                     LOG.debug('Data:\n    %s'
@@ -218,8 +221,8 @@ class Client(object):
                                         r.status_code, r.text)
         return 'Bearer %s' % r.json()['access_token']
 
-    def _request_url(self, method, url, data=None, data_is_binary=False,
-                     stream=False):
+    def _request_url(self, method, url, data=None, request_body_is_binary=False,
+                     response_body_is_binary=False, stream=False):
         # NOTE(mikal): if we are not authenticated, probe the base_url looking
         # for redirections. If we are redirected, rewrite our base_url to the
         # redirection target.
@@ -236,12 +239,16 @@ class Client(object):
             try:
                 try:
                     return self._actual_request_url(
-                        method, url, data=data, data_is_binary=data_is_binary,
+                        method, url, data=data,
+                        request_body_is_binary=request_body_is_binary,
+                        response_body_is_binary=response_body_is_binary,
                         stream=stream)
                 except UnauthorizedException:
                     self.cached_auth = self._authenticate()
                     return self._actual_request_url(
-                        method, url, data=data, data_is_binary=data_is_binary,
+                        method, url, data=data,
+                        request_body_is_binary=request_body_is_binary,
+                        response_body_is_binary=response_body_is_binary,
                         stream=stream)
 
             except DependenciesNotReadyException as e:
@@ -668,8 +675,8 @@ class Client(object):
         return r.json()
 
     def ping(self, network_uuid, address):
-        r = self._request_url('GET', '/networks/' +
-                              network_uuid + '/ping/' + address)
+        r = self._request_url(
+            'GET', '/networks/' + network_uuid + '/ping/' + address)
         return r.json()
 
     def create_upload(self):
@@ -678,7 +685,12 @@ class Client(object):
 
     def send_upload(self, upload_uuid, data):
         r = self._request_url('POST', '/upload/' + upload_uuid,
-                              data=data, data_is_binary=True)
+                              data=data, request_body_is_binary=True)
+        return r.json()
+
+    def truncate_upload(self, upload_uuid, offset):
+        r = self._request_url(
+            'POST', '/upload/' + upload_uuid + '/truncate/' + str(offset))
         return r.json()
 
 
