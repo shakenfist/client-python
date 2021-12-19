@@ -71,8 +71,11 @@ def artifact_upload(ctx, name=None, source=None, source_url=None):
                 # We aim for each chunk to take three seconds to transfer. This is
                 # partially because of the API timeout on the other end, but also
                 # so that uploads don't appear to stall over very slow networks.
+                # However, the buffer size must also always be between 4kb and 4mb.
                 elapsed = time.time() - start_time
                 buffer_size = int(buffer_size * 3.0 / elapsed)
+                buffer_size = max(4 * 1024, buffer_size)
+                buffer_size = min(2 * 1024 * 1024, buffer_size)
 
                 sent = len(d)
                 total += sent
