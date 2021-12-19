@@ -127,8 +127,14 @@ def present(module):
     for flag, key in [('-I', 'ssh_key'), ('-U', 'user_data'), ('-V', 'video')]:
         if module.params.get(key):
             extra += ' %s "%s"' % (flag, module.params[key])
+
     if module.params.get('uefi', False):
         extra += ' --uefi'
+    if module.params.get('secure_boot', False):
+        extra += ' --secure-boot'
+    if module.params.get('nvram_template', ''):
+        extra += ' --nvram-template %s' % module.params['nvram_template']
+
     if module.params.get('configdrive'):
         extra += ' --configdrive %s' % module.params['configdrive']
     params['extra'] = extra
@@ -230,15 +236,18 @@ def main():
 
         'disks': {'required': False, 'type': 'list', 'elements': 'str'},
         'diskspecs': {'required': False, 'type': 'list', 'elements': 'str'},
-        'namespace': {'type': 'str'},
+        'namespace': {'required': False, 'type': 'str'},
         'networks': {'required': False, 'type': 'list', 'elements': 'str'},
         'networkspecs': {'required': False, 'type': 'list', 'elements': 'str'},
         'ssh_key': {'required': False, 'type': 'str'},
         'user_data': {'required': False, 'type': 'str'},
         'placement': {'required': False, 'type': 'str'},
-        'uefi': {'required': False, 'type': 'bool'},
         'video': {'required': False, 'type': 'str'},
         'configdrive': {'required': False, 'type': 'str'},
+
+        'uefi': {'required': False, 'type': 'bool'},
+        'secure_boot': {'required': False, 'type': 'bool'},
+        'nvram_template': {'required': False, 'type': 'str'},
 
         'async': {'required': False, 'type': 'bool'},
 

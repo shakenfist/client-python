@@ -119,7 +119,8 @@ def _show_instance(ctx, i, include_snapshots=False):
         out = util.filter_dict(i, ['uuid', 'name', 'namespace', 'cpus', 'memory',
                                    'disk_spec', 'video', 'node', 'console_port',
                                    'vdi_port', 'ssh_key', 'user_data',
-                                   'power_state', 'state', 'uefi'])
+                                   'power_state', 'state', 'uefi', 'secure_boot',
+                                   'nvram_template'])
         out['network_interfaces'] = []
         for interface in interfaces:
             util.show_interface(ctx, interface, out)
@@ -138,7 +139,7 @@ def _show_instance(ctx, i, include_snapshots=False):
     if ctx.obj['OUTPUT'] == 'simple':
         format_string = '%s:%s'
     else:
-        format_string = '%-13s: %s'
+        format_string = '%-14s: %s'
         d_space = {'type': 5, 'bus': 4, 'size': 2, 'base': 0}
         v_space = {'model': 0, 'memory': 0}
 
@@ -148,12 +149,15 @@ def _show_instance(ctx, i, include_snapshots=False):
     print(format_string % ('cpus', i['cpus']))
     print(format_string % ('memory', i['memory']))
     print(format_string % ('uefi', i.get('uefi', False)))
+    print(format_string % ('secure boot', i.get('secure_boot', False)))
+    print(format_string % ('nvram template', i.get('nvram_template')))
+
     if ctx.obj['OUTPUT'] == 'pretty':
         print(format_string % ('disk spec',
-                               _pretty_dict(15, i['disk_spec'], d_space)))
+                               _pretty_dict(16, i['disk_spec'], d_space)))
     if ctx.obj['OUTPUT'] == 'pretty':
         print(format_string % ('video',
-                               _pretty_dict(15, (i['video'],), v_space)))
+                               _pretty_dict(16, (i['video'],), v_space)))
     print(format_string % ('node', i.get('node', '')))
     print(format_string % ('power state', i.get('power_state', '')))
     print(format_string % ('state', i.get('state', '')))
@@ -242,64 +246,66 @@ def _parse_spec(spec):
 # as guidance on how to use the video command line. We need to rethink how we're
 # doing this, as its getting pretty long.
 @instance.command(name='create',
-                  help=('Create an instance.\n\n'
-                        'NAME:      The name of the instance.\n'
-                        'CPUS:      The number of vCPUs for the instance.\n'
-                        'MEMORY:    The amount of RAM for the instance in MB.\n'
-                        '\n'
-                        'Options (may be repeated, must be specified at least once):\n'
-                        '--network/-n:     The short form definition of the network to attach\n'
-                        '                  the instance to.\n'
-                        '--floated/-f:     The short form definition of a network to attach to\n'
-                        '                  with an implied floating IP assignment.\n'
-                        '--networkspec/-N: A long form "networkspec" definition of a network\n'
-                        '                  interface to create.\n'
-                        '--disk/-d:        The disks attached to the instance, in this format:\n'
-                        '                  size@image_url where size is in GB and @image_url\n'
-                        '                  is optional.\n'
-                        '--diskspec/-D:    A long form "diskspec" definition of a disk to create.\n'
-                        '--videospec/-V:   The video configuration for the instance.\n'
-                        '--sshkey/-i:      The path to a ssh public key to configure on the\n'
-                        '                  instance via config drive / cloud-init.\n'
-                        '--sshkeydata/-I:  A ssh public key as a string to configure on the\n'
-                        '                   instance via config drive / cloud-init.\n'
-                        '--userdata/-u:    The path to a file containing user data to provided\n'
-                        '                  to the instance via config drive / cloud-init.'
-                        '--encodeduserdata/-U:\n'
-                        '                  Base64 encoded user data to provide to the instance\n'
-                        '                  via config drive / cloud-init.\n'
-                        '\n'
-                        '--placement/-p:   Force placement of instance on specified node.\n'
-                        '--namespace:      If you are an admin, you can create this object in a\n'
-                        '                  different namespace.\n'
-                        '--uefi:           Boot using UEFI instead of BIOS.\n'))
+                  help=("""Create an instance.
+
+\b
+NAME:   The name of the instance.
+CPUS:   The number of vCPUs for the instance.
+MEMORY: The amount of RAM for the instance in MB.
+
+You may specify more than one disk or network for an instance, with the
+order you specify them being significant."""))
 @click.argument('name', type=click.STRING)
 @click.argument('cpus', type=click.INT)
 @click.argument('memory', type=click.INT)
 @click.option('-n', '--network', type=click.STRING, multiple=True,
-              autocompletion=util.get_networks)
+              autocompletion=util.get_networks,
+              help='A short form definition of a network to attach.')
 @click.option('-f', '--floated', type=click.STRING, multiple=True,
-              autocompletion=util.get_networks)
-@click.option('-N', '--networkspec', type=click.STRING, multiple=True)
-@click.option('-d', '--disk', type=click.STRING, multiple=True)
-@click.option('-D', '--diskspec', type=click.STRING, multiple=True)
-@click.option('-i', '--sshkey', type=click.STRING)
-@click.option('-I', '--sshkeydata', type=click.STRING)
-@click.option('-u', '--userdata', type=click.STRING)
-@click.option('-U', '--encodeduserdata', type=click.STRING)
-@click.option('-p', '--placement', type=click.STRING)
-@click.option('-V', '--videospec', type=click.STRING)
-@click.option('--bios/--uefi', is_flag=True, default=True)
+              autocompletion=util.get_networks,
+              help='As for --network, but with implied float of the interface.')
+@click.option('-N', '--networkspec', type=click.STRING, multiple=True,
+              help='A long form "networkspec" definition of a network to attach.')
+@click.option('-d', '--disk', type=click.STRING, multiple=True,
+              help='A short from definition of a disk to attach.')
+@click.option('-D', '--diskspec', type=click.STRING, multiple=True,
+              help='A long form "diskpec" definition of a disk to attach.')
+@click.option('-i', '--sshkey', type=click.Path(exists=True),
+              help='The path to a ssh public key to configure via config drive.')
+@click.option('-I', '--sshkeydata', type=click.STRING,
+              help='A ssh public key as a string to configure via config drive.')
+@click.option('-u', '--userdata', type=click.Path(exists=True),
+              help=('The path to a file containing user data provided '
+                    'to the instance via config drive.'))
+@click.option('-U', '--encodeduserdata', type=click.STRING,
+              help=('Base64 encoded user data to provide to the instance via '
+                    'config drive.'))
+@click.option('-p', '--placement', type=click.STRING,
+              help='Force placement of instance on specified node.')
+@click.option('-V', '--videospec', type=click.STRING,
+              help='A detailed "videospec" definition of the video configuration.')
 @click.option('--configdrive', type=click.Choice(['openstack-disk', 'none'],
                                                  case_sensitive=False),
-              default='openstack-disk')
-@click.option('--force', is_flag=True, default=False)
-@click.option('--namespace', type=click.STRING)
+              default='openstack-disk', help='Select config drive format.')
+@click.option('--namespace', type=click.STRING,
+              help=('If you are an admin, you can create this object in a '
+                    'different namespace.'))
+@click.option('--bios/--uefi', is_flag=True, default=True,
+              help='Pass --uefi to use UEFI boot instead of BIOS boot.')
+@click.option('--no-secure-boot/--secure-boot', is_flag=True, default=True,
+              help=('Pass --secure-boot to enable UEFI secure boot. This implies '
+                    'UEFI boot.'))
+@click.option('--nvram-template', type=click.STRING,
+              help=('A label or blob UUID to use as a template for UEFI NVRAM. '
+                    'This is sometimes required for secure boot.'))
+@click.option('--force', is_flag=True, default=False,
+              help='Allow very small memory instances.')
 @click.pass_context
 def instance_create(ctx, name=None, cpus=None, memory=None, network=None, floated=None,
                     networkspec=None, disk=None, diskspec=None, sshkey=None, sshkeydata=None,
                     userdata=None, encodeduserdata=None, placement=None, videospec=None,
-                    namespace=None, bios=True, force=False, configdrive=None):
+                    namespace=None, bios=True, force=False, configdrive=None,
+                    no_secure_boot=True, nvram_template=None):
     if memory < 128 and not force:
         print('Specified memory size is %dMB. This is very small.' % memory)
         print('Use the --force flag if this is deliberate')
@@ -309,9 +315,10 @@ def instance_create(ctx, name=None, cpus=None, memory=None, network=None, floate
         print('You must specify at least one disk')
         return
 
-    # Because of the way click works, the logic for the BIOS vs UEFI boot flag is a
-    # bit weird. Fix it up to what the API expects...
+    # Because of the way click works, the logic for the BIOS vs UEFI boot flag and
+    # the secure boot flag are a bit weird. Fix it up to what the API expects...
     uefi = not bios
+    secure_boot = not no_secure_boot
 
     sshkey_content = None
     if sshkey:
@@ -404,10 +411,12 @@ def instance_create(ctx, name=None, cpus=None, memory=None, network=None, floate
 
     _show_instance(
         ctx,
-        ctx.obj['CLIENT'].create_instance(name, cpus, memory, netdefs, diskdefs, sshkey_content,
-                                          userdata_content, force_placement=placement,
-                                          namespace=namespace, video=video, uefi=uefi,
-                                          configdrive=configdrive))
+        ctx.obj['CLIENT'].create_instance(
+            name, cpus, memory, netdefs, diskdefs, sshkey_content,
+            userdata_content, force_placement=placement,
+            namespace=namespace, video=video, uefi=uefi,
+            configdrive=configdrive, secure_boot=secure_boot,
+            nvram_template=nvram_template))
 
 
 @instance.command(name='delete', help='Delete an instance')
