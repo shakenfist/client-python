@@ -229,8 +229,8 @@ def artifact_delete_version(ctx, artifact_uuid=None, version_id=0):
     ctx.obj['CLIENT'].delete_artifact_version(artifact_uuid, str(version_id))
 
 
-@artifact.command(name='max_versions',
-                  help='Set the maximum versions of an artifact')
+@artifact.command(name='max-versions',
+                  help='Set the maximum number of versions of an artifact')
 @click.argument('artifact_uuid', type=click.STRING, autocompletion=_get_artifacts)
 @click.argument('max_versions', type=click.INT)
 @click.pass_context
