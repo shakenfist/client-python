@@ -63,6 +63,8 @@ class ApiClientTestCase(testtools.TestCase):
                 'namespace': None,
                 'video': {'memory': 16384, 'model': 'cirrus'},
                 'uefi': False,
+                'secure_boot': False,
+                'nvram_template': None,
                 'configdrive': None
             })
 
@@ -87,6 +89,8 @@ class ApiClientTestCase(testtools.TestCase):
                 'namespace': None,
                 'video': {'memory': 16384, 'model': 'cirrus'},
                 'uefi': False,
+                'secure_boot': False,
+                'nvram_template': None,
                 'configdrive': None
             })
 
