@@ -16,7 +16,7 @@ def artifact():
 
 
 def _get_artifacts(ctx, args, incomplete):
-    choices = [a['uuid'] for a in ctx.obj['CLIENT'].get_artifacts()]
+    choices = [a['uuid'] for a in util.get_client(ctx).get_artifacts()]
     return [arg for arg in choices if arg.startswith(incomplete)]
 
 

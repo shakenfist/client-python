@@ -1,4 +1,7 @@
+import os
 import sys
+
+from shakenfist_client import apiclient
 
 
 def filter_dict(d, allowed_keys):
@@ -41,6 +44,20 @@ def show_interface(ctx, interface, out=[]):
                  interface.get('floating', ''), interface['model']))
 
 
+def get_client(ctx):
+    client = None
+    if hasattr(ctx, 'obj') and ctx.obj:
+        client = ctx.obj.get('CLIENT')
+    if not client:
+        client = apiclient.Client(
+            namespace=os.environ.get('SHAKENFIST_NAMESPACE'),
+            key=os.environ.get('SHAKENFIST_KEY'),
+            base_url=os.environ.get('SHAKENFIST_API_URL', 'http://localhost:13000'),
+            async_strategy=os.environ.get('SHAKENFIST_ASYNC', 'pause')
+        )
+    return client
+
+
 def get_networks(ctx, args, incomplete):
-    choices = [i['uuid'] for i in ctx.obj['CLIENT'].get_networks()]
+    choices = [i['uuid'] for i in get_client(ctx).get_networks()]
     return [arg for arg in choices if arg.startswith(incomplete)]

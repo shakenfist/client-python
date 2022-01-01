@@ -5,7 +5,6 @@ import json
 from prettytable import PrettyTable
 import sys
 
-
 from shakenfist_client import apiclient, util
 
 
@@ -15,7 +14,7 @@ def instance():
 
 
 def _get_instances(ctx, args, incomplete):
-    choices = [i['uuid'] for i in ctx.obj['CLIENT'].get_instances()]
+    choices = [i['uuid'] for i in util.get_client(ctx).get_instances()]
     return [arg for arg in choices if arg.startswith(incomplete)]
 
 
@@ -23,7 +22,7 @@ def _get_interfaces(ctx, instance):
     if instance.get('interfaces'):
         return instance['interfaces']
     try:
-        return ctx.obj['CLIENT'].get_instance_interfaces(instance['uuid'])
+        return util.get_client(ctx).get_instance_interfaces(instance['uuid'])
     except apiclient.ResourceNotFoundException:
         return []
 
