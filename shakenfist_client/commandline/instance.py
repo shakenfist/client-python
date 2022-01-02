@@ -427,7 +427,7 @@ def instance_create(ctx, name=None, cpus=None, memory=None, network=None, floate
         try:
             key, val = m.split('=')
         except ValueError:
-            print('Unable split metadata, correct format is key=value')
+            print('Unable to parse metadata, correct format is "key=value"')
             return
         try:
             val = _convert_metadata(key, val)
