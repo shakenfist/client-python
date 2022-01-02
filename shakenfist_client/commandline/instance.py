@@ -14,7 +14,8 @@ def instance():
 
 
 def _get_instances(ctx, args, incomplete):
-    choices = [i['uuid'] for i in util.get_client(ctx).get_instances()]
+    instances = util.get_client(ctx).get_instances()
+    choices = [i[key] for key in ['uuid', 'name'] for i in instances]
     return [arg for arg in choices if arg.startswith(incomplete)]
 
 

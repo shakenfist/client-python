@@ -59,5 +59,6 @@ def get_client(ctx):
 
 
 def get_networks(ctx, args, incomplete):
-    choices = [i['uuid'] for i in get_client(ctx).get_networks()]
+    networks = get_client(ctx).get_networks()
+    choices = [n[key] for key in ['uuid', 'name'] for n in networks]
     return [arg for arg in choices if arg.startswith(incomplete)]
