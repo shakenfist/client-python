@@ -55,7 +55,7 @@ def namespace_create(ctx, namespace=None):
 @namespace.command(name='delete',
                    help=('delete a namespace.\n\n'
                          'NAMESPACE: The name of the namespace'))
-@click.argument('namespace', type=click.STRING)
+@click.argument('namespace', type=click.STRING, autocompletion=_get_namespaces)
 @click.pass_context
 def namespace_delete(ctx, namespace=None):
     ctx.obj['CLIENT'].delete_namespace(namespace)
@@ -110,7 +110,7 @@ def namespace_show(ctx, namespace=None):
 @namespace.command(name='clean',
                    help=('Clean (delete) namespace of all instances and networks'))
 @click.option('--confirm',  is_flag=True)
-@click.option('--namespace', type=click.STRING)
+@click.option('--namespace', type=click.STRING, autocompletion=_get_namespaces)
 @click.pass_context
 def namespace_clean(ctx, confirm=False, namespace=None):
     if not confirm:
@@ -126,7 +126,7 @@ def namespace_clean(ctx, confirm=False, namespace=None):
                          'NAMESPACE: The name of the namespace\n'
                          'KEY_NAME:  The unique name of the key\n'
                          'KEY:       The password for the namespace'))
-@click.argument('namespace', type=click.STRING)
+@click.argument('namespace', type=click.STRING, autocompletion=_get_namespaces)
 @click.argument('keyname', type=click.STRING)
 @click.argument('key', type=click.STRING)
 @click.pass_context
@@ -138,7 +138,7 @@ def namespace_add_key(ctx, namespace=None, keyname=None, key=None):
                    help=('delete a specific key from a namespace.\n\n'
                          'NAMESPACE: The name of the namespace\n'
                          'KEYNAME:   The name of the key'))
-@click.argument('namespace', type=click.STRING)
+@click.argument('namespace', type=click.STRING, autocompletion=_get_namespaces)
 @click.argument('keyname', type=click.STRING)
 @click.pass_context
 def namespace_delete_key(ctx, namespace=None, keyname=None):
@@ -146,7 +146,7 @@ def namespace_delete_key(ctx, namespace=None, keyname=None):
 
 
 @namespace.command(name='get-metadata', help='Get metadata items')
-@click.argument('namespace', type=click.STRING)
+@click.argument('namespace', type=click.STRING, autocompletion=_get_namespaces)
 @click.pass_context
 def namespace_get_metadata(ctx, namespace=None):
     metadata = ctx.obj['CLIENT'].get_namespace_metadata(namespace)
@@ -162,7 +162,7 @@ def namespace_get_metadata(ctx, namespace=None):
 
 
 @namespace.command(name='set-metadata', help='Set a metadata item')
-@click.argument('namespace', type=click.STRING)
+@click.argument('namespace', type=click.STRING, autocompletion=_get_namespaces)
 @click.argument('key', type=click.STRING)
 @click.argument('value', type=click.STRING)
 @click.pass_context
@@ -173,7 +173,7 @@ def namespace_set_metadata(ctx, namespace=None, key=None, value=None):
 
 
 @namespace.command(name='delete-metadata', help='Delete a metadata item')
-@click.argument('namespace', type=click.STRING)
+@click.argument('namespace', type=click.STRING, autocompletion=_get_namespaces)
 @click.argument('key', type=click.STRING)
 @click.pass_context
 def namespace_delete_metadata(ctx, namespace=None, key=None):

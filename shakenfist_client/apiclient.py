@@ -290,27 +290,27 @@ class Client(object):
 
         return deleted
 
-    def get_instance(self, instance_uuid):
-        r = self._request_url('GET', '/instances/' + instance_uuid)
+    def get_instance(self, instance_ref):
+        r = self._request_url('GET', '/instances/' + instance_ref)
         return r.json()
 
-    def get_instance_interfaces(self, instance_uuid):
-        r = self._request_url('GET', '/instances/' + instance_uuid +
+    def get_instance_interfaces(self, instance_ref):
+        r = self._request_url('GET', '/instances/' + instance_ref +
                               '/interfaces')
         return r.json()
 
-    def get_instance_metadata(self, instance_uuid):
-        r = self._request_url('GET', '/instances/' + instance_uuid +
+    def get_instance_metadata(self, instance_ref):
+        r = self._request_url('GET', '/instances/' + instance_ref +
                               '/metadata')
         return r.json()
 
-    def set_instance_metadata_item(self, instance_uuid, key, value):
-        r = self._request_url('PUT', '/instances/' + instance_uuid +
+    def set_instance_metadata_item(self, instance_ref, key, value):
+        r = self._request_url('PUT', '/instances/' + instance_ref +
                               '/metadata/' + key, data={'value': value})
         return r.json()
 
-    def delete_instance_metadata_item(self, instance_uuid, key):
-        r = self._request_url('DELETE', '/instances/' + instance_uuid +
+    def delete_instance_metadata_item(self, instance_ref, key):
+        r = self._request_url('DELETE', '/instances/' + instance_ref +
                               '/metadata/' + key)
         return r.json()
 
@@ -366,10 +366,10 @@ class Client(object):
             time.sleep(1)
             i = self.get_instance(i['uuid'])
 
-    def snapshot_instance(self, instance_uuid, all=False, device=None, label_name=None,
+    def snapshot_instance(self, instance_ref, all=False, device=None, label_name=None,
                           delete_snapshot_after_label=False):
         r = self._request_url(
-            'POST', '/instances/' + instance_uuid + '/snapshot',
+            'POST', '/instances/' + instance_ref + '/snapshot',
             data={'all': all, 'device': device})
         out = r.json()
 
@@ -391,7 +391,7 @@ class Client(object):
                 break
 
             time.sleep(1)
-            snaps = self.get_instance_snapshots(instance_uuid)
+            snaps = self.get_instance_snapshots(instance_ref)
             for s in snaps:
                 if s.get('blob_uuid') in waiting_for:
                     if s.get('state') == 'created':
@@ -414,8 +414,8 @@ class Client(object):
 
         return out
 
-    def get_instance_snapshots(self, instance_uuid):
-        r = self._request_url('GET', '/instances/' + instance_uuid +
+    def get_instance_snapshots(self, instance_ref):
+        r = self._request_url('GET', '/instances/' + instance_ref +
                               '/snapshot')
         return r.json()
 
@@ -424,49 +424,54 @@ class Client(object):
             'POST', '/label/%s' % label_name, data={'blob_uuid': blob_uuid})
         return r.json()
 
-    def reboot_instance(self, instance_uuid, hard=False):
+    def reboot_instance(self, instance_ref, hard=False):
         style = 'soft'
         if hard:
             style = 'hard'
-        r = self._request_url('POST', '/instances/' + instance_uuid +
+        r = self._request_url('POST', '/instances/' + instance_ref +
                               '/reboot' + style)
         return r.json()
 
-    def power_off_instance(self, instance_uuid):
-        r = self._request_url('POST', '/instances/' + instance_uuid +
+    def power_off_instance(self, instance_ref):
+        r = self._request_url('POST', '/instances/' + instance_ref +
                               '/poweroff')
         return r.json()
 
-    def power_on_instance(self, instance_uuid):
-        r = self._request_url('POST', '/instances/' + instance_uuid +
+    def power_on_instance(self, instance_ref):
+        r = self._request_url('POST', '/instances/' + instance_ref +
                               '/poweron')
         return r.json()
 
-    def pause_instance(self, instance_uuid):
-        r = self._request_url('POST', '/instances/' + instance_uuid +
+    def pause_instance(self, instance_ref):
+        r = self._request_url('POST', '/instances/' + instance_ref +
                               '/pause')
         return r.json()
 
-    def unpause_instance(self, instance_uuid):
-        r = self._request_url('POST', '/instances/' + instance_uuid +
+    def unpause_instance(self, instance_ref):
+        r = self._request_url('POST', '/instances/' + instance_ref +
                               '/unpause')
         return r.json()
 
-    def delete_instance(self, instance_uuid, namespace=None, async_request=False):
+    def delete_instance(self, instance_ref, namespace=None, async_request=False):
         # Why pass a namespace when you're passing an exact UUID? The idea here
         # is that it provides a consistent interface, but also a safety check
         # against overly zealous loops deleting things.
         data = None
         if namespace:
             data = {'namespace': namespace}
-        self._request_url('DELETE', '/instances/' + instance_uuid, data=data)
+        r = self._request_url('DELETE', '/instances/' + instance_ref, data=data)
 
         if async_request:
             return
 
-        i = self.get_instance(instance_uuid)
+        obj_uuid = r.json().get('uuid')
+        if not obj_uuid:
+            print('ERROR: No instance UUID returned by API')
+            return
+
         deadline = time.time() + _calculate_async_deadline(self.async_strategy)
         while True:
+            i = self.get_instance(obj_uuid)
             if i['state'] == 'deleted':
                 return
 
@@ -476,10 +481,9 @@ class Client(object):
                 return
 
             time.sleep(1)
-            i = self.get_instance(instance_uuid)
 
-    def get_instance_events(self, instance_uuid):
-        r = self._request_url('GET', '/instances/' + instance_uuid + '/events')
+    def get_instance_events(self, instance_ref):
+        r = self._request_url('GET', '/instances/' + instance_ref + '/events')
         return r.json()
 
     def cache_artifact(self, image_url):
@@ -539,18 +543,18 @@ class Client(object):
         r = self._request_url('GET', '/networks', data={'all': all})
         return r.json()
 
-    def get_network(self, network_uuid):
-        r = self._request_url('GET', '/networks/' + network_uuid)
+    def get_network(self, network_ref):
+        r = self._request_url('GET', '/networks/' + network_ref)
         return r.json()
 
-    def delete_network(self, network_uuid, namespace=None):
+    def delete_network(self, network_ref, namespace=None):
         # Why pass a namespace when you're passing an exact UUID? The idea here
         # is that it provides a consistent interface, but also a safety check
         # against overly zealous loops deleting things.
         data = None
         if namespace:
             data = {'namespace': namespace}
-        r = self._request_url('DELETE', '/networks/' + network_uuid, data=data)
+        r = self._request_url('DELETE', '/networks/' + network_ref, data=data)
         return r.json()
 
     def delete_all_networks(self, namespace, clean_wait=False):
@@ -561,8 +565,8 @@ class Client(object):
                                     })
         return r.json()
 
-    def get_network_events(self, instance_uuid):
-        r = self._request_url('GET', '/networks/' + instance_uuid + '/events')
+    def get_network_events(self, network_ref):
+        r = self._request_url('GET', '/networks/' + network_ref + '/events')
         return r.json()
 
     def allocate_network(self, netblock, provide_dhcp, provide_nat, name, namespace=None):
@@ -589,23 +593,23 @@ class Client(object):
             time.sleep(1)
             n = self.get_network(n['uuid'])
 
-    def get_network_interfaces(self, network_uuid):
+    def get_network_interfaces(self, network_ref):
         r = self._request_url('GET', '/networks/' +
-                              network_uuid + '/interfaces')
+                              network_ref + '/interfaces')
         return r.json()
 
-    def get_network_metadata(self, network_uuid):
-        r = self._request_url('GET', '/networks/' + network_uuid +
+    def get_network_metadata(self, network_ref):
+        r = self._request_url('GET', '/networks/' + network_ref +
                               '/metadata')
         return r.json()
 
-    def set_network_metadata_item(self, network_uuid, key, value):
-        r = self._request_url('PUT', '/networks/' + network_uuid +
+    def set_network_metadata_item(self, network_ref, key, value):
+        r = self._request_url('PUT', '/networks/' + network_ref +
                               '/metadata/' + key, data={'value': value})
         return r.json()
 
-    def delete_network_metadata_item(self, network_uuid, key):
-        r = self._request_url('DELETE', '/networks/' + network_uuid +
+    def delete_network_metadata_item(self, network_ref, key):
+        r = self._request_url('DELETE', '/networks/' + network_ref +
                               '/metadata/' + key)
         return r.json()
 
@@ -627,8 +631,8 @@ class Client(object):
                               '/defloat')
         return r.json()
 
-    def get_console_data(self, instance_uuid, length=None):
-        url = '/instances/' + instance_uuid + '/consoledata'
+    def get_console_data(self, instance_ref, length=None):
+        url = '/instances/' + instance_ref + '/consoledata'
         if length:
             d = {'length': length}
         else:
@@ -636,8 +640,8 @@ class Client(object):
         r = self._request_url('GET', url, data=d)
         return r.text
 
-    def delete_console_data(self, instance_uuid):
-        url = '/instances/' + instance_uuid + '/consoledata'
+    def delete_console_data(self, instance_ref):
+        url = '/instances/' + instance_ref + '/consoledata'
         self._request_url('DELETE', url)
 
     def get_namespaces(self):
@@ -686,9 +690,9 @@ class Client(object):
         r = self._request_url('GET', '/admin/locks')
         return r.json()
 
-    def ping(self, network_uuid, address):
+    def ping(self, network_ref, address):
         r = self._request_url(
-            'GET', '/networks/' + network_uuid + '/ping/' + address)
+            'GET', '/networks/' + network_ref + '/ping/' + address)
         return r.json()
 
     def create_upload(self):
