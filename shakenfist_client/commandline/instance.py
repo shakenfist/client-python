@@ -594,13 +594,16 @@ def instance_consoledelete(ctx, instance_uuid=None):
               help='Snapshot this specific device, instead of disk 0.')
 @click.option('-l', '--label_name', default=None,
               help='Label this snapshot with the specified name.')
-@click.option('--delete-snapshot-after-label/--retain-snapshot-after-label', is_flag=True, default=False)
+@click.option('--delete-snapshot-after-label/--retain-snapshot-after-label',
+              is_flag=True, default=False)
+@click.option('--thin/--flatten', is_flag=True, default=False)
 @click.pass_context
 def instance_snapshot(ctx, instance_uuid=None, all=False, device=None, label_name=None,
-                      delete_snapshot_after_label=None):
+                      delete_snapshot_after_label=None, thin=None):
     snapshot = ctx.obj['CLIENT'].snapshot_instance(
         instance_uuid, all, device=device, label_name=label_name,
-        delete_snapshot_after_label=delete_snapshot_after_label)
+        delete_snapshot_after_label=delete_snapshot_after_label,
+        thin=thin)
     if ctx.obj['OUTPUT'] == 'json':
         print(json.dumps(snapshot, indent=4, sort_keys=True))
     else:
