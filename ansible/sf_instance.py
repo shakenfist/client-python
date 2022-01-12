@@ -100,16 +100,15 @@ def log(message):
 
 def present(module):
     log('present starting')
-
-    for required in ['name', 'cpu', 'ram']:
-        if not module.params.get(required):
-            log.write('%s sf-instance required param %s missing\n'
-                      % (datetime.datetime.now(), required))
-            return error('You must specify a %s when creating an instance' % required)
-
     params = {}
+
+    # Required parameters
     for key in ['name', 'cpu', 'ram']:
         params[key] = module.params.get(key)
+        if not params[key]:
+            log.write('%s sf-instance required param %s missing\n'
+                      % (datetime.datetime.now(), key))
+            return error('You must specify %s when creating an instance' % key)
 
     if not module.params.get('disks'):
         params['disks'] = ''
@@ -251,8 +250,8 @@ def main():
     fields = {
         'uuid': {'required': False, 'type': 'str'},
         'name': {'required': False, 'type': 'str'},
-        'cpu': {'required': False, 'type': 'str'},
-        'ram': {'required': False, 'type': 'str'},
+        'cpu': {'required': False, 'type': 'int'},
+        'ram': {'required': False, 'type': 'int'},
 
         'disks': {'required': False, 'type': 'list', 'elements': 'str'},
         'diskspecs': {'required': False, 'type': 'list', 'elements': 'str'},
