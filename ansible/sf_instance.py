@@ -64,6 +64,21 @@ EXAMPLES = """
     namespace: someuser
     async: true
 
+- name: Create Shaken Fist with affinity and other metadata
+    sf_instance:
+    name: 'test-metadata-affinity'
+    cpu: 1
+    ram: 1024
+    disks:
+        - 8@cirros
+    networks:
+        - testnet
+    metadata:
+        hello: world
+        affinity: '{"cpu": {"controller": -10}}'
+        tags: '["controller", "ci-test-123abc"]'
+    state: present
+
 - name: Delete an instance
   sf_instance:
     uuid: 'afb68328-6ff0-498f-bdaa-27d3fcc97f31'
@@ -137,6 +152,11 @@ def present(module):
 
     if module.params.get('configdrive'):
         extra += ' --configdrive %s' % module.params['configdrive']
+
+    if module.params.get('metadata'):
+        for k, v in module.params.get('metadata').items():
+            extra += " --metadata %s='%s'" % (k, v)
+
     params['extra'] = extra
 
     params['async_strategy'] = 'block'
@@ -248,6 +268,8 @@ def main():
         'uefi': {'required': False, 'type': 'bool'},
         'secure_boot': {'required': False, 'type': 'bool'},
         'nvram_template': {'required': False, 'type': 'str'},
+
+        'metadata': {'required': False, 'type': 'dict'},
 
         'async': {'required': False, 'type': 'bool'},
 
