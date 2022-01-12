@@ -64,6 +64,21 @@ EXAMPLES = """
     namespace: someuser
     async: true
 
+- name: Create Shaken Fist with affinity and other metadata
+    sf_instance:
+    name: 'test-metadata-affinity'
+    cpu: 1
+    ram: 1024
+    disks:
+        - 8@cirros
+    networks:
+        - testnet
+    metadata:
+        hello: world
+        affinity: '{"cpu": {"controller": -10}}'
+        tags: '["controller", "ci-test-123abc"]'
+    state: present
+
 - name: Delete an instance
   sf_instance:
     uuid: 'afb68328-6ff0-498f-bdaa-27d3fcc97f31'
@@ -85,16 +100,15 @@ def log(message):
 
 def present(module):
     log('present starting')
-
-    for required in ['name', 'cpu', 'ram']:
-        if not module.params.get(required):
-            log.write('%s sf-instance required param %s missing\n'
-                      % (datetime.datetime.now(), required))
-            return error('You must specify a %s when creating an instance' % required)
-
     params = {}
+
+    # Required parameters
     for key in ['name', 'cpu', 'ram']:
         params[key] = module.params.get(key)
+        if not params[key]:
+            log.write('%s sf-instance required param %s missing\n'
+                      % (datetime.datetime.now(), key))
+            return error('You must specify %s when creating an instance' % key)
 
     if not module.params.get('disks'):
         params['disks'] = ''
@@ -137,6 +151,11 @@ def present(module):
 
     if module.params.get('configdrive'):
         extra += ' --configdrive %s' % module.params['configdrive']
+
+    if module.params.get('metadata'):
+        for k, v in module.params.get('metadata').items():
+            extra += " --metadata %s='%s'" % (k, v)
+
     params['extra'] = extra
 
     params['async_strategy'] = 'block'
@@ -231,8 +250,8 @@ def main():
     fields = {
         'uuid': {'required': False, 'type': 'str'},
         'name': {'required': False, 'type': 'str'},
-        'cpu': {'required': False, 'type': 'str'},
-        'ram': {'required': False, 'type': 'str'},
+        'cpu': {'required': False, 'type': 'int'},
+        'ram': {'required': False, 'type': 'int'},
 
         'disks': {'required': False, 'type': 'list', 'elements': 'str'},
         'diskspecs': {'required': False, 'type': 'list', 'elements': 'str'},
@@ -248,6 +267,8 @@ def main():
         'uefi': {'required': False, 'type': 'bool'},
         'secure_boot': {'required': False, 'type': 'bool'},
         'nvram_template': {'required': False, 'type': 'str'},
+
+        'metadata': {'required': False, 'type': 'dict'},
 
         'async': {'required': False, 'type': 'bool'},
 
