@@ -103,7 +103,7 @@ class ApiClientTestCase(testtools.TestCase):
 
         self.mock_request.assert_called_with(
             'POST', '/instances/notreallyauuid/snapshot',
-            data={'all': True, 'device': None, 'thin': False})
+            data={'all': True, 'device': None})
 
     def test_soft_reboot_instance(self):
         client = apiclient.Client(suppress_configuration_lookup=True,
