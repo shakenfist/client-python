@@ -328,7 +328,7 @@ class Client(object):
     def create_instance(self, name, cpus, memory, network, disk, sshkey, userdata,
                         namespace=None, force_placement=None, video=None, uefi=False,
                         configdrive=None, nvram_template=None, secure_boot=False,
-                        metadata=None):
+                        metadata=None, side_channels=None):
         body = {
             # Values all instances care about
             'name': name,
@@ -341,6 +341,7 @@ class Client(object):
             'video': video,
             'configdrive': configdrive,
             'metadata': metadata,
+            'side_channels': side_channels,
 
             # UEFI values: secure boot implies UEFI and NVRAM templates are not
             # used for BIOS boot (the default).
