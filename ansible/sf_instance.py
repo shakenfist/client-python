@@ -70,13 +70,24 @@ EXAMPLES = """
     cpu: 1
     ram: 1024
     disks:
-        - 8@cirros
+      - 8@cirros
     networks:
-        - testnet
+      - testnet
     metadata:
-        hello: world
-        affinity: '{"cpu": {"controller": -10}}'
-        tags: '["controller", "ci-test-123abc"]'
+      hello: world
+      affinity:
+        cpu:
+          controller: -10
+      tags:
+        - controller
+        - ci-test-123abc
+      arbitrary:
+        - key1: test1
+          key2: test2
+        - dict1:
+          - dict1entry1
+          - dict1entry2
+          - dict1entry3
     state: present
 
 - name: Delete an instance
@@ -154,7 +165,7 @@ def present(module):
 
     if module.params.get('metadata'):
         for k, v in module.params.get('metadata').items():
-            extra += " --metadata %s='%s'" % (k, v)
+            extra += " --metadata %s='%s'" % (k, json.dumps(v))
 
     params['extra'] = extra
 
