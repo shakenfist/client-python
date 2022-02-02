@@ -89,6 +89,17 @@ def _calculate_async_deadline(strategy):
     raise UnknownAsyncStrategy('Async strategy %s is unknown' % strategy)
 
 
+def _correct_blob_indexes(d):
+    # JSON requires dictionary keys to be strings. Reverse that for the blobs
+    # element here to reduce confusion.
+    new_blobs = {}
+    for k in d.get('blobs', []):
+        new_blobs[int(k)] = d['blobs'][k]
+    d['blobs'] = new_blobs
+    LOG.debug('Rewrote blob keys to ints')
+    return d
+
+
 class Client(object):
     def __init__(self, base_url=None, verbose=False,
                  namespace=None, key=None, sync_request_timeout=300,
@@ -422,7 +433,7 @@ class Client(object):
     def update_label(self, label_name, blob_uuid):
         r = self._request_url(
             'POST', '/label/%s' % label_name, data={'blob_uuid': blob_uuid})
-        return r.json()
+        return _correct_blob_indexes(r.json())
 
     def reboot_instance(self, instance_ref, hard=False):
         style = 'soft'
@@ -501,7 +512,7 @@ class Client(object):
 
     def get_artifact(self, artifact_uuid):
         r = self._request_url('GET', '/artifacts/' + artifact_uuid)
-        return r.json()
+        return _correct_blob_indexes(r.json())
 
     def get_artifacts(self, node=None):
         r = self._request_url('GET', '/artifacts', data={'node': node})
