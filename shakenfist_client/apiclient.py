@@ -378,10 +378,10 @@ class Client(object):
             i = self.get_instance(i['uuid'])
 
     def snapshot_instance(self, instance_ref, all=False, device=None, label_name=None,
-                          delete_snapshot_after_label=False):
+                          delete_snapshot_after_label=False, thin=False):
         r = self._request_url(
             'POST', '/instances/' + instance_ref + '/snapshot',
-            data={'all': all, 'device': device})
+            data={'all': all, 'device': device, 'thin': thin})
         out = r.json()
 
         waiting_for = []
@@ -470,7 +470,8 @@ class Client(object):
         data = None
         if namespace:
             data = {'namespace': namespace}
-        r = self._request_url('DELETE', '/instances/' + instance_ref, data=data)
+        r = self._request_url('DELETE', '/instances/' +
+                              instance_ref, data=data)
 
         if async_request:
             return
