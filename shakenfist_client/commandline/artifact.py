@@ -116,7 +116,7 @@ def artifact_download(ctx, artifact_uuid=None, destination=None):
     with tqdm(total=size, unit='B', unit_scale=True,
               desc='Downloading %s to %s' % (artifact_uuid, destination)) as pbar:
         with open(destination, 'wb') as f:
-            for chunk in ctx.obj['CLIENT'].get_blob(blob_uuid):
+            for chunk in ctx.obj['CLIENT'].get_blob_data(blob_uuid):
                 received = len(chunk)
                 f.write(chunk)
                 pbar.update(received)

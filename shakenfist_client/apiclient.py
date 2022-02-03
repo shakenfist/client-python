@@ -543,12 +543,17 @@ class Client(object):
         return r.json()
 
     def get_blob(self, blob_uuid):
-        r = self._request_url('GET', '/blob/' + blob_uuid, stream=True)
+        r = self._request_url('GET', '/blobs/' + blob_uuid)
+        return r.json()
+
+    def get_blob_data(self, blob_uuid):
+        r = self._request_url(
+            'GET', '/blobs/' + blob_uuid + '/data', stream=True)
         for chunk in r.iter_content(chunk_size=8192):
             yield chunk
 
     def get_blobs(self, node=None):
-        r = self._request_url('GET', '/blob', data={'node': node})
+        r = self._request_url('GET', '/blobs', data={'node': node})
         return r.json()
 
     def get_networks(self, all=False):
