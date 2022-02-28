@@ -9,6 +9,7 @@ import sys
 from shakenfist_client import apiclient
 from shakenfist_client.commandline import admin
 from shakenfist_client.commandline import artifact
+from shakenfist_client.commandline import backup
 from shakenfist_client.commandline import blob
 from shakenfist_client.commandline import instance
 from shakenfist_client.commandline import interface
@@ -152,6 +153,7 @@ def cli(ctx, output, verbose, namespace, key, apiurl, async_strategy):
 
 cli.add_command(admin.admin)
 cli.add_command(artifact.artifact)
+cli.add_command(backup.backup)
 cli.add_command(blob.blob)
 cli.add_command(instance.instance)
 cli.add_command(interface.interface)
