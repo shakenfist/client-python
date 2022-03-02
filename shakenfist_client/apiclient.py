@@ -546,9 +546,10 @@ class Client(object):
         r = self._request_url('GET', '/blobs/' + blob_uuid)
         return r.json()
 
-    def get_blob_data(self, blob_uuid):
+    def get_blob_data(self, blob_uuid, offset=0):
         r = self._request_url(
-            'GET', '/blobs/' + blob_uuid + '/data', stream=True)
+            'GET', '/blobs/' + blob_uuid + '/data?offset=' + str(offset),
+            stream=True)
         for chunk in r.iter_content(chunk_size=8192):
             yield chunk
 
