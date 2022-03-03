@@ -503,6 +503,9 @@ class Client(object):
         return r.json()
 
     def upload_artifact(self, name, upload_uuid, source_url=None):
+        if '/' in name:
+            raise RequestMalformedException('Names must not contain /')
+
         r = self._request_url('POST', '/artifacts/upload/%s' % name,
                               data={
                                   'upload_uuid': upload_uuid,
