@@ -1,10 +1,13 @@
 import click
+import http
 import json
 import os
 from prettytable import PrettyTable
 from tqdm import tqdm
+import requests
 import sys
 import time
+import urllib3
 
 from shakenfist_client import apiclient
 from shakenfist_client import util
@@ -113,17 +116,42 @@ def artifact_download(ctx, artifact_uuid=None, destination=None):
     print('%s -> %s of %d bytes' % (artifact_uuid, blob_uuid, size))
 
     total = 0
+    connection_failures = 0
+    done = False
+
     with tqdm(total=size, unit='B', unit_scale=True,
               desc='Downloading %s to %s' % (artifact_uuid, destination)) as pbar:
         with open(destination, 'wb') as f:
-            for chunk in ctx.obj['CLIENT'].get_blob_data(blob_uuid):
-                received = len(chunk)
-                f.write(chunk)
-                pbar.update(received)
-                total += received
+            while not done:
+                bytes_in_attempt = 0
+
+                try:
+                    for chunk in ctx.obj['CLIENT'].get_blob_data(blob_uuid, offset=total):
+                        received = len(chunk)
+                        f.write(chunk)
+                        pbar.update(received)
+                        bytes_in_attempt += received
+                        total += received
+
+                    done = True
+
+                except urllib3.exceptions.NewConnectionError as e:
+                    connection_failures += 1
+                    if connection_failures > 2:
+                        print('HTTP connection repeatedly failed: %s' % e)
+                        sys.exit(1)
+
+                except (ConnectionResetError, http.client.IncompleteRead,
+                        urllib3.exceptions.ProtocolError,
+                        requests.exceptions.ChunkedEncodingError) as e:
+                    # An API error (or timeout) occurred. Retry unless we got nothing.
+                    if bytes_in_attempt == 0:
+                        print('HTTP connection dropped without '
+                              'transferring data: %s' % e)
+                        sys.exit(1)
 
     if total != size:
-        print('Remote side has %d, we have sent %d!' % (size, total))
+        print('Remote side has %d, we have received %d!' % (size, total))
         sys.exit(1)
 
     print('Download complete')
