@@ -97,7 +97,7 @@ def artifact_upload(ctx, name=None, source=None, source_url=None):
 
 
 @artifact.command(name='download', help='Download an artifact.')
-@click.argument('artifact_uuid', type=click.STRING, autocompletion=_get_artifacts)
+@click.argument('artifact_uuid', type=click.STRING, shell_complete=_get_artifacts)
 @click.argument('destination', type=click.Path(exists=False))
 @click.pass_context
 def artifact_download(ctx, artifact_uuid=None, destination=None):
@@ -188,7 +188,7 @@ def artifact_list(ctx, node=None):
 
 
 @artifact.command(name='show', help='Show an artifact')
-@click.argument('artifact_uuid', type=click.STRING, autocompletion=_get_artifacts)
+@click.argument('artifact_uuid', type=click.STRING, shell_complete=_get_artifacts)
 @click.pass_context
 def artifact_show(ctx, artifact_uuid=None):
     a = ctx.obj['CLIENT'].get_artifact(artifact_uuid)
@@ -235,7 +235,7 @@ def artifact_show(ctx, artifact_uuid=None):
 
 
 @artifact.command(name='versions', help='Show versions of an artifact')
-@click.argument('artifact_uuid', type=click.STRING, autocompletion=_get_artifacts)
+@click.argument('artifact_uuid', type=click.STRING, shell_complete=_get_artifacts)
 @click.pass_context
 def artifact_versions(ctx, artifact_uuid=None):
     vers = ctx.obj['CLIENT'].get_artifact_versions(artifact_uuid)
@@ -243,14 +243,14 @@ def artifact_versions(ctx, artifact_uuid=None):
 
 
 @artifact.command(name='delete', help='Delete an artifact')
-@click.argument('artifact_uuid', type=click.STRING, autocompletion=_get_artifacts)
+@click.argument('artifact_uuid', type=click.STRING, shell_complete=_get_artifacts)
 @click.pass_context
 def artifact_delete(ctx, artifact_uuid=None):
     ctx.obj['CLIENT'].delete_artifact(artifact_uuid)
 
 
 @artifact.command(name='delete-version', help='Delete an artifact version')
-@click.argument('artifact_uuid', type=click.STRING, autocompletion=_get_artifacts)
+@click.argument('artifact_uuid', type=click.STRING, shell_complete=_get_artifacts)
 @click.argument('version_id', type=click.INT)
 @click.pass_context
 def artifact_delete_version(ctx, artifact_uuid=None, version_id=0):
@@ -259,7 +259,7 @@ def artifact_delete_version(ctx, artifact_uuid=None, version_id=0):
 
 @artifact.command(name='max-versions',
                   help='Set the maximum number of versions of an artifact')
-@click.argument('artifact_uuid', type=click.STRING, autocompletion=_get_artifacts)
+@click.argument('artifact_uuid', type=click.STRING, shell_complete=_get_artifacts)
 @click.argument('max_versions', type=click.INT)
 @click.pass_context
 def max_versions(ctx, artifact_uuid, max_versions):
