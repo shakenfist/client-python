@@ -20,7 +20,7 @@ def _get_instance_interfaces(ctx, args, incomplete):
 
 @interface.command(name='show', help='Show an interface')
 @click.argument('interface_uuid', type=click.STRING,
-                autocompletion=_get_instance_interfaces)
+                shell_complete=_get_instance_interfaces)
 @click.pass_context
 def interface_show(ctx, interface_uuid=None):
     interface = ctx.obj['CLIENT'].get_interface(interface_uuid)
@@ -43,7 +43,7 @@ def interface_show(ctx, interface_uuid=None):
 @interface.command(name='float',
                    help='Add a floating IP to an interface')
 @click.argument('interface_uuid', type=click.STRING,
-                autocompletion=_get_instance_interfaces)
+                shell_complete=_get_instance_interfaces)
 @click.pass_context
 def interface_float(ctx, interface_uuid=None):
     ctx.obj['CLIENT'].float_interface(interface_uuid)
@@ -54,7 +54,7 @@ def interface_float(ctx, interface_uuid=None):
 @interface.command(name='defloat',
                    help='Remove a floating IP to an interface')
 @click.argument('interface_uuid', type=click.STRING,
-                autocompletion=_get_instance_interfaces)
+                shell_complete=_get_instance_interfaces)
 @click.pass_context
 def interface_defloat(ctx, interface_uuid=None):
     ctx.obj['CLIENT'].defloat_interface(interface_uuid)

@@ -240,7 +240,7 @@ def _show_instance(ctx, i, include_snapshots=False):
 
 
 @instance.command(name='show', help='Show an instance')
-@click.argument('instance_uuid', type=click.STRING, autocompletion=_get_instances)
+@click.argument('instance_uuid', type=click.STRING, shell_complete=_get_instances)
 @click.argument('snapshots', type=click.BOOL, default=False)
 @click.pass_context
 def instance_show(ctx, instance_uuid=None, snapshots=False):
@@ -271,10 +271,10 @@ order you specify them being significant."""))
 @click.argument('cpus', type=click.INT)
 @click.argument('memory', type=click.INT)
 @click.option('-n', '--network', type=click.STRING, multiple=True,
-              autocompletion=util.get_networks,
+              shell_complete=util.get_networks,
               help='A short form definition of a network to attach.')
 @click.option('-f', '--floated', type=click.STRING, multiple=True,
-              autocompletion=util.get_networks,
+              shell_complete=util.get_networks,
               help='As for --network, but with implied float of the interface.')
 @click.option('-N', '--networkspec', type=click.STRING, multiple=True,
               help='A long form "networkspec" definition of a network to attach.')
@@ -447,7 +447,7 @@ def instance_create(ctx, name=None, cpus=None, memory=None, network=None, floate
 
 
 @instance.command(name='delete', help='Delete an instance')
-@click.argument('instance_uuid', type=click.STRING, autocompletion=_get_instances)
+@click.argument('instance_uuid', type=click.STRING, shell_complete=_get_instances)
 @click.option('--namespace', type=click.STRING)
 @click.pass_context
 def instance_delete(ctx, instance_uuid=None, namespace=None):
@@ -469,7 +469,7 @@ def instance_delete_all(ctx, confirm=False, namespace=None):
 
 
 @instance.command(name='events', help='Display events for an instance')
-@click.argument('instance_uuid', type=click.STRING, autocompletion=_get_instances)
+@click.argument('instance_uuid', type=click.STRING, shell_complete=_get_instances)
 @click.pass_context
 def instance_events(ctx, instance_uuid=None):
     events = ctx.obj['CLIENT'].get_instance_events(instance_uuid)
@@ -501,7 +501,7 @@ def instance_events(ctx, instance_uuid=None):
 
 
 @instance.command(name='set-metadata', help='Set a metadata item')
-@click.argument('instance_uuid', type=click.STRING, autocompletion=_get_instances)
+@click.argument('instance_uuid', type=click.STRING, shell_complete=_get_instances)
 @click.argument('key', type=click.STRING)
 @click.argument('value', type=click.STRING)
 @click.pass_context
@@ -516,7 +516,7 @@ def instance_set_metadata(ctx, instance_uuid=None, key=None, value=None):
 
 
 @instance.command(name='delete-metadata', help='Delete a metadata item')
-@click.argument('instance_uuid', type=click.STRING, autocompletion=_get_instances)
+@click.argument('instance_uuid', type=click.STRING, shell_complete=_get_instances)
 @click.argument('key', type=click.STRING)
 @click.pass_context
 def instance_delete_metadata(ctx, instance_uuid=None, key=None):
@@ -526,7 +526,7 @@ def instance_delete_metadata(ctx, instance_uuid=None, key=None):
 
 
 @instance.command(name='reboot', help='Reboot instance')
-@click.argument('instance_uuid', type=click.STRING, autocompletion=_get_instances)
+@click.argument('instance_uuid', type=click.STRING, shell_complete=_get_instances)
 @click.option('--hard/--soft', default=False)
 @click.pass_context
 def instance_reboot(ctx, instance_uuid=None, hard=False):
@@ -536,7 +536,7 @@ def instance_reboot(ctx, instance_uuid=None, hard=False):
 
 
 @instance.command(name='poweron', help='Power on an instance')
-@click.argument('instance_uuid', type=click.STRING, autocompletion=_get_instances)
+@click.argument('instance_uuid', type=click.STRING, shell_complete=_get_instances)
 @click.pass_context
 def instance_power_on(ctx, instance_uuid=None):
     ctx.obj['CLIENT'].power_on_instance(instance_uuid)
@@ -545,7 +545,7 @@ def instance_power_on(ctx, instance_uuid=None):
 
 
 @instance.command(name='poweroff', help='Power off an instance')
-@click.argument('instance_uuid', type=click.STRING, autocompletion=_get_instances)
+@click.argument('instance_uuid', type=click.STRING, shell_complete=_get_instances)
 @click.pass_context
 def instance_power_off(ctx, instance_uuid=None):
     ctx.obj['CLIENT'].power_off_instance(instance_uuid)
@@ -554,7 +554,7 @@ def instance_power_off(ctx, instance_uuid=None):
 
 
 @instance.command(name='pause', help='Pause an instance')
-@click.argument('instance_uuid', type=click.STRING, autocompletion=_get_instances)
+@click.argument('instance_uuid', type=click.STRING, shell_complete=_get_instances)
 @click.pass_context
 def instance_pause(ctx, instance_uuid=None):
     ctx.obj['CLIENT'].pause_instance(instance_uuid)
@@ -563,7 +563,7 @@ def instance_pause(ctx, instance_uuid=None):
 
 
 @instance.command(name='unpause', help='Unpause an instance')
-@click.argument('instance_uuid', type=click.STRING, autocompletion=_get_instances)
+@click.argument('instance_uuid', type=click.STRING, shell_complete=_get_instances)
 @click.pass_context
 def instance_unpause(ctx, instance_uuid=None):
     ctx.obj['CLIENT'].unpause_instance(instance_uuid)
@@ -572,7 +572,7 @@ def instance_unpause(ctx, instance_uuid=None):
 
 
 @instance.command(name='consoledata', help='Get console data for an instance')
-@click.argument('instance_uuid', type=click.STRING, autocompletion=_get_instances)
+@click.argument('instance_uuid', type=click.STRING, shell_complete=_get_instances)
 @click.argument('length', type=click.INT, default=10240)
 @click.pass_context
 def instance_consoledata(ctx, instance_uuid=None, length=None):
@@ -580,14 +580,14 @@ def instance_consoledata(ctx, instance_uuid=None, length=None):
 
 
 @instance.command(name='consoledelete', help='Clear the console log for this instance')
-@click.argument('instance_uuid', type=click.STRING, autocompletion=_get_instances)
+@click.argument('instance_uuid', type=click.STRING, shell_complete=_get_instances)
 @click.pass_context
 def instance_consoledelete(ctx, instance_uuid=None):
     ctx.obj['CLIENT'].delete_console_data(instance_uuid)
 
 
 @instance.command(name='snapshot', help='Snapshot instance')
-@click.argument('instance_uuid', type=click.STRING, autocompletion=_get_instances)
+@click.argument('instance_uuid', type=click.STRING, shell_complete=_get_instances)
 @click.option('-a', '--all', is_flag=True,
               help='Snapshot all disks, not just disk 0.')
 @click.option('-d', '--device', default=None,
