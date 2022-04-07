@@ -226,10 +226,10 @@ def artifact_show(ctx, artifact_uuid=None):
                                    ','.join(info['instances'])))
 
     else:
-        print('\nVersions used by Instances:')
-        format_string = '    %-2s : %0.1fMB  %s'
+        print('\nVersions:')
+        format_string = '    %-2s : blob %s is %0.1fMB  %s'
         for ver, info in a.get('blobs', {}).items():
-            print(format_string % (ver,
+            print(format_string % (ver, info['uuid'],
                                    int(info['size'])/1024/1024,
                                    ', '.join(info['instances'])))
 
