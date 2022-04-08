@@ -126,7 +126,7 @@ pipeline {
 
                       ssh -i /home/jenkins/id_ci -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
                         debian@$primary \
-                        '. /etc/sf/sfrc; sf-client instance list'
+                        'sudo chmod ugo+r /etc/sf/sfrc; . /etc/sf/sfrc; sf-client instance list'
                       if [ $? == 0 ]; then
                         exit 0
                       fi
