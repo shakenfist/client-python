@@ -57,16 +57,17 @@ class ApiClientTestCase(testtools.TestCase):
                 'cpus': 1,
                 'memory': 2048,
                 'network': ['netuuid1'],
-                'disk': ['8@cirros'],
                 'ssh_key': 'sshkey',
                 'user_data': None,
                 'namespace': None,
-                'video': {'memory': 16384, 'model': 'cirrus'},
+                'video': {'model': 'cirrus', 'memory': 16384},
+                'configdrive': None,
+                'metadata': None,
+                'side_channels': None,
                 'uefi': False,
                 'secure_boot': False,
                 'nvram_template': None,
-                'configdrive': None,
-                'metadata': None,
+                'disk': ['8@cirros']
             })
 
     def test_create_instance_user_data(self):
@@ -84,16 +85,17 @@ class ApiClientTestCase(testtools.TestCase):
                 'cpus': 1,
                 'memory': 2048,
                 'network': ['netuuid1'],
-                'disk': ['8@cirros'],
                 'ssh_key': 'sshkey',
                 'user_data': 'userdatabeforebase64',
                 'namespace': None,
-                'video': {'memory': 16384, 'model': 'cirrus'},
+                'video': {'model': 'cirrus', 'memory': 16384},
+                'configdrive': None,
+                'metadata': None,
+                'side_channels': None,
                 'uefi': False,
                 'secure_boot': False,
                 'nvram_template': None,
-                'configdrive': None,
-                'metadata': None,
+                'disk': ['8@cirros']
             })
 
     def test_snapshot_instance(self):
