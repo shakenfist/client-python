@@ -653,14 +653,21 @@ class Client(object):
                               '/defloat')
         return r.json()
 
-    def get_console_data(self, instance_ref, length=None):
+    def get_console_data(self, instance_ref, length=None, decode='utf-8'):
         url = '/instances/' + instance_ref + '/consoledata'
         if length:
             d = {'length': length}
         else:
             d = {}
         r = self._request_url('GET', url, data=d)
-        return r.text
+
+        out = r.text
+        if decode:
+            try:
+                out = out.decode(decode)
+            except Exception:
+                pass
+        return out
 
     def delete_console_data(self, instance_ref):
         url = '/instances/' + instance_ref + '/consoledata'
