@@ -328,7 +328,7 @@ class Client(object):
     def create_instance(self, name, cpus, memory, network, disk, sshkey, userdata,
                         namespace=None, force_placement=None, video=None, uefi=False,
                         configdrive=None, nvram_template=None, secure_boot=False,
-                        metadata=None):
+                        metadata=None, side_channels=None):
         body = {
             # Values all instances care about
             'name': name,
@@ -341,6 +341,7 @@ class Client(object):
             'video': video,
             'configdrive': configdrive,
             'metadata': metadata,
+            'side_channels': side_channels,
 
             # UEFI values: secure boot implies UEFI and NVRAM templates are not
             # used for BIOS boot (the default).
@@ -652,14 +653,21 @@ class Client(object):
                               '/defloat')
         return r.json()
 
-    def get_console_data(self, instance_ref, length=None):
+    def get_console_data(self, instance_ref, length=None, decode='utf-8'):
         url = '/instances/' + instance_ref + '/consoledata'
         if length:
             d = {'length': length}
         else:
             d = {}
         r = self._request_url('GET', url, data=d)
-        return r.text
+
+        out = r.text
+        if decode:
+            try:
+                out = out.decode(decode)
+            except Exception:
+                pass
+        return out
 
     def delete_console_data(self, instance_ref):
         url = '/instances/' + instance_ref + '/consoledata'

@@ -132,7 +132,7 @@ def _show_instance(ctx, i, include_snapshots=False):
                                    'disk_spec', 'video', 'node', 'console_port',
                                    'vdi_port', 'ssh_key', 'user_data',
                                    'power_state', 'state', 'uefi', 'secure_boot',
-                                   'nvram_template'])
+                                   'nvram_template', 'side_channels'])
         out['network_interfaces'] = []
         for interface in interfaces:
             util.show_interface(ctx, interface, out)
@@ -179,6 +179,7 @@ def _show_instance(ctx, i, include_snapshots=False):
     # for now until a proxy is written.
     print(format_string % ('console port', i.get('console_port', '')))
     print(format_string % ('vdi port', i.get('vdi_port', '')))
+    print(format_string % ('side channels', ' '.join(i.get('side_channels', []))))
 
     print()
     print(format_string % ('ssh key', i['ssh_key']))
@@ -314,12 +315,15 @@ order you specify them being significant."""))
               help='Allow very small memory instances.')
 @click.option('-m', '--metadata', type=click.STRING, multiple=True,
               help='Add key=value pair to instance metadata eg. affinity=\'{"fastdisk":10}\'')
+@click.option('-s', '--side-channel', type=click.STRING, multiple=True,
+              help=('A named side channel which will appear inside the guest as a '
+                    'virtio-serial port.'))
 @click.pass_context
 def instance_create(ctx, name=None, cpus=None, memory=None, network=None, floated=None,
                     networkspec=None, disk=None, diskspec=None, sshkey=None, sshkeydata=None,
                     userdata=None, encodeduserdata=None, placement=None, videospec=None,
                     namespace=None, bios=True, force=False, configdrive=None,
-                    no_secure_boot=True, nvram_template=None, metadata=None):
+                    no_secure_boot=True, nvram_template=None, metadata=None, side_channel=None):
     if memory < 128 and not force:
         print('Specified memory size is %dMB. This is very small.' % memory)
         print('Use the --force flag if this is deliberate')
@@ -443,7 +447,8 @@ def instance_create(ctx, name=None, cpus=None, memory=None, network=None, floate
             userdata_content, force_placement=placement,
             namespace=namespace, video=video, uefi=uefi,
             configdrive=configdrive, secure_boot=secure_boot,
-            nvram_template=nvram_template, metadata=metadata_def))
+            nvram_template=nvram_template, metadata=metadata_def,
+            side_channels=side_channel))
 
 
 @instance.command(name='delete', help='Delete an instance')
