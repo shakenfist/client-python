@@ -184,7 +184,7 @@ def artifact_list(ctx, node=None):
                 meta.get('state', '')))
 
     elif ctx.obj['OUTPUT'] == 'json':
-        print(json.dumps(artifacts))
+        print(json.dumps(artifacts, indent=4, sort_keys=True))
 
 
 @artifact.command(name='show', help='Show an artifact')

@@ -35,12 +35,8 @@ def network_list(ctx, all=False):
                   (n['uuid'], n['name'], n['namespace'], n['netblock'], n['state']))
 
     elif ctx.obj['OUTPUT'] == 'json':
-        filtered_nets = []
-        for n in nets:
-            filtered_nets.append(util.filter_dict(
-                n, ['uuid', 'name', 'namespace', 'netblock', 'state']))
-        print(json.dumps({'networks': filtered_nets},
-                         indent=4, sort_keys=True))
+
+        print(json.dumps(nets, indent=4, sort_keys=True))
 
 
 def _show_network(ctx, n):
@@ -51,11 +47,8 @@ def _show_network(ctx, n):
     metadata = ctx.obj['CLIENT'].get_network_metadata(n['uuid'])
 
     if ctx.obj['OUTPUT'] == 'json':
-        filtered = util.filter_dict(n, ['uuid', 'name', 'vxid', 'netblock',
-                                        'provide_dhcp', 'provide_nat',
-                                        'floating_gateway', 'namespace'])
-        filtered['metadata'] = metadata
-        print(json.dumps(filtered, indent=4, sort_keys=True))
+        n['metadata'] = metadata
+        print(json.dumps(n, indent=4, sort_keys=True))
         return
 
     format_string = '%-16s: %s'
@@ -150,12 +143,7 @@ def network_events(ctx, network_uuid=None):
                      e['duration'], e['message']))
 
     elif ctx.obj['OUTPUT'] == 'json':
-        filtered_events = []
-        for e in events:
-            filtered_events.append(util.filter_dict(
-                e, ['timestamp', 'fqdn', 'operation', 'phase', 'duration', 'message']))
-        print(json.dumps({'networks': filtered_events},
-                         indent=4, sort_keys=True))
+        print(json.dumps(events, indent=4, sort_keys=True))
 
 
 @network.command(name='delete', help='Delete a network')
@@ -189,12 +177,7 @@ def network_list_instances(ctx, network_uuid=None):
                   (ni['instance_uuid'], ni['ipv4'], ni['floating']))
 
     elif ctx.obj['OUTPUT'] == 'json':
-        filtered_ni = []
-        for ni in interfaces:
-            filtered_ni.append(util.filter_dict(
-                ni, ['instance_uuid', 'ipv4', 'floating']))
-        print(json.dumps({'instances': filtered_ni},
-                         indent=4, sort_keys=True))
+        print(json.dumps(interfaces, indent=4, sort_keys=True))
 
 
 @network.command(name='set-metadata', help='Set a metadata item')

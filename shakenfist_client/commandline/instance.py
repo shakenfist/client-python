@@ -88,14 +88,11 @@ def instance_list(ctx, all=False):
                      ';'.join(ifaces)))
 
     elif ctx.obj['OUTPUT'] == 'json':
-        filtered_insts = []
+        export_insts = []
         for i in insts:
-            next_inst = util.filter_dict(
-                i, ['uuid', 'name', 'namespace', 'cpus', 'memory', 'node',
-                    'power_state', 'state', 'console_port', 'vdi_port'])
-            next_inst['interfaces'] = _get_interfaces(ctx, i)
-            filtered_insts.append(next_inst)
-        print(json.dumps({'instances': filtered_insts},
+            i['interfaces'] = _get_interfaces(ctx, i)
+            export_insts.append(i)
+        print(json.dumps({'instances': export_insts},
                          indent=4, sort_keys=True))
 
 
@@ -497,12 +494,7 @@ def instance_events(ctx, instance_uuid=None):
                      e['duration'], e['message']))
 
     elif ctx.obj['OUTPUT'] == 'json':
-        filtered_events = []
-        for e in events:
-            filtered_events.append(util.filter_dict(
-                e, ['timestamp', 'fqdn', 'operation', 'phase', 'duration', 'message']))
-        print(json.dumps({'events': filtered_events},
-                         indent=4, sort_keys=True))
+        print(json.dumps(events, indent=4, sort_keys=True))
 
 
 @instance.command(name='set-metadata', help='Set a metadata item')

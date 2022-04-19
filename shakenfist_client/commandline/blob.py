@@ -1,4 +1,5 @@
 import click
+from collections import defaultdict
 import json
 from prettytable import PrettyTable
 
@@ -61,4 +62,4 @@ def blob_list(ctx, node=None):
             ))
 
     elif ctx.obj['OUTPUT'] == 'json':
-        print(json.dumps(blobs))
+        print(json.dumps(blobs, indent=4, sort_keys=True))

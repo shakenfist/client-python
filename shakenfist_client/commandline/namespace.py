@@ -40,7 +40,7 @@ def namespace_list(ctx):
             print(n)
 
     elif ctx.obj['OUTPUT'] == 'json':
-        print(json.dumps(namespaces))
+        print(json.dumps(namespaces, indent=4, sort_keys=True))
 
 
 @namespace.command(name='create',
