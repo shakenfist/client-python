@@ -528,7 +528,11 @@ class Client(object):
 
     def get_artifacts(self, node=None):
         r = self._request_url('GET', '/artifacts', data={'node': node})
-        return r.json()
+
+        out = []
+        for a in r.json():
+            out.append(_correct_blob_indexes(a))
+        return out
 
     def get_artifact_events(self, artifact_uuid):
         r = self._request_url('GET', '/artifacts/' + artifact_uuid + '/events')
