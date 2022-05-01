@@ -125,7 +125,7 @@ def error_text(json_text):
 @click.option('--verbose/--no-verbose', default=False)
 @click.option('--namespace', envvar='SHAKENFIST_NAMESPACE', default=None)
 @click.option('--key', envvar='SHAKENFIST_KEY', default=None)
-@click.option('--apiurl', envvar='SHAKENFIST_API_URL', default='http://localhost:13000')
+@click.option('--apiurl', envvar='SHAKENFIST_API_URL', default=None)
 @click.option('--async-strategy', '--async', envvar='SHAKENFIST_ASYNC', default='pause',
               type=click.Choice(['continue', 'pause', 'block'], case_sensitive=False))
 @click.pass_context
