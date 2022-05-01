@@ -113,13 +113,19 @@ class Client(object):
 
         self.sync_request_timeout = sync_request_timeout
 
+        LOG.debug('Client initially configured with apiurl of %s for namespace %s '
+                  'and async strategy %s'
+                  % (base_url, namespace, async_strategy))
+
         if not suppress_configuration_lookup:
             # Where do we find authentication details? First off, we try command line
             # flags; then environment variables (thanks for doing this for free click);
             # ~/.shakenfist (which is a JSON file); and finally /etc/sf/shakenfist.json.
             if not base_url:
+                LOG.debug('Testing for ~/.shakenfist')
                 user_conf = os.path.expanduser('~/.shakenfist')
                 if os.path.exists(user_conf):
+                    LOG.debug('Loading configuration from ~/.shakenfist')
                     with open(user_conf) as f:
                         d = json.loads(f.read())
                         if not namespace:
@@ -130,8 +136,10 @@ class Client(object):
                             base_url = d['apiurl']
 
             if not base_url:
+                LOG.debug('Testing for /etc/sf/shakenfist.json')
                 try:
                     if os.path.exists('/etc/sf/shakenfist.json'):
+                        LOG.debug('Loading configuration from /etc/sf/shakenfist.json')
                         with open('/etc/sf/shakenfist.json') as f:
                             d = json.loads(f.read())
                             if not namespace:
