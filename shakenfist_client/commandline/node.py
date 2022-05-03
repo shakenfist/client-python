@@ -4,9 +4,6 @@ from prettytable import PrettyTable
 import time
 
 
-from shakenfist_client import util
-
-
 @click.group(help='Node commands')
 def node():
     pass
@@ -33,9 +30,4 @@ def node_list(ctx):
                 n['name'], n['ip'], n['lastseen'], n['version']))
 
     elif ctx.obj['OUTPUT'] == 'json':
-        filtered_nodes = []
-        for n in nodes:
-            filtered_nodes.append(
-                util.filter_dict(n, ['name', 'ip', 'lastseen', 'version']))
-        print(json.dumps({'nodes': filtered_nodes},
-                         indent=4, sort_keys=True))
+        print(json.dumps(nodes, indent=4, sort_keys=True))
