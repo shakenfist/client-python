@@ -151,6 +151,12 @@ def cli(ctx, output, verbose, namespace, key, apiurl, async_strategy):
     LOG.debug('Client for %s constructed' % apiurl)
 
 
+@cli.command(name='version', help='Output the version of the client')
+@click.pass_context
+def version(ctx):
+    print(apiclient.get_user_agent())
+
+
 cli.add_command(admin.admin)
 cli.add_command(artifact.artifact)
 cli.add_command(backup.backup)
@@ -161,3 +167,4 @@ cli.add_command(label.label)
 cli.add_command(namespace.namespace)
 cli.add_command(network.network)
 cli.add_command(node.node)
+cli.add_command(version)
