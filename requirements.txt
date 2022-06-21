@@ -1,4 +1,4 @@
-click >= 8.0.0      # bsd
+click<8.0.0         # bsd
 prettytable         # bsd
 tox                 # mit
 flake8              # mit
