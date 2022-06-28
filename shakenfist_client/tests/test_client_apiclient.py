@@ -190,7 +190,7 @@ class ApiClientTestCase(testtools.TestCase):
 
         self.mock_request.assert_called_with(
             'POST', '/artifacts',
-            data={'url': 'imageurl'})
+            data={'url': 'imageurl', 'shared': False, 'namespace': None})
 
     def test_get_artifacts(self):
         client = apiclient.Client(suppress_configuration_lookup=True,

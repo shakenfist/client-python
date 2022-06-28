@@ -35,11 +35,11 @@ class RequestMalformedException(APIException):
     pass
 
 
-class UnauthorizedException(APIException):
+class UnauthenticatedException(APIException):
     pass
 
 
-class ResourceCannotBeDeletedException(APIException):
+class UnauthorizedException(APIException):
     pass
 
 
@@ -69,8 +69,8 @@ class UnknownAsyncStrategy(APIException):
 
 STATUS_CODES_TO_ERRORS = {
     400: RequestMalformedException,
-    401: UnauthorizedException,
-    403: ResourceCannotBeDeletedException,
+    401: UnauthenticatedException,
+    403: UnauthorizedException,
     404: ResourceNotFoundException,
     406: DependenciesNotReadyException,
     409: ResourceInUseException,
@@ -139,7 +139,8 @@ class Client(object):
                 LOG.debug('Testing for /etc/sf/shakenfist.json')
                 try:
                     if os.path.exists('/etc/sf/shakenfist.json'):
-                        LOG.debug('Loading configuration from /etc/sf/shakenfist.json')
+                        LOG.debug(
+                            'Loading configuration from /etc/sf/shakenfist.json')
                         with open('/etc/sf/shakenfist.json') as f:
                             d = json.loads(f.read())
                             if not namespace:
@@ -236,8 +237,8 @@ class Client(object):
                              headers={'Content-Type': 'application/json',
                                       'User-Agent': get_user_agent()})
         if r.status_code != 200:
-            raise UnauthorizedException('API unauthorized', 'POST', auth_url,
-                                        r.status_code, r.text)
+            raise UnauthenticatedException('API unauthenticated', 'POST', auth_url,
+                                           r.status_code, r.text)
         return 'Bearer %s' % r.json()['access_token']
 
     def _request_url(self, method, url, data=None, request_body_is_binary=False,
@@ -262,7 +263,7 @@ class Client(object):
                         request_body_is_binary=request_body_is_binary,
                         response_body_is_binary=response_body_is_binary,
                         stream=stream)
-                except UnauthorizedException:
+                except UnauthenticatedException:
                     self.cached_auth = self._authenticate()
                     return self._actual_request_url(
                         method, url, data=data,
@@ -507,18 +508,26 @@ class Client(object):
         r = self._request_url('GET', '/instances/' + instance_ref + '/events')
         return r.json()
 
-    def cache_artifact(self, image_url):
-        r = self._request_url('POST', '/artifacts', data={'url': image_url})
+    def cache_artifact(self, image_url, shared=False, namespace=None):
+        r = self._request_url('POST', '/artifacts',
+                              data={
+                                  'url': image_url,
+                                  'shared': shared,
+                                  'namespace': namespace
+                              })
         return r.json()
 
-    def upload_artifact(self, name, upload_uuid, source_url=None):
+    def upload_artifact(self, name, upload_uuid, source_url=None, shared=False,
+                        namespace=None):
         if '/' in name:
             raise RequestMalformedException('Names must not contain /')
 
         r = self._request_url('POST', '/artifacts/upload/%s' % name,
                               data={
                                   'upload_uuid': upload_uuid,
-                                  'source_url': source_url
+                                  'source_url': source_url,
+                                  'shared': shared,
+                                  'namespace': namespace
                               })
         return r.json()
 
