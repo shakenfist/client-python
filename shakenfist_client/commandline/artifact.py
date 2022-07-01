@@ -27,9 +27,16 @@ def _get_artifacts(ctx, args, incomplete):
                   help=('Cache an image.\n\n'
                         'IMAGE_URL: The URL of the image to cache'))
 @click.argument('image_url', type=click.STRING)
+@click.option('--not-shared/--shared', is_flag=True, default=True,
+              help=('If you are an admin, you can pass --shared to share an '
+                    'artifact with others.'))
+@click.option('--namespace', type=click.STRING,
+              help=('If you are an admin, you can create this object in a '
+                    'different namespace.'))
 @click.pass_context
-def artifact_cache(ctx, image_url=None):
-    ctx.obj['CLIENT'].cache_artifact(image_url)
+def artifact_cache(ctx, image_url=None, not_shared=True, namespace=None):
+    s = not not_shared
+    ctx.obj['CLIENT'].cache_artifact(image_url, shared=s, namespace=namespace)
     if ctx.obj['OUTPUT'] == 'json':
         print('{}')
 
@@ -39,8 +46,15 @@ def artifact_cache(ctx, image_url=None):
 @click.argument('source', type=click.Path(exists=True))
 @click.option('--source_url', default=None,
               help='A URL to act as if this artifact was downloaded from.')
+@click.option('--not-shared/--shared', is_flag=True, default=True,
+              help=('If you are an admin, you can pass --shared to share an '
+                    'artifact with others.'))
+@click.option('--namespace', type=click.STRING,
+              help=('If you are an admin, you can create this object in a '
+                    'different namespace.'))
 @click.pass_context
-def artifact_upload(ctx, name=None, source=None, source_url=None):
+def artifact_upload(ctx, name=None, source=None, source_url=None, not_shared=True,
+                    namespace=None):
     st = os.stat(source)
     buffer_size = 4096
 
@@ -91,8 +105,9 @@ def artifact_upload(ctx, name=None, source=None, source_url=None):
 
                 d = f.read(buffer_size)
 
-    artifact = ctx.obj['CLIENT'].upload_artifact(name, upload['uuid'],
-                                                 source_url=source_url)
+    s = not not_shared
+    artifact = ctx.obj['CLIENT'].upload_artifact(
+        name, upload['uuid'], source_url=source_url, shared=s, namespace=namespace)
     print('Created artifact %s' % artifact['uuid'])
 
 
@@ -164,22 +179,25 @@ def artifact_list(ctx, node=None):
 
     if ctx.obj['OUTPUT'] == 'pretty':
         x = PrettyTable()
-        x.field_names = ['uuid', 'type', 'source url', 'versions', 'state']
+        x.field_names = ['uuid', 'namespace', 'type',
+                         'source url', 'versions', 'state']
         for meta in artifacts:
             versions = '%d of %d' % (len(meta.get('blobs', [])),
                                      meta.get('index', 'unknown'))
-            x.add_row([meta.get('uuid', ''), meta.get('artifact_type', ''),
+            x.add_row([meta.get('uuid', ''), meta.get('namespace', ''),
+                       meta.get('artifact_type', ''),
                        meta.get('source_url', ''), versions,
                        meta.get('state', '')])
         print(x)
 
     elif ctx.obj['OUTPUT'] == 'simple':
-        print('uuid,type,source_url,versions,state')
+        print('uuid,namespace,type,source_url,versions,state')
         for meta in artifacts:
             versions = '%d of %d' % (len(meta.get('blobs', [])),
                                      meta.get('index', 'unknown'))
-            print('%s,%s,%s,%s,%s' % (
-                meta.get('uuid', ''), meta.get('artifact_type', ''),
+            print('%s,%s,%s,%s,%s,%s' % (
+                meta.get('uuid', ''), meta.get('namespace', ''),
+                meta.get('artifact_type', ''),
                 meta.get('source_url', ''), versions,
                 meta.get('state', '')))
 
@@ -198,8 +216,9 @@ def artifact_show(ctx, artifact_uuid=None):
         sys.exit(1)
 
     if ctx.obj['OUTPUT'] == 'json':
-        out = util.filter_dict(a, ['uuid', 'artifact_type', 'state', 'source_url',
-                                   'blob_uuid', 'index', 'blobs', 'max_versions'])
+        out = util.filter_dict(a, ['uuid', 'namespace', 'artifact_type', 'state',
+                                   'source_url', 'blob_uuid', 'index', 'blobs',
+                                   'max_versions'])
         print(json.dumps(out, indent=4, sort_keys=True))
         return
 
@@ -209,6 +228,7 @@ def artifact_show(ctx, artifact_uuid=None):
         format_string = '%-25s: %s'
 
     print(format_string % ('uuid', a['uuid']))
+    print(format_string % ('namespace', a.get('namespace', '')))
     print(format_string % ('type', a['artifact_type']))
     print(format_string % ('state', a['state']))
     print(format_string % ('source url', a['source_url']))

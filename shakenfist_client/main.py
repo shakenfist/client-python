@@ -72,12 +72,12 @@ class GroupCatchExceptions(click.Group):
             LOG.error('Malformed Request: %s' % error_text(e.text))
             sys.exit(1)
 
-        except apiclient.UnauthorizedException as e:
-            LOG.error('Not authorized: %s' % e)
+        except apiclient.UnauthenticatedException as e:
+            LOG.error('Not authenticated: %s' % e)
             sys.exit(1)
 
-        except apiclient.ResourceCannotBeDeletedException as e:
-            LOG.error('Cannot delete resource: %s' % error_text(e.text))
+        except apiclient.UnauthorizedException as e:
+            LOG.error('Not authorized: %s' % error_text(e.text))
             sys.exit(1)
 
         except apiclient.ResourceNotFoundException as e:
