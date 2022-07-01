@@ -51,7 +51,7 @@ class DependenciesNotReadyException(APIException):
     pass
 
 
-class ResourceInUseException(APIException):
+class ResourceStateConflictException(APIException):
     pass
 
 
@@ -73,7 +73,7 @@ STATUS_CODES_TO_ERRORS = {
     403: UnauthorizedException,
     404: ResourceNotFoundException,
     406: DependenciesNotReadyException,
-    409: ResourceInUseException,
+    409: ResourceStateConflictException,
     500: InternalServerError,
     507: InsufficientResourcesException,
 }

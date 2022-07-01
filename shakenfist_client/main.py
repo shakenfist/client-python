@@ -88,8 +88,8 @@ class GroupCatchExceptions(click.Group):
             LOG.error('Dependencies not ready: %s' % error_text(e.text))
             sys.exit(1)
 
-        except apiclient.ResourceInUseException as e:
-            LOG.error('Resource in use: %s' % error_text(e.text))
+        except apiclient.ResourceStateConflictException as e:
+            LOG.error('Resource state conflict: %s' % error_text(e.text))
             sys.exit(1)
 
         except apiclient.InternalServerError as e:
