@@ -567,6 +567,14 @@ class Client(object):
                               '/versions/' + str(version_id))
         return r.json()
 
+    def delete_all_artifacts(self, namespace):
+        # Unlike instances and networks, artifact deletion isn't a task in the
+        # backend, so we don't need to poll here.
+        r = self._request_url('DELETE', '/artifacts',
+                              data={'confirm': True,
+                                    'namespace': namespace})
+        return r.json()
+
     def get_blob(self, blob_uuid):
         r = self._request_url('GET', '/blobs/' + blob_uuid)
         return r.json()
