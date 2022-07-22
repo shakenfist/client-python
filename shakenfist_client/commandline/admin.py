@@ -13,7 +13,7 @@ def lock():
     pass
 
 
-@admin.command(name='list', help='List existing locks')
+@lock.command(name='list', help='List existing locks')
 @click.pass_context
 def lock_list(ctx):
     locks = ctx.obj['CLIENT'].get_existing_locks()
