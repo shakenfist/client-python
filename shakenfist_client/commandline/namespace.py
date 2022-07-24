@@ -119,6 +119,7 @@ def namespace_clean(ctx, confirm=False, namespace=None):
 
     ctx.obj['CLIENT'].delete_all_instances(namespace)
     ctx.obj['CLIENT'].delete_all_networks(namespace, clean_wait=True)
+    ctx.obj['CLIENT'].delete_all_artifacts(namespace)
 
 
 @namespace.command(name='add-key',
