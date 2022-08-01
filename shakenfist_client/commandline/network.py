@@ -151,9 +151,9 @@ def network_events(ctx, network_uuid=None):
 @click.option('--namespace', type=click.STRING)
 @click.pass_context
 def network_delete(ctx, network_uuid=None, namespace=None):
-    ctx.obj['CLIENT'].delete_network(network_uuid, namespace=None)
+    out = ctx.obj['CLIENT'].delete_network(network_uuid, namespace=None)
     if ctx.obj['OUTPUT'] == 'json':
-        print('{}')
+        print(out)
 
 
 @network.command(name='instances', help='List instances on a network')
