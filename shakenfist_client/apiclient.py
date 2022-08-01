@@ -668,6 +668,10 @@ class Client(object):
         r = self._request_url('GET', '/nodes')
         return r.json()
 
+    def delete_node(self, node):
+        r = self._request_url('DELETE', '/nodes/' + node)
+        return r.json()
+
     def get_interface(self, interface_uuid):
         r = self._request_url('GET', '/interfaces/' + interface_uuid)
         return r.json()
