@@ -31,3 +31,12 @@ def node_list(ctx):
 
     elif ctx.obj['OUTPUT'] == 'json':
         print(json.dumps(nodes, indent=4, sort_keys=True))
+
+
+@node.command(name='delete', help='Delete a node')
+@click.argument('node', type=click.STRING)
+@click.pass_context
+def network_delete(ctx, node=None):
+    out = ctx.obj['CLIENT'].delete_node(node)
+    if ctx.obj['OUTPUT'] == 'json':
+        print(out)
