@@ -477,21 +477,20 @@ def instance_events(ctx, instance_uuid=None):
     events = ctx.obj['CLIENT'].get_instance_events(instance_uuid)
     if ctx.obj['OUTPUT'] == 'pretty':
         x = PrettyTable()
-        x.field_names = ['timestamp', 'node',
-                         'operation', 'phase', 'duration', 'message']
+        x.field_names = ['timestamp', 'node', 'duration', 'message', 'extra']
         for e in events:
             e['timestamp'] = datetime.datetime.fromtimestamp(e['timestamp'])
-            x.add_row([e['timestamp'], e['fqdn'], e['operation'], e['phase'],
-                       e['duration'], e['message']])
+            x.add_row([e['timestamp'], e['fqdn'], e['duration'], e['message'],
+                       e.get('extra', '')])
         print(x)
 
     elif ctx.obj['OUTPUT'] == 'simple':
-        print('timestamp,node,operation,phase,duration,message')
+        print('timestamp,node,duration,message,extra')
         for e in events:
             e['timestamp'] = datetime.datetime.fromtimestamp(e['timestamp'])
-            print('%s,%s,%s,%s,%s,%s'
-                  % (e['timestamp'], e['fqdn'], e['operation'], e['phase'],
-                     e['duration'], e['message']))
+            print('%s,%s,%s,%s,%s'
+                  % (e['timestamp'], e['fqdn'], e['duration'], e['message'],
+                     e.get('extra', '')))
 
     elif ctx.obj['OUTPUT'] == 'json':
         print(json.dumps(events, indent=4, sort_keys=True))
