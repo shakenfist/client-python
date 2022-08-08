@@ -3,3 +3,4 @@ prettytable          # bsd
 requests             # apache2
 tqdm                 # mit / mozilla
 shakenfist-utilities # apache2
+pbr                  # apache2
