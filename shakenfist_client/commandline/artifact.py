@@ -284,3 +284,17 @@ def artifact_delete_version(ctx, artifact_uuid=None, version_id=0):
 @click.pass_context
 def max_versions(ctx, artifact_uuid, max_versions):
     ctx.obj['CLIENT'].set_artifact_max_versions(artifact_uuid, max_versions)
+
+
+@artifact.command(name='share', help='Share an artifact')
+@click.argument('artifact_uuid', type=click.STRING, shell_complete=_get_artifacts)
+@click.pass_context
+def artifact_share(ctx, artifact_uuid=None):
+    ctx.obj['CLIENT'].share_artifact(artifact_uuid)
+
+
+@artifact.command(name='unshare', help='Unshare an artifact')
+@click.argument('artifact_uuid', type=click.STRING, shell_complete=_get_artifacts)
+@click.pass_context
+def artifact_unshare(ctx, artifact_uuid=None):
+    ctx.obj['CLIENT'].unshare_artifact(artifact_uuid)

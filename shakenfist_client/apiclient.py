@@ -575,6 +575,15 @@ class Client(object):
                                     'namespace': namespace})
         return r.json()
 
+    def share_artifact(self, artifact_uuid):
+        r = self._request_url('POST', '/artifacts/' + artifact_uuid + '/share')
+        return r.json()
+
+    def unshare_artifact(self, artifact_uuid):
+        r = self._request_url(
+            'POST', '/artifacts/' + artifact_uuid + '/unshare')
+        return r.json()
+
     def get_blob(self, blob_uuid):
         r = self._request_url('GET', '/blobs/' + blob_uuid)
         return r.json()
