@@ -1,15 +1,15 @@
 #!/usr/bin/python
 
-# A simple Shaken Fist ansible module, with thanks to
-# https://blog.toast38coza.me/custom-ansible-module-hello-world/
+# Manage Shaken Fist instances
 
-import datetime
 import json
+from shakenfist_utilities import logs
 import time
 
 from ansible.module_utils.basic import AnsibleModule
 
 
+LOG, _ = logs.setup('sf_instance')
 DOCUMENTATION = """
 ---
 module: sf_instance
@@ -102,23 +102,20 @@ def error(message):
     return True, False, {'error': message}
 
 
-def log(message):
-    with open('/tmp/sf_ansible.log', 'a') as logfile:
-        logfile.write('%s: sf-instance %s\n'
-                      % (datetime.datetime.now(), message))
-        logfile.flush()
-
-
 def present(module):
-    log('present starting')
+    log = LOG.with_fields(
+        {
+            'ansible-module': 'sf-instance',
+            'ansible-operation': 'present',
+            'passed-params': module.params
+        })
     params = {}
 
     # Required parameters
     for key in ['name', 'cpu', 'ram']:
         params[key] = module.params.get(key)
         if not params[key]:
-            log.write('%s sf-instance required param %s missing\n'
-                      % (datetime.datetime.now(), key))
+            log.error('required param %s missing' % key)
             return error('You must specify %s when creating an instance' % key)
 
     if not module.params.get('disks'):
@@ -173,52 +170,61 @@ def present(module):
     if module.params.get('async'):
         params['async_strategy'] = 'continue'
 
-    log('params: %s' % params)
+    log = log.with_fields({'calculated-params': params})
+    log.info('Internal params parsed')
     cmd = ('sf-client --json --async=%(async_strategy)s instance create '
            '%(name)s %(cpu)s %(ram)s %(disks)s %(diskspecs)s '
            '%(networks)s %(networkspecs)s %(placement)s '
            '%(extra)s' % params)
+    log.info('Command to execute: %s' % cmd)
     if 'namespace' in module.params and module.params['namespace']:
         cmd += ' --namespace ' + module.params['namespace']
-    log('command: %s' % cmd)
+    log.info('Executing %s' % cmd)
 
     rc, stdout, stderr = module.run_command(
         cmd, check_rc=False, use_unsafe_shell=True)
-    log('exit code: %d' % rc)
+    log.info('Exit code: %s' % rc)
     if rc != 0:
+        log.error('Command failed')
         return True, False, 'Command failed: %s' % stderr
 
     finalized = False
     while not finalized:
         try:
             j = json.loads(stdout)
-            log('%s has state %s' % (j['uuid'], j['state']))
+            log = log.with_fields({'uuid': j['uuid'], 'state': j['state']})
+            log.info('New state')
 
             if params['async_strategy'] == 'continue':
                 finalized = True
             if j['state'] == 'created':
                 finalized = True
             elif j['state'].endswith('error'):
+                log.error('Instance failed to create')
                 return error('Instance %s failed to create' % j['uuid'])
 
             if not finalized:
-                log('polling for finalization of uuid %s' % j['uuid'])
+                log.info('Polling for finalization')
                 rc, stdout, stderr = module.run_command(
                     'sf-client --json instance show %s' % j['uuid'],
                     check_rc=False, use_unsafe_shell=True)
                 time.sleep(5)
 
         except ValueError as e:
-            log('json parse failure: %s' % e)
+            log.with_fields(
+                {
+                    'cmd': cmd,
+                    'stdout': stdout,
+                    'stderr': stderr
+                }).error('Failed to parse JSON: %s' % e)
             rc = -1
             j = ('Failed to parse JSON:\n'
                  '[[command: %s]]\n'
                  '[[stdout: %s]]\n'
                  '[[stderr: %s]]'
                  % (cmd, stdout, stderr))
-            log('json parse failure: %s' % j)
             break
-    log('finalized')
+    log.info('Finalized')
 
     if rc != 0:
         return True, False, j
@@ -227,28 +233,48 @@ def present(module):
 
 
 def absent(module):
+    log = LOG.with_fields(
+        {
+            'ansible-module': 'sf-instance',
+            'ansible-operation': 'absent',
+            'passed-params': module.params
+        })
+
     if not module.params.get('uuid'):
+        log.error('You must specify a uuid when deleting an instance')
         return error('You must specify a uuid when deleting an instance')
 
     cmd = ('sf-client --json --async=block instance delete %(uuid)s'
            % module.params)
     if 'namespace' in module.params and module.params['namespace']:
         cmd += ' --namespace ' + module.params['namespace']
+    log.info('Command to execute: %s' % cmd)
 
     rc, stdout, stderr = module.run_command(
         cmd, check_rc=False, use_unsafe_shell=True)
+    log.info('Exit code: %s' % rc)
     if rc != 0:
+        log.error('Command failed')
         return True, False, 'Command failed: %s' % stderr
 
     try:
         j = json.loads(stdout)
-    except ValueError:
+        log = log.with_fields({'uuid': j['uuid'], 'state': j['state']})
+        log.info('New state')
+    except ValueError as e:
+        log.with_fields(
+            {
+                'cmd': cmd,
+                'stdout': stdout,
+                'stderr': stderr
+            }).error('Failed to parse JSON: %s' % e)
         rc = -1
         j = ('Failed to parse JSON:\n'
              '[[command: %s]]\n'
              '[[stdout: %s]]\n'
              '[[stderr: %s]]'
              % (cmd, stdout, stderr))
+    log.info('Finalized')
 
     if rc != 0:
         return True, False, j
