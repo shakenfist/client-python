@@ -180,26 +180,26 @@ def artifact_list(ctx, node=None):
     if ctx.obj['OUTPUT'] == 'pretty':
         x = PrettyTable()
         x.field_names = ['uuid', 'namespace', 'type',
-                         'source url', 'versions', 'state']
+                         'source url', 'versions', 'state', 'shared']
         for meta in artifacts:
             versions = '%d of %d' % (len(meta.get('blobs', [])),
                                      meta.get('index', 'unknown'))
             x.add_row([meta.get('uuid', ''), meta.get('namespace', ''),
                        meta.get('artifact_type', ''),
                        meta.get('source_url', ''), versions,
-                       meta.get('state', '')])
+                       meta.get('state', ''), meta.get('shared', False)])
         print(x)
 
     elif ctx.obj['OUTPUT'] == 'simple':
-        print('uuid,namespace,type,source_url,versions,state')
+        print('uuid,namespace,type,source_url,versions,state,shared')
         for meta in artifacts:
             versions = '%d of %d' % (len(meta.get('blobs', [])),
                                      meta.get('index', 'unknown'))
-            print('%s,%s,%s,%s,%s,%s' % (
+            print('%s,%s,%s,%s,%s,%s,%s' % (
                 meta.get('uuid', ''), meta.get('namespace', ''),
                 meta.get('artifact_type', ''),
                 meta.get('source_url', ''), versions,
-                meta.get('state', '')))
+                meta.get('state', ''), meta.get('shared', False)))
 
     elif ctx.obj['OUTPUT'] == 'json':
         print(json.dumps(artifacts, indent=4, sort_keys=True))
@@ -218,7 +218,7 @@ def artifact_show(ctx, artifact_uuid=None):
     if ctx.obj['OUTPUT'] == 'json':
         out = util.filter_dict(a, ['uuid', 'namespace', 'artifact_type', 'state',
                                    'source_url', 'blob_uuid', 'index', 'blobs',
-                                   'max_versions'])
+                                   'max_versions', 'shared'])
         print(json.dumps(out, indent=4, sort_keys=True))
         return
 
@@ -236,6 +236,7 @@ def artifact_show(ctx, artifact_uuid=None):
           % ('current version blob uuid', a.get('blob_uuid', 'None')))
     print(format_string % ('number of versions', len(a.get('blobs'))))
     print(format_string % ('maximum versions', a['max_versions']))
+    print(format_string % ('shared', a.get('shared', False)))
 
     if ctx.obj['OUTPUT'] == 'simple':
         print('version,size,instance')
