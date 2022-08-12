@@ -455,7 +455,7 @@ def instance_create(ctx, name=None, cpus=None, memory=None, network=None, floate
 def instance_delete(ctx, instance_uuid=None, namespace=None):
     out = ctx.obj['CLIENT'].delete_instance(instance_uuid, namespace=namespace)
     if ctx.obj['OUTPUT'] == 'json':
-        print(out)
+        print(json.dumps(out, indent=4, sort_keys=True))
 
 
 @instance.command(name='delete-all', help='Delete ALL instances')
