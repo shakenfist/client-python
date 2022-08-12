@@ -484,23 +484,23 @@ class Client(object):
                               instance_ref, data=data)
 
         if async_request:
-            return
+            return {}
 
         obj_uuid = r.json().get('uuid')
         if not obj_uuid:
             print('ERROR: No instance UUID returned by API')
-            return
+            return {}
 
         deadline = time.time() + _calculate_async_deadline(self.async_strategy)
         while True:
             i = self.get_instance(obj_uuid)
             if i['state'] == 'deleted':
-                return
+                return i
 
             LOG.debug('Waiting for instance to be deleted')
             if time.time() > deadline:
                 LOG.debug('Deadline exceeded waiting for instance to delete')
-                return
+                return i
 
             time.sleep(1)
 
