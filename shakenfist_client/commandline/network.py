@@ -152,7 +152,7 @@ def network_events(ctx, network_uuid=None):
 def network_delete(ctx, network_uuid=None, namespace=None):
     out = ctx.obj['CLIENT'].delete_network(network_uuid, namespace=None)
     if ctx.obj['OUTPUT'] == 'json':
-        print(out)
+        print(json.dumps(out, indent=4, sort_keys=True))
 
 
 @network.command(name='instances', help='List instances on a network')
