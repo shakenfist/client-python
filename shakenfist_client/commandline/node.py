@@ -39,4 +39,4 @@ def node_list(ctx):
 def network_delete(ctx, node=None):
     out = ctx.obj['CLIENT'].delete_node(node)
     if ctx.obj['OUTPUT'] == 'json':
-        print(out)
+        print(json.dumps(out, indent=4, sort_keys=True))
