@@ -9,25 +9,44 @@ def node():
     pass
 
 
+def _roles_to_string(n):
+    roles = []
+    for role, symbol in [('is_etcd_master', 'D'), ('is_hypervisor', 'H'),
+                         ('is_network_node', 'N'), ('is_eventlog_node', 'E')]:
+        if n.get(role, False):
+            roles.append(symbol)
+        else:
+            roles.append(' ')
+    return ''.join(roles)
+
+
 @node.command(name='list', help='List nodes')
 @click.pass_context
 def node_list(ctx):
     nodes = list(ctx.obj['CLIENT'].get_nodes())
 
     if ctx.obj['OUTPUT'] == 'pretty':
+        print('Roles: D = etcd master; H = hypervisor; N = network node;')
+        print('       E = eventlog node')
+        print()
+
         x = PrettyTable()
-        x.field_names = ['name', 'ip', 'lastseen', 'version']
+        x.field_names = ['name', 'ip', 'lastseen', 'state', 'roles', 'version']
         for n in nodes:
             last_seen = '%s (%d seconds ago)' % (time.ctime(n['lastseen']),
                                                  time.time() - n['lastseen'])
-            x.add_row([n['name'], n['ip'], last_seen, n['version']])
+            roles = _roles_to_string(n)
+            x.add_row([n['name'], n['ip'], last_seen, n.get('state', ''),
+                       roles, n['version']])
         print(x)
 
     elif ctx.obj['OUTPUT'] == 'simple':
-        print('name,ip,lastseen,version')
+        print('name,ip,lastseen,state,roles,version')
         for n in nodes:
-            print('%s,%s,%s,%s' % (
-                n['name'], n['ip'], n['lastseen'], n['version']))
+            roles = _roles_to_string(n)
+            print('%s,%s,%s,%s,%s,%s' % (
+                n['name'], n['ip'], n['lastseen'], n.get('state', ''),
+                roles, n['version']))
 
     elif ctx.obj['OUTPUT'] == 'json':
         print(json.dumps(nodes, indent=4, sort_keys=True))
