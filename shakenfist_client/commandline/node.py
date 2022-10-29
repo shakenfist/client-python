@@ -12,7 +12,8 @@ def node():
 def _roles_to_string(n):
     roles = []
     for role, symbol in [('is_etcd_master', 'D'), ('is_hypervisor', 'H'),
-                         ('is_network_node', 'N'), ('is_eventlog_node', 'E')]:
+                         ('is_network_node', 'N'), ('is_eventlog_node', 'E'),
+                         ('is_cluster_maintainer', 'M')]:
         if n.get(role, False):
             roles.append(symbol)
         else:
@@ -27,7 +28,7 @@ def node_list(ctx):
 
     if ctx.obj['OUTPUT'] == 'pretty':
         print('Roles: D = etcd master; H = hypervisor; N = network node;')
-        print('       E = eventlog node')
+        print('       E = eventlog node, M = cluster maintenance node')
         print()
 
         x = PrettyTable()
