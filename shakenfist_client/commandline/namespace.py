@@ -181,3 +181,30 @@ def namespace_delete_metadata(ctx, namespace=None, key=None):
     ctx.obj['CLIENT'].delete_namespace_metadata_item(namespace, key)
     if ctx.obj['OUTPUT'] == 'json':
         print('{}')
+
+
+@namespace.command(name='add-trust',
+                   help=('allow another namespace access to our resources.\n\n'
+                         'NAMESPACE:          The name of the namespace\n'
+                         'TRUSTED_NAMESPACE:  The name of the namespace to grant access to\n'))
+@click.argument('namespace', type=click.STRING, shell_complete=_get_namespaces)
+@click.argument('trusted_namespace', type=click.STRING, shell_complete=_get_namespaces)
+@click.pass_context
+def namespace_add_trust(ctx, namespace=None, trusted_namespace=None):
+    out = ctx.obj['CLIENT'].add_namespace_trust(namespace, trusted_namespace)
+    if ctx.obj['OUTPUT'] == 'json':
+        print(json.dumps(out, indent=4, sort_keys=True))
+
+
+@namespace.command(name='remove-trust',
+                   help=('remove another namespace\'s access to this namespace.\n\n'
+                         'NAMESPACE:          The name of the namespace\n'
+                         'TRUSTED_NAMESPACE:  The name of the namespace to remove access from\n'))
+@click.argument('namespace', type=click.STRING, shell_complete=_get_namespaces)
+@click.argument('trusted_namespace', type=click.STRING, shell_complete=_get_namespaces)
+@click.pass_context
+def namespace_remove_trust(ctx, namespace=None, trusted_namespace=None):
+    out = ctx.obj['CLIENT'].remove_namespace_trust(
+        namespace, trusted_namespace)
+    if ctx.obj['OUTPUT'] == 'json':
+        print(json.dumps(out, indent=4, sort_keys=True))
