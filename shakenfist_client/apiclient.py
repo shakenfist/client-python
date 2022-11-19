@@ -757,6 +757,16 @@ class Client(object):
             'DELETE', '/auth/namespaces/' + namespace + '/metadata/' + key)
         return r.json()
 
+    def add_namespace_trust(self, namespace, trusted_namespace):
+        r = self._request_url('POST', '/auth/namespaces/' + namespace + '/trust',
+                              data={'external_namespace': trusted_namespace})
+        return r.json()
+
+    def remove_namespace_trust(self, namespace, trusted_namespace):
+        r = self._request_url(
+            'DELETE', '/auth/namespaces/' + namespace + '/trust' + trusted_namespace)
+        return r.json()
+
     def get_existing_locks(self):
         r = self._request_url('GET', '/admin/locks')
         return r.json()

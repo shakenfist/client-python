@@ -2,14 +2,28 @@
 
 # Manage Shaken Fist instances
 
+# Note that imports here use the system python, not the Shaken Fist venv.
+
 import json
-from shakenfist_utilities import logs
 import time
 
-from ansible.module_utils.basic import AnsibleModule
+from ansible.module_utils.basic import AnsibleModule, missing_required_lib
+
+import traceback
+
+try:
+    from shakenfist_utilities import logs
+except ImportError:
+    HAS_SF_LOGS = False
+    SF_LOGS_IMPORT_ERROR = traceback.format_exc()
+
+    import logging
+    LOG = logging.getLogger(__name__)
+else:
+    HAS_SF_LOGS = True
+    LOG, _ = logs.setup('sf_instance')
 
 
-LOG, _ = logs.setup('sf_instance')
 DOCUMENTATION = """
 ---
 module: sf_instance
@@ -322,6 +336,11 @@ def main():
     }
 
     module = AnsibleModule(argument_spec=fields)
+    if not HAS_SF_LOGS:
+        module.fail_json(
+            msg=missing_required_lib('shakenfist_utilities'),
+            exception=SF_LOGS_IMPORT_ERROR)
+
     is_error, has_changed, result = choice_map.get(
         module.params['state'])(module)
 
