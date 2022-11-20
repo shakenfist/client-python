@@ -29,15 +29,15 @@ def namespace_list(ctx):
 
     if ctx.obj['OUTPUT'] == 'pretty':
         x = PrettyTable()
-        x.field_names = ['namespace']
+        x.field_names = ['name', 'state']
         for n in namespaces:
-            x.add_row([n])
+            x.add_row([n['name'], n['state']])
         print(x)
 
     elif ctx.obj['OUTPUT'] == 'simple':
-        print('namespace')
+        print('name,state')
         for n in namespaces:
-            print(n)
+            print('%s,%s' % (n['name'], n['state']))
 
     elif ctx.obj['OUTPUT'] == 'json':
         print(json.dumps(namespaces, indent=4, sort_keys=True))
