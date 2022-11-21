@@ -764,7 +764,7 @@ class Client(object):
 
     def remove_namespace_trust(self, namespace, trusted_namespace):
         r = self._request_url(
-            'DELETE', '/auth/namespaces/' + namespace + '/trust' + trusted_namespace)
+            'DELETE', '/auth/namespaces/' + namespace + '/trust/' + trusted_namespace)
         return r.json()
 
     def get_existing_locks(self):
