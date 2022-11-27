@@ -249,10 +249,15 @@ def artifact_show(ctx, artifact_uuid=None):
 
     else:
         print('\nVersions:')
-        format_string = '    %-2s : blob %s is %0.1fMB  %s'
+        format_string = '    %-2s : blob %s is %0.1fMB %s %s'
         for ver, info in a.get('blobs', {}).items():
+            if info['instances']:
+                in_use_by = 'in use by instances'
+            else:
+                in_use_by = ''
             print(format_string % (ver, info['uuid'],
                                    int(info['size'])/1024/1024,
+                                   in_use_by,
                                    ', '.join(info['instances'])))
 
 
@@ -268,7 +273,9 @@ def artifact_versions(ctx, artifact_uuid=None):
 @click.argument('artifact_uuid', type=click.STRING, shell_complete=_get_artifacts)
 @click.pass_context
 def artifact_delete(ctx, artifact_uuid=None):
-    ctx.obj['CLIENT'].delete_artifact(artifact_uuid)
+    out = ctx.obj['CLIENT'].delete_artifact(artifact_uuid)
+    if ctx.obj['OUTPUT'] == 'json':
+        print(json.dumps(out, indent=4, sort_keys=True))
 
 
 @artifact.command(name='delete-version', help='Delete an artifact version')
