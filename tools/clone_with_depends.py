@@ -46,7 +46,6 @@ def main():
     primary_repo = git.Repo(primary_repo_path)
     primary_base_reference = os.environ.get('GITHUB_BASE_REF')
 
-    print('Github workspace: %s' % os.environ['GITHUB_WORKSPACE'])
     print('Primary repo: %s' % os.environ['SF_PRIMARY_REPO'])
     print('Primary commit: %s' % os.environ['SF_HEAD_SHA'])
     print('Primary base reference: %s' % primary_base_reference)
