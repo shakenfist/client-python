@@ -6,21 +6,21 @@ JOBS = {
     'functional-tests': [
         {
             'name': 'debian-10-localhost',
-            'baseimage': 'sf://label/system/sfci-debian-10',
+            'baseimage': 'sf://label/ci-images/debian-10',
             'baseuser': 'debian',
             'topology': 'localhost',
             'concurrency': 3
         },
         {
             'name': 'debian-11-slim-primary',
-            'baseimage': 'sf://label/system/sfci-debian-11',
+            'baseimage': 'sf://label/ci-images/debian-11',
             'baseuser': 'debian',
             'topology': 'slim-primary',
             'concurrency': 5
         },
         {
             'name': 'ubuntu-2004-slim-primary',
-            'baseimage': 'sf://label/system/sfci-ubuntu-2004',
+            'baseimage': 'sf://label/ci-images/ubuntu-2004',
             'baseuser': 'ubuntu',
             'topology': 'slim-primary',
             'concurrency': 5

@@ -15,7 +15,7 @@ jobs:
     runs-on: self-hosted
     timeout-minutes: 120
 
-    # NOTE(mikal): git repos are checked out to /srv/github/_work/{org}/{repo}
+    # NOTE(mikal): git repos are checked out to /srv/github/_work/{repo}/{repo}
     # which is available as GITHUB_WORKSPACE. You can find other environment
     # variables at https://docs.github.com/en/actions/learn-github-actions/environment-variables
 
@@ -39,8 +39,6 @@ jobs:
 
       - name: Determine if there is any dependency between the repositories
         run: |
-          echo ${GITHUB_WORKSPACE}
-          pwd
           python3 ${GITHUB_WORKSPACE}/client-python/tools/clone_with_depends.py
 
       - name: Build infrastructure
@@ -48,8 +46,19 @@ jobs:
           cd ${GITHUB_WORKSPACE}/shakenfist
           ansible-playbook -i /home/debian/ansible-hosts \
               --extra-vars "identifier=${SHAKENFIST_NAMESPACE} source_path=${GITHUB_WORKSPACE} \
-              base_image=sf://label/system/sfci-debian-10 base_image_user=debian" \
+              base_image=sf://label/ci-images/debian-10 base_image_user=debian" \
               deploy/ansible/ci-topology-localhost.yml
+
+      - name: Log github actions buffering status
+        run: |
+          . ${GITHUB_WORKSPACE}/ci-environment.sh
+          cd ${GITHUB_WORKSPACE}/shakenfist
+          scp -i /srv/github/id_ci -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              tools/buffer.py debian@$primary:buffer.py
+          ssh -i /srv/github/id_ci -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              debian@$primary python3 buffer.py
 
       - name: Run getsf installer on primary
         run: |
@@ -124,7 +133,7 @@ jobs:
               $source_path/shakenfist \
               debian@$primary:shakenfist
           ssh -i /srv/github/id_ci -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              debian@$primary "cd shakenfist/deploy; . /etc/sf/sfrc; SHAKENFIST_CI_CONCURRENCY=3 tox -epy3"
+              debian@$primary "cd shakenfist/deploy; . /etc/sf/sfrc; sudo pip3 install -r requirements.txt; stestr run --concurrency=3"
 
       - name: Check logs
         if: ${{ ! cancelled() }}
