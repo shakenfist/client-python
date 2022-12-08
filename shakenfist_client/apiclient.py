@@ -719,6 +719,10 @@ class Client(object):
         r = self._request_url('GET', '/auth/namespaces')
         return r.json()
 
+    def get_namespace(self, namespace):
+        r = self._request_url('GET', '/auth/namespaces/' + namespace)
+        return r.json()
+
     def create_namespace(self, namespace):
         r = self._request_url('POST', '/auth/namespaces',
                               data={'namespace': namespace})

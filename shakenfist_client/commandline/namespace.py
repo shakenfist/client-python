@@ -29,9 +29,9 @@ def namespace_list(ctx):
 
     if ctx.obj['OUTPUT'] == 'pretty':
         x = PrettyTable()
-        x.field_names = ['name', 'state']
+        x.field_names = ['name', 'state', 'trusted namespaces']
         for n in namespaces:
-            x.add_row([n['name'], n['state']])
+            x.add_row([n['name'], n['state'], ' '.join(n['trust']['full'])])
         print(x)
 
     elif ctx.obj['OUTPUT'] == 'simple':
@@ -61,50 +61,65 @@ def namespace_delete(ctx, namespace=None):
     ctx.obj['CLIENT'].delete_namespace(namespace)
 
 
-def _show_namespace(ctx, namespace):
-    if namespace not in ctx.obj['CLIENT'].get_namespaces():
-        print('Namespace not found')
-        sys.exit(1)
-
-    key_names = ctx.obj['CLIENT'].get_namespace_keynames(namespace)
-    metadata = ctx.obj['CLIENT'].get_namespace_metadata(namespace)
-
-    if ctx.obj['OUTPUT'] == 'json':
-        out = {'key_names': key_names,
-               'metadata': metadata,
-               }
-        print(json.dumps(out, indent=4, sort_keys=True))
-        return
-
-    if ctx.obj['OUTPUT'] == 'pretty':
-        format_string = '    %s'
-        print('Key Names:')
-        if key_names:
-            for key in key_names:
-                print(format_string % (key))
-
-        print('Metadata:')
-        if metadata:
-            format_string = '    %-' + str(longest_str(metadata)) + 's: %s'
-            for key in metadata:
-                print(format_string % (key, metadata[key]))
-
-    else:
-        print('metadata,keyname')
-        if key_names:
-            for key in key_names:
-                print('keyname,%s' % (key))
-        print('metadata,key,value')
-        if metadata:
-            for key in metadata:
-                print('metadata,%s,%s' % (key, metadata[key]))
-
-
 @namespace.command(name='show', help='Show a namespace')
 @click.argument('namespace', type=click.STRING, shell_complete=_get_namespaces)
 @click.pass_context
 def namespace_show(ctx, namespace=None):
-    _show_namespace(ctx, namespace)
+    ns = ctx.obj['CLIENT'].get_namespace(namespace)
+    if not ns:
+        print('Namespace not found')
+        sys.exit(1)
+
+    if ctx.obj['OUTPUT'] == 'json':
+        print(json.dumps(ns, indent=4, sort_keys=True))
+
+    elif ctx.obj['OUTPUT'] == 'pretty':
+        format_string = '%-14s: %s'
+        for key in ['name', 'state']:
+            print(format_string % (key, ns[key]))
+        print()
+
+        if ns['keys']:
+            format_string = '    %s'
+            print('Key Names:')
+            for key in ns['keys']:
+                print(format_string % (key))
+            print()
+
+        if 'metadata' in ns and ns['metadata']:
+            print('Metadata:')
+            format_string = '    %-' + str(longest_str(ns['metadata'])) + 's: %s'
+            for key in ns['metadata']:
+                print(format_string % (key, ns['metadata'][key]))
+            print()
+
+        if 'trust' in ns and ns['trust']:
+            print('Full trust:')
+            format_string = '    %s'
+            for key in ns['trust']['full']:
+                print(format_string % key)
+
+    else:
+        format_string = '%s:%s'
+        for key in ['name', 'state']:
+            print(format_string % (key, ns[key]))
+        print()
+
+        print('keynames:')
+        if ns['keys']:
+            for key in ns['keys']:
+                print('keyname,%s' % (key))
+            print()
+
+        if 'metadata' in ns and ns['metadata']:
+            print('metadata,key,value')
+            for key in ns['metadata']:
+                print('metadata,%s,%s' % (key, ns['metadata'][key]))
+            print()
+
+        if 'trust' in ns and ns['trust']:
+            for key in ns['trust']['full']:
+                print('fulltrust,%s' % key)
 
 
 @namespace.command(name='clean',
