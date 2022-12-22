@@ -110,3 +110,63 @@ def blob_list(ctx, node=None, audit=False):
 
     elif ctx.obj['OUTPUT'] == 'json':
         print(json.dumps(blobs, indent=4, sort_keys=True))
+
+
+def _blob_show(ctx, b):
+    if ctx.obj['OUTPUT'] == 'simple':
+        format_string = '%s:%s'
+    else:
+        format_string = '%-16s: %s'
+
+    print(format_string % ('uuid', b['uuid']))
+    print(format_string % ('state', b['state']))
+    print(format_string % ('actual size', b['size']))
+    print(format_string % ('virtual size', b.get('virtual size', '0')))
+    print(format_string % ('sha512', b.get('sha512')))
+    print(format_string % ('format', b.get('file format')))
+    print(format_string % ('fetched at', b['fetched_at']))
+    print(format_string % ('last used', b['last_used']))
+    print(format_string % ('reference count', b['reference_count']))
+    print(format_string % ('locations', ' '.join(b['locations'])))
+
+    print()
+    for t in b.get('transcodes'):
+        print('Transcoded as %s at %s' % (t, b['transcodes'][t]))
+
+    print()
+    for i in b.get('instances'):
+        print('Used by instance %s' % i)
+
+
+@blob.command(name='show', help='Show details for a blob.')
+@click.argument('uuid', type=click.STRING)
+@click.pass_context
+def blob_show(ctx, uuid=None):
+    blob = ctx.obj['CLIENT'].get_blob(uuid)
+
+    if ctx.obj['OUTPUT'] == 'json':
+        print(json.dumps(blob, indent=4, sort_keys=True))
+        return
+
+    if not blob:
+        print('No blob found')
+        return
+
+    _blob_show(ctx, blob)
+
+
+@blob.command(name='sha512', help='Find a blob with a matching checksum.')
+@click.argument('hash', type=click.STRING)
+@click.pass_context
+def blob_sha512(ctx, hash=None):
+    blob = ctx.obj['CLIENT'].get_blob_by_sha512(hash)
+
+    if ctx.obj['OUTPUT'] == 'json':
+        print(json.dumps(blob, indent=4, sort_keys=True))
+        return
+
+    if not blob:
+        print('No blob found')
+        return
+
+    _blob_show(ctx, blob)

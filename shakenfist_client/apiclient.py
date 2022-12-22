@@ -531,6 +531,20 @@ class Client(object):
                               })
         return r.json()
 
+    def blob_artifact(self, name, blob_uuid, source_url=None, shared=False,
+                      namespace=None):
+        if '/' in name:
+            raise RequestMalformedException('Names must not contain /')
+
+        r = self._request_url('POST', '/artifacts/upload/%s' % name,
+                              data={
+                                  'blob_uuid': blob_uuid,
+                                  'source_url': source_url,
+                                  'shared': shared,
+                                  'namespace': namespace
+                              })
+        return r.json()
+
     def get_artifact(self, artifact_uuid):
         r = self._request_url('GET', '/artifacts/' + artifact_uuid)
         return _correct_blob_indexes(r.json())
@@ -586,6 +600,10 @@ class Client(object):
 
     def get_blob(self, blob_uuid):
         r = self._request_url('GET', '/blobs/' + blob_uuid)
+        return r.json()
+
+    def get_blob_by_sha512(self, sha512):
+        r = self._request_url('GET', '/blob_checksums/sha512/' + sha512)
         return r.json()
 
     def get_blob_data(self, blob_uuid, offset=0):

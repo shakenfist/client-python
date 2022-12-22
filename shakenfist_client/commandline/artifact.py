@@ -1,5 +1,6 @@
 import click
 import datetime
+import hashlib
 import http
 import json
 import os
@@ -56,60 +57,88 @@ def artifact_cache(ctx, image_url=None, not_shared=True, namespace=None):
 @click.pass_context
 def artifact_upload(ctx, name=None, source=None, source_url=None, not_shared=True,
                     namespace=None):
+    # We can cheat here -- if we already have a blob in the cluster with the
+    # checksum of the file we're uploading, we can skip the upload entirely and
+    # just reuse that blob.
     st = os.stat(source)
-    buffer_size = 4096
 
-    upload = ctx.obj['CLIENT'].create_upload()
+    sha512_hash = hashlib.sha512()
     total = 0
-    retries = 0
-    with tqdm(total=st.st_size, unit='B', unit_scale=True,
-              desc='Uploading %s to %s' % (upload['uuid'], upload['node'])) as pbar:
-        with open(source, 'rb') as f:
-            d = f.read(buffer_size)
+    with open(source, 'rb') as f:
+        with tqdm(total=st.st_size, unit='B', unit_scale=True,
+                  desc='Calculate checksum') as pbar:
+            d = f.read(4096)
             while d:
-                start_time = time.time()
-                try:
-                    remote_total = ctx.obj['CLIENT'].send_upload(
-                        upload['uuid'], d)
-                    retries = 0
-                except apiclient.APIException as e:
-                    retries += 1
+                total += len(d)
+                sha512_hash.update(d)
+                pbar.update(total)
+                d = f.read(4096)
 
-                    if retries > 5:
-                        print('Repeated failures, aborting')
-                        raise e
+    print('Searching for a pre-existing blob with this hash...')
+    blob = ctx.obj['CLIENT'].get_blob_by_sha512(sha512_hash.hexdigest())
+    if not blob:
+        print('None found, uploading')
+        buffer_size = 4096
 
-                    print('Upload error, retrying...')
-                    ctx.obj['CLIENT'].truncate_upload(upload['uuid'], total)
-                    f.seek(total)
-                    buffer_size = 4096
-                    d = f.read(buffer_size)
-                    continue
-
-                # We aim for each chunk to take three seconds to transfer. This is
-                # partially because of the API timeout on the other end, but also
-                # so that uploads don't appear to stall over very slow networks.
-                # However, the buffer size must also always be between 4kb and 4mb.
-                elapsed = time.time() - start_time
-                buffer_size = int(buffer_size * 3.0 / elapsed)
-                buffer_size = max(4 * 1024, buffer_size)
-                buffer_size = min(2 * 1024 * 1024, buffer_size)
-
-                sent = len(d)
-                total += sent
-                pbar.update(sent)
-
-                if total != remote_total:
-                    print('Remote side has %d, we have sent %d!'
-                          % (remote_total, total))
-                    sys.exit(1)
-
+        upload = ctx.obj['CLIENT'].create_upload()
+        total = 0
+        retries = 0
+        with tqdm(total=st.st_size, unit='B', unit_scale=True,
+                  desc='Uploading %s to %s' % (upload['uuid'], upload['node'])) as pbar:
+            with open(source, 'rb') as f:
                 d = f.read(buffer_size)
+                while d:
+                    start_time = time.time()
+                    try:
+                        remote_total = ctx.obj['CLIENT'].send_upload(
+                            upload['uuid'], d)
+                        retries = 0
+                    except apiclient.APIException as e:
+                        retries += 1
 
-    s = not not_shared
-    artifact = ctx.obj['CLIENT'].upload_artifact(
-        name, upload['uuid'], source_url=source_url, shared=s, namespace=namespace)
-    print('Created artifact %s' % artifact['uuid'])
+                        if retries > 5:
+                            print('Repeated failures, aborting')
+                            raise e
+
+                        print('Upload error, retrying...')
+                        ctx.obj['CLIENT'].truncate_upload(
+                            upload['uuid'], total)
+                        f.seek(total)
+                        buffer_size = 4096
+                        d = f.read(buffer_size)
+                        continue
+
+                    # We aim for each chunk to take three seconds to transfer. This is
+                    # partially because of the API timeout on the other end, but also
+                    # so that uploads don't appear to stall over very slow networks.
+                    # However, the buffer size must also always be between 4kb and 4mb.
+                    elapsed = time.time() - start_time
+                    buffer_size = int(buffer_size * 3.0 / elapsed)
+                    buffer_size = max(4 * 1024, buffer_size)
+                    buffer_size = min(2 * 1024 * 1024, buffer_size)
+
+                    sent = len(d)
+                    total += sent
+                    pbar.update(sent)
+
+                    if total != remote_total:
+                        print('Remote side has %d, we have sent %d!'
+                              % (remote_total, total))
+                        sys.exit(1)
+
+                    d = f.read(buffer_size)
+
+        s = not not_shared
+        artifact = ctx.obj['CLIENT'].upload_artifact(
+            name, upload['uuid'], source_url=source_url, shared=s, namespace=namespace)
+        print('Created artifact %s' % artifact['uuid'])
+
+    else:
+        print('Recycling existing blob')
+        s = not not_shared
+        artifact = ctx.obj['CLIENT'].blob_artifact(
+            name, blob['uuid'], source_url=source_url, shared=s, namespace=namespace)
+        print('Created artifact %s' % artifact['uuid'])
 
 
 @artifact.command(name='download', help='Download an artifact.')
