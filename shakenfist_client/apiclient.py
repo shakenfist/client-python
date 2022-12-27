@@ -545,8 +545,8 @@ class Client(object):
                               })
         return r.json()
 
-    def get_artifact(self, artifact_uuid):
-        r = self._request_url('GET', '/artifacts/' + artifact_uuid)
+    def get_artifact(self, artifact_ref):
+        r = self._request_url('GET', '/artifacts/' + artifact_ref)
         return _correct_blob_indexes(r.json())
 
     def get_artifacts(self, node=None):
@@ -557,27 +557,27 @@ class Client(object):
             out.append(_correct_blob_indexes(a))
         return out
 
-    def get_artifact_events(self, artifact_uuid):
-        r = self._request_url('GET', '/artifacts/' + artifact_uuid + '/events')
+    def get_artifact_events(self, artifact_ref):
+        r = self._request_url('GET', '/artifacts/' + artifact_ref + '/events')
         return r.json()
 
-    def get_artifact_versions(self, artifact_uuid):
+    def get_artifact_versions(self, artifact_ref):
         r = self._request_url(
-            'GET', '/artifacts/' + artifact_uuid + '/versions')
+            'GET', '/artifacts/' + artifact_ref + '/versions')
         return r.json()
 
-    def set_artifact_max_versions(self, artifact_uuid, max_versions):
+    def set_artifact_max_versions(self, artifact_ref, max_versions):
         r = self._request_url('POST',
-                              '/artifacts/' + artifact_uuid + '/versions',
+                              '/artifacts/' + artifact_ref + '/versions',
                               data={'max_versions': max_versions})
         return r.json()
 
-    def delete_artifact(self, artifact_uuid):
-        r = self._request_url('DELETE', '/artifacts/' + artifact_uuid)
+    def delete_artifact(self, artifact_ref):
+        r = self._request_url('DELETE', '/artifacts/' + artifact_ref)
         return r.json()
 
-    def delete_artifact_version(self, artifact_uuid, version_id):
-        r = self._request_url('DELETE', '/artifacts/' + artifact_uuid +
+    def delete_artifact_version(self, artifact_ref, version_id):
+        r = self._request_url('DELETE', '/artifacts/' + artifact_ref +
                               '/versions/' + str(version_id))
         return r.json()
 
@@ -589,13 +589,13 @@ class Client(object):
                                     'namespace': namespace})
         return r.json()
 
-    def share_artifact(self, artifact_uuid):
-        r = self._request_url('POST', '/artifacts/' + artifact_uuid + '/share')
+    def share_artifact(self, artifact_ref):
+        r = self._request_url('POST', '/artifacts/' + artifact_ref + '/share')
         return r.json()
 
-    def unshare_artifact(self, artifact_uuid):
+    def unshare_artifact(self, artifact_ref):
         r = self._request_url(
-            'POST', '/artifacts/' + artifact_uuid + '/unshare')
+            'POST', '/artifacts/' + artifact_ref + '/unshare')
         return r.json()
 
     def get_blob(self, blob_uuid):
