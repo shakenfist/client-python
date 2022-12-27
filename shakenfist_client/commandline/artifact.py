@@ -142,11 +142,11 @@ def artifact_upload(ctx, name=None, source=None, source_url=None, not_shared=Tru
 
 
 @artifact.command(name='download', help='Download an artifact.')
-@click.argument('artifact_uuid', type=click.STRING, shell_complete=_get_artifacts)
+@click.argument('artifact_ref', type=click.STRING, shell_complete=_get_artifacts)
 @click.argument('destination', type=click.Path(exists=False))
 @click.pass_context
-def artifact_download(ctx, artifact_uuid=None, destination=None):
-    a = ctx.obj['CLIENT'].get_artifact(artifact_uuid)
+def artifact_download(ctx, artifact_ref=None, destination=None):
+    a = ctx.obj['CLIENT'].get_artifact(artifact_ref)
 
     if not a:
         print('Artifact not found')
@@ -155,17 +155,17 @@ def artifact_download(ctx, artifact_uuid=None, destination=None):
     blob_uuid = a.get('blob_uuid')
     blob_index = a.get('index')
     if not blob_uuid:
-        print('Artifact has no verions')
+        print('Artifact has no versions')
 
     size = a['blobs'][blob_index]['size']
-    print('%s -> %s of %d bytes' % (artifact_uuid, blob_uuid, size))
+    print('%s -> %s of %d bytes' % (artifact_ref, blob_uuid, size))
 
     total = 0
     connection_failures = 0
     done = False
 
     with tqdm(total=size, unit='B', unit_scale=True,
-              desc='Downloading %s to %s' % (artifact_uuid, destination)) as pbar:
+              desc='Downloading %s to %s' % (artifact_ref, destination)) as pbar:
         with open(destination, 'wb') as f:
             while not done:
                 bytes_in_attempt = 0
@@ -236,10 +236,10 @@ def artifact_list(ctx, node=None):
 
 
 @artifact.command(name='show', help='Show an artifact')
-@click.argument('artifact_uuid', type=click.STRING, shell_complete=_get_artifacts)
+@click.argument('artifact_ref', type=click.STRING, shell_complete=_get_artifacts)
 @click.pass_context
-def artifact_show(ctx, artifact_uuid=None):
-    a = ctx.obj['CLIENT'].get_artifact(artifact_uuid)
+def artifact_show(ctx, artifact_ref=None):
+    a = ctx.obj['CLIENT'].get_artifact(artifact_ref)
 
     if not a:
         print('Artifact not found')
@@ -291,58 +291,58 @@ def artifact_show(ctx, artifact_uuid=None):
 
 
 @artifact.command(name='versions', help='Show versions of an artifact')
-@click.argument('artifact_uuid', type=click.STRING, shell_complete=_get_artifacts)
+@click.argument('artifact_ref', type=click.STRING, shell_complete=_get_artifacts)
 @click.pass_context
-def artifact_versions(ctx, artifact_uuid=None):
-    vers = ctx.obj['CLIENT'].get_artifact_versions(artifact_uuid)
+def artifact_versions(ctx, artifact_ref=None):
+    vers = ctx.obj['CLIENT'].get_artifact_versions(artifact_ref)
     print(json.dumps(vers, indent=4, sort_keys=True))
 
 
 @artifact.command(name='delete', help='Delete an artifact')
-@click.argument('artifact_uuid', type=click.STRING, shell_complete=_get_artifacts)
+@click.argument('artifact_ref', type=click.STRING, shell_complete=_get_artifacts)
 @click.pass_context
-def artifact_delete(ctx, artifact_uuid=None):
-    out = ctx.obj['CLIENT'].delete_artifact(artifact_uuid)
+def artifact_delete(ctx, artifact_ref=None):
+    out = ctx.obj['CLIENT'].delete_artifact(artifact_ref)
     if ctx.obj['OUTPUT'] == 'json':
         print(json.dumps(out, indent=4, sort_keys=True))
 
 
 @artifact.command(name='delete-version', help='Delete an artifact version')
-@click.argument('artifact_uuid', type=click.STRING, shell_complete=_get_artifacts)
+@click.argument('artifact_ref', type=click.STRING, shell_complete=_get_artifacts)
 @click.argument('version_id', type=click.INT)
 @click.pass_context
-def artifact_delete_version(ctx, artifact_uuid=None, version_id=0):
-    ctx.obj['CLIENT'].delete_artifact_version(artifact_uuid, str(version_id))
+def artifact_delete_version(ctx, artifact_ref=None, version_id=0):
+    ctx.obj['CLIENT'].delete_artifact_version(artifact_ref, str(version_id))
 
 
 @artifact.command(name='max-versions',
                   help='Set the maximum number of versions of an artifact')
-@click.argument('artifact_uuid', type=click.STRING, shell_complete=_get_artifacts)
+@click.argument('artifact_ref', type=click.STRING, shell_complete=_get_artifacts)
 @click.argument('max_versions', type=click.INT)
 @click.pass_context
-def max_versions(ctx, artifact_uuid, max_versions):
-    ctx.obj['CLIENT'].set_artifact_max_versions(artifact_uuid, max_versions)
+def max_versions(ctx, artifact_ref, max_versions):
+    ctx.obj['CLIENT'].set_artifact_max_versions(artifact_ref, max_versions)
 
 
 @artifact.command(name='share', help='Share an artifact')
-@click.argument('artifact_uuid', type=click.STRING, shell_complete=_get_artifacts)
+@click.argument('artifact_ref', type=click.STRING, shell_complete=_get_artifacts)
 @click.pass_context
-def artifact_share(ctx, artifact_uuid=None):
-    ctx.obj['CLIENT'].share_artifact(artifact_uuid)
+def artifact_share(ctx, artifact_ref=None):
+    ctx.obj['CLIENT'].share_artifact(artifact_ref)
 
 
 @artifact.command(name='unshare', help='Unshare an artifact')
-@click.argument('artifact_uuid', type=click.STRING, shell_complete=_get_artifacts)
+@click.argument('artifact_ref', type=click.STRING, shell_complete=_get_artifacts)
 @click.pass_context
-def artifact_unshare(ctx, artifact_uuid=None):
-    ctx.obj['CLIENT'].unshare_artifact(artifact_uuid)
+def artifact_unshare(ctx, artifact_ref=None):
+    ctx.obj['CLIENT'].unshare_artifact(artifact_ref)
 
 
 @artifact.command(name='events', help='Display events for an artifact')
-@click.argument('artifact_uuid', type=click.STRING, shell_complete=_get_artifacts)
+@click.argument('artifact_ref', type=click.STRING, shell_complete=_get_artifacts)
 @click.pass_context
-def artifact_events(ctx, artifact_uuid=None):
-    events = ctx.obj['CLIENT'].get_artifact_events(artifact_uuid)
+def artifact_events(ctx, artifact_ref=None):
+    events = ctx.obj['CLIENT'].get_artifact_events(artifact_ref)
     if ctx.obj['OUTPUT'] == 'pretty':
         x = PrettyTable()
         x.field_names = ['timestamp', 'node', 'duration', 'message', 'extra']
