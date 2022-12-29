@@ -167,6 +167,17 @@ class Client(object):
 
         self.cached_auth = None
 
+        # Request capabilities information
+        self._collect_capabilities()
+
+    def _collect_capabilities(self):
+        r = requests.request('GET', self.base_url, allow_redirects=True)
+        self.root_html = r.text
+
+    def check_capability(self, capability_string):
+        # NOTE(mikal): this likely needs to be fancier
+        return capability_string in self.root_html
+
     def _actual_request_url(self, method, url, data=None,
                             request_body_is_binary=False,
                             response_body_is_binary=False,
