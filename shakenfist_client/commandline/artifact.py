@@ -63,15 +63,13 @@ def artifact_upload(ctx, name=None, source=None, source_url=None, not_shared=Tru
     st = os.stat(source)
 
     sha512_hash = hashlib.sha512()
-    total = 0
     with open(source, 'rb') as f:
         with tqdm(total=st.st_size, unit='B', unit_scale=True,
                   desc='Calculate checksum') as pbar:
             d = f.read(4096)
             while d:
-                total += len(d)
                 sha512_hash.update(d)
-                pbar.update(total)
+                pbar.update(len(d))
                 d = f.read(4096)
 
     print('Searching for a pre-existing blob with this hash...')
@@ -128,6 +126,7 @@ def artifact_upload(ctx, name=None, source=None, source_url=None, not_shared=Tru
 
                     d = f.read(buffer_size)
 
+        print('Creating artifact')
         s = not not_shared
         artifact = ctx.obj['CLIENT'].upload_artifact(
             name, upload['uuid'], source_url=source_url, shared=s, namespace=namespace)
