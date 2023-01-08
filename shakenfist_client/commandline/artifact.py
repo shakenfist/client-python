@@ -57,23 +57,31 @@ def artifact_cache(ctx, image_url=None, not_shared=True, namespace=None):
 @click.pass_context
 def artifact_upload(ctx, name=None, source=None, source_url=None, not_shared=True,
                     namespace=None):
-    # We can cheat here -- if we already have a blob in the cluster with the
-    # checksum of the file we're uploading, we can skip the upload entirely and
-    # just reuse that blob.
-    st = os.stat(source)
+    if not ctx.obj['CLIENT'].check_capability('blob-search-by-hash'):
+        blob = None
+    else:
+        # We can cheat here -- if we already have a blob in the cluster with the
+        # checksum of the file we're uploading, we can skip the upload entirely and
+        # just reuse that blob.
+        st = os.stat(source)
 
-    sha512_hash = hashlib.sha512()
-    with open(source, 'rb') as f:
-        with tqdm(total=st.st_size, unit='B', unit_scale=True,
-                  desc='Calculate checksum') as pbar:
-            d = f.read(4096)
-            while d:
-                sha512_hash.update(d)
-                pbar.update(len(d))
+        sha512_hash = hashlib.sha512()
+        with open(source, 'rb') as f:
+            with tqdm(total=st.st_size, unit='B', unit_scale=True,
+                      desc='Calculate checksum') as pbar:
                 d = f.read(4096)
+                while d:
+                    sha512_hash.update(d)
+                    pbar.update(len(d))
+                    d = f.read(4096)
+                    while d:
+                        sha512_hash.update(d)
+                        pbar.update(len(d))
+                        d = f.read(4096)
 
-    print('Searching for a pre-existing blob with this hash...')
-    blob = ctx.obj['CLIENT'].get_blob_by_sha512(sha512_hash.hexdigest())
+        print('Searching for a pre-existing blob with this hash...')
+        blob = ctx.obj['CLIENT'].get_blob_by_sha512(sha512_hash.hexdigest())
+
     if not blob:
         print('None found, uploading')
         buffer_size = 4096

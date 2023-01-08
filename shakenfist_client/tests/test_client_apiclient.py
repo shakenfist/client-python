@@ -15,6 +15,11 @@ class ApiClientTestCase(testtools.TestCase):
         self.mock_request = self.request_url.start()
         self.addCleanup(self.request_url.stop)
 
+        self.capabilities = mock.patch(
+            'shakenfist_client.apiclient.Client._collect_capabilities')
+        self.capabilities = self.capabilities.start()
+        self.addCleanup(self.capabilities.stop)
+
         self.sleep = mock.patch('time.sleep')
         self.mock_sleep = self.sleep.start()
         self.addCleanup(self.sleep.stop)
@@ -362,6 +367,14 @@ class GetNodesMock():
 
 
 class ApiClientGetNodesTestCase(testtools.TestCase):
+    def setUp(self):
+        super(ApiClientGetNodesTestCase, self).setUp()
+
+        self.capabilities = mock.patch(
+            'shakenfist_client.apiclient.Client._collect_capabilities')
+        self.capabilities = self.capabilities.start()
+        self.addCleanup(self.capabilities.stop)
+
     @mock.patch('shakenfist_client.apiclient.Client._request_url',
                 return_value=GetNodesMock())
     def test_get_nodes(self, mock_request):
