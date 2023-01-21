@@ -1,8 +1,8 @@
 click >= 8.0.0           # bsd
 prettytable              # bsd
-requests                 # apache2
-chardet>=3.0.2,<6.0.0    # lgpl -- required by requests with this version pin
-urllib3>=1.21.1,<= 1.26  # mit -- required by requests with this version pin
+requests>=2.28.2         # apache2
+chardet>=5.1.0           # lgpl -- required by requests with this version pin
+urllib3>=1.26.14         # mit -- required by requests with this version pin
 tqdm                     # mit / mozilla
 shakenfist-utilities     # apache2
 pbr                      # apache2
