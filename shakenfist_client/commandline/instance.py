@@ -177,7 +177,7 @@ def _show_instance(ctx, i, include_snapshots=False):
     print(format_string % ('console port', i.get('console_port', '')))
 
     if i.get('vdi_type'):
-        vdi_format_string = format_string + '(%s)' % i.get('vdi_type')
+        vdi_format_string = format_string + ' (%s)' % i.get('vdi_type')
         print(vdi_format_string % ('vdi port', i.get('vdi_port', '')))
     else:
         print(format_string % ('vdi port', i.get('vdi_port', '')))
@@ -316,6 +316,8 @@ order you specify them being significant."""))
 @click.option('--nvram-template', type=click.STRING,
               help=('A label or blob UUID to use as a template for UEFI NVRAM. '
                     'This is sometimes required for secure boot.'))
+@click.option('--vdi-type', type=click.Choice(['vnc', 'spice'], case_sensitive=False),
+              default='vnc', help='Select VDI console type.')
 @click.option('--force', is_flag=True, default=False,
               help='Allow very small memory instances.')
 @click.option('-m', '--metadata', type=click.STRING, multiple=True,
@@ -328,7 +330,8 @@ def instance_create(ctx, name=None, cpus=None, memory=None, network=None, floate
                     networkspec=None, disk=None, diskspec=None, sshkey=None, sshkeydata=None,
                     userdata=None, encodeduserdata=None, placement=None, videospec=None,
                     namespace=None, bios=True, force=False, configdrive=None,
-                    no_secure_boot=True, nvram_template=None, metadata=None, side_channel=None):
+                    no_secure_boot=True, nvram_template=None, metadata=None, side_channel=None,
+                    vdi_type=None):
     if memory < 128 and not force:
         print('Specified memory size is %dMB. This is very small.' % memory)
         print('Use the --force flag if this is deliberate')
@@ -445,15 +448,23 @@ def instance_create(ctx, name=None, cpus=None, memory=None, network=None, floate
             return
         metadata_def[key] = val
 
-    _show_instance(
-        ctx,
-        ctx.obj['CLIENT'].create_instance(
+    kwargs = {
+        'force_placement': placement,
+        'namespace': namespace,
+        'video': video,
+        'uefi': uefi,
+        'configdrive': configdrive,
+        'secure_boot': secure_boot,
+        'nvram_template': nvram_template,
+        'metadata': metadata_def,
+        'side_channels': side_channel
+    }
+    if ctx.obj['CLIENT'].check_capability('spice-vdi-console'):
+        kwargs['vdi_type'] = vdi_type
+
+    _show_instance(ctx, ctx.obj['CLIENT'].create_instance(
             name, cpus, memory, netdefs, diskdefs, sshkey_content,
-            userdata_content, force_placement=placement,
-            namespace=namespace, video=video, uefi=uefi,
-            configdrive=configdrive, secure_boot=secure_boot,
-            nvram_template=nvram_template, metadata=metadata_def,
-            side_channels=side_channel))
+            userdata_content, **kwargs))
 
 
 @instance.command(name='delete', help='Delete an instance')
