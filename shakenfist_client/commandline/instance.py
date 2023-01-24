@@ -2,8 +2,11 @@ import base64
 import click
 import datetime
 import json
+import os
 from prettytable import PrettyTable
+import subprocess
 import sys
+import tempfile
 
 from shakenfist_client import apiclient, util
 
@@ -599,6 +602,48 @@ def instance_consoledata(ctx, instance_uuid=None, length=None):
 @click.pass_context
 def instance_consoledelete(ctx, instance_uuid=None):
     ctx.obj['CLIENT'].delete_console_data(instance_uuid)
+
+
+@instance.command(name='vdiconsole', help='Launch a VDI console for the instance')
+@click.argument('instance_uuid', type=click.STRING, shell_complete=_get_instances)
+@click.pass_context
+def instance_vdiconsole(ctx, instance_uuid=None):
+    if not ctx.obj['CLIENT'].check_capability('vdi-console-helper'):
+        sys.stderr.write(
+            'Unfortunately this server does not implement VDI console helpers.\n')
+        sys.exit(1)
+
+    debug = ''
+    if ctx.obj['VERBOSE']:
+        debug = '--debug'
+
+    # We don't use NamedTemporaryFile as a context manager as the .vv file
+    # will also attempt to clean up the file.
+    (temp_handle, temp_name) = tempfile.mkstemp()
+    os.close(temp_handle)
+    try:
+        with open(temp_name, 'w') as f:
+            f.write(ctx.obj['CLIENT'].get_vdi_console_helper(instance_uuid))
+
+        p = subprocess.run('remote-viewer %s %s' % (debug, temp_name), shell=True)
+        if ctx.obj['VERBOSE']:
+            print('Remote viewer process exited with %d return code'
+                  % p.returncode)
+    finally:
+        if os.path.exists(temp_name):
+            os.unlink(temp_name)
+
+
+@instance.command(name='vdiconsolefile', help='Download a .vv file for the VDI console')
+@click.argument('instance_uuid', type=click.STRING, shell_complete=_get_instances)
+@click.pass_context
+def instance_vdiconsolefile(ctx, instance_uuid=None):
+    if not ctx.obj['CLIENT'].check_capability('vdi-console-helper'):
+        sys.stderr.write(
+            'Unfortunately this server does not implement VDI console helpers.\n')
+        sys.exit(1)
+
+    print(ctx.obj['CLIENT'].get_vdi_console_helper(instance_uuid))
 
 
 @instance.command(name='snapshot', help='Snapshot instance')
