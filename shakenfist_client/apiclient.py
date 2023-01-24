@@ -755,6 +755,10 @@ class Client(object):
         url = '/instances/' + instance_ref + '/consoledata'
         self._request_url('DELETE', url)
 
+    def get_vdi_console_helper(self, instance_ref):
+        r = self._request_url('GET', '/instances/' + instance_ref + '/vdiconsolehelper')
+        return r.text
+
     def get_namespaces(self):
         r = self._request_url('GET', '/auth/namespaces')
         return r.json()

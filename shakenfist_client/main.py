@@ -93,6 +93,7 @@ def cli(ctx, output, verbose, namespace, key, apiurl, async_strategy):
     if not ctx.obj:
         ctx.obj = {}
     ctx.obj['OUTPUT'] = output
+    ctx.obj['VERBOSE'] = verbose
 
     if verbose:
         LOG.setLevel(logging.DEBUG)
