@@ -352,11 +352,7 @@ class Client(object):
     def create_instance(self, name, cpus, memory, network, disk, sshkey, userdata,
                         namespace=None, force_placement=None, video=None, uefi=False,
                         configdrive=None, nvram_template=None, secure_boot=False,
-                        metadata=None, side_channels=None, vdi_type='vnc'):
-        if vdi_type != 'vnc' and not self.check_capability('%s-vdi-console' % vdi_type):
-            raise IncapableException(
-                'Server is incapable of creating a %d VDI console' % vdi_type)
-
+                        metadata=None, side_channels=None):
         body = {
             # Values all instances care about
             'name': name,
@@ -380,9 +376,6 @@ class Client(object):
 
         if force_placement:
             body['placed_on'] = force_placement
-
-        if vdi_type != 'vnc':
-            body['vdi_type'] = vdi_type
 
         # Ensure size is always an int if specified
         clean_disks = []

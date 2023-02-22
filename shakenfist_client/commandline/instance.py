@@ -179,11 +179,7 @@ def _show_instance(ctx, i, include_snapshots=False):
     # for now until a proxy is written.
     print(format_string % ('console port', i.get('console_port', '')))
 
-    if i.get('vdi_type'):
-        vdi_format_string = format_string + ' (%s)' % i.get('vdi_type')
-        print(vdi_format_string % ('vdi port', i.get('vdi_port', '')))
-    else:
-        print(format_string % ('vdi port', i.get('vdi_port', '')))
+    print(format_string % ('vdi port', i.get('vdi_port', '')))
     if i.get('vdi_tls_port'):
         print(format_string % ('vdi tls port', i.get('vdi_tls_port', '')))
 
