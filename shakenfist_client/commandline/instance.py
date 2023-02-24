@@ -315,8 +315,6 @@ order you specify them being significant."""))
 @click.option('--nvram-template', type=click.STRING,
               help=('A label or blob UUID to use as a template for UEFI NVRAM. '
                     'This is sometimes required for secure boot.'))
-@click.option('--vdi-type', type=click.Choice(['vnc', 'spice'], case_sensitive=False),
-              default='vnc', help='Select VDI console type.')
 @click.option('--force', is_flag=True, default=False,
               help='Allow very small memory instances.')
 @click.option('-m', '--metadata', type=click.STRING, multiple=True,
@@ -329,8 +327,7 @@ def instance_create(ctx, name=None, cpus=None, memory=None, network=None, floate
                     networkspec=None, disk=None, diskspec=None, sshkey=None, sshkeydata=None,
                     userdata=None, encodeduserdata=None, placement=None, videospec=None,
                     namespace=None, bios=True, force=False, configdrive=None,
-                    no_secure_boot=True, nvram_template=None, metadata=None, side_channel=None,
-                    vdi_type=None):
+                    no_secure_boot=True, nvram_template=None, metadata=None, side_channel=None):
     if memory < 128 and not force:
         print('Specified memory size is %dMB. This is very small.' % memory)
         print('Use the --force flag if this is deliberate')
@@ -458,8 +455,6 @@ def instance_create(ctx, name=None, cpus=None, memory=None, network=None, floate
         'metadata': metadata_def,
         'side_channels': side_channel
     }
-    if ctx.obj['CLIENT'].check_capability('spice-vdi-console'):
-        kwargs['vdi_type'] = vdi_type
 
     _show_instance(ctx, ctx.obj['CLIENT'].create_instance(
             name, cpus, memory, netdefs, diskdefs, sshkey_content,
