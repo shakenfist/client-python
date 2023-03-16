@@ -533,9 +533,15 @@ class Client(object):
         return r.json()
 
     def upload_artifact(self, name, upload_uuid, source_url=None, shared=False,
-                        namespace=None):
+                        namespace=None, artifact_type='image'):
         if '/' in name:
             raise RequestMalformedException('Names must not contain /')
+
+        if artifact_type != 'image':
+            if not self.check_capability('artifact-upload-types'):
+                raise RequestMalformedException(
+                    'The API server version you are talking to does not support '
+                    'specifying upload artifact types other than image.')
 
         r = self._request_url('POST', '/artifacts/upload/%s' % name,
                               data={
@@ -825,6 +831,42 @@ class Client(object):
         r = self._request_url('POST', '/upload/' + upload_uuid,
                               data=data, request_body_is_binary=True)
         return r.json()
+
+    def send_upload_file(self, upload_uuid, flo):
+        buffer_size = 4096
+        total = 0
+
+        d = flo.read(buffer_size)
+        while d:
+            start_time = time.time()
+            try:
+                self.send_upload(upload_uuid, d)
+                retries = 0
+            except APIException as e:
+                retries += 1
+
+                if retries > 5:
+                    raise e
+
+                self.truncate_upload(upload_uuid, total)
+                flo.seek(total)
+                buffer_size = 4096
+                d = flo.read(buffer_size)
+                continue
+
+            # We aim for each chunk to take three seconds to transfer. This is
+            # partially because of the API timeout on the other end, but also
+            # so that uploads don't appear to stall over very slow networks.
+            # However, the buffer size must also always be between 4kb and 4mb.
+            elapsed = time.time() - start_time
+            buffer_size = int(buffer_size * 3.0 / elapsed)
+            buffer_size = max(4 * 1024, buffer_size)
+            buffer_size = min(2 * 1024 * 1024, buffer_size)
+
+            sent = len(d)
+            total += sent
+
+            d = flo.read(buffer_size)
 
     def truncate_upload(self, upload_uuid, offset):
         r = self._request_url(

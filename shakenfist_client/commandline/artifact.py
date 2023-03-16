@@ -86,6 +86,8 @@ def artifact_upload(ctx, name=None, source=None, source_url=None, not_shared=Tru
         print('None found, uploading')
         buffer_size = 4096
 
+        # We do not use send_upload_file because we want to hook in our own
+        # progress bar.
         upload = ctx.obj['CLIENT'].create_upload()
         total = 0
         retries = 0
