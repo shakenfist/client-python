@@ -150,6 +150,19 @@ def namespace_add_key(ctx, namespace=None, keyname=None, key=None):
     ctx.obj['CLIENT'].add_namespace_key(namespace, keyname, key)
 
 
+@namespace.command(name='update-key',
+                   help=('update a key already present in the namespace.\n\n'
+                         'NAMESPACE: The name of the namespace\n'
+                         'KEY_NAME:  The unique name of the key\n'
+                         'KEY:       The new password for the namespace'))
+@click.argument('namespace', type=click.STRING, shell_complete=_get_namespaces)
+@click.argument('keyname', type=click.STRING)
+@click.argument('key', type=click.STRING)
+@click.pass_context
+def namespace_update_key(ctx, namespace=None, keyname=None, key=None):
+    ctx.obj['CLIENT'].update_namespace_key(namespace, keyname, key)
+
+
 @namespace.command(name='delete-key',
                    help=('delete a specific key from a namespace.\n\n'
                          'NAMESPACE: The name of the namespace\n'

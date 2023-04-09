@@ -32,22 +32,28 @@ def node_list(ctx):
         print()
 
         x = PrettyTable()
-        x.field_names = ['name', 'ip', 'lastseen', 'state', 'roles', 'version']
+        x.field_names = ['name', 'ip', 'lastseen', 'state', 'roles', 'release']
         for n in nodes:
             last_seen = '%s (%d seconds ago)' % (time.ctime(n['lastseen']),
                                                  time.time() - n['lastseen'])
             roles = _roles_to_string(n)
+            release = n.get('release')
+            if not release:
+                release = n.get('version')
             x.add_row([n['name'], n['ip'], last_seen, n.get('state', ''),
-                       roles, n['version']])
+                       roles, release])
         print(x)
 
     elif ctx.obj['OUTPUT'] == 'simple':
         print('name,ip,lastseen,state,roles,version')
         for n in nodes:
             roles = _roles_to_string(n)
+            release = n.get('release')
+            if not release:
+                release = n.get('version')
             print('%s,%s,%s,%s,%s,%s' % (
                 n['name'], n['ip'], n['lastseen'], n.get('state', ''),
-                roles, n['version']))
+                roles, release))
 
     elif ctx.obj['OUTPUT'] == 'json':
         print(json.dumps(nodes, indent=4, sort_keys=True))
