@@ -254,10 +254,13 @@ def artifact_show(ctx, artifact_ref=None):
         print('Artifact not found')
         sys.exit(1)
 
+    metadata = ctx.obj['CLIENT'].get_artifact_metadata(a['uuid'])
+
     if ctx.obj['OUTPUT'] == 'json':
         out = util.filter_dict(a, ['uuid', 'namespace', 'artifact_type', 'state',
                                    'source_url', 'blob_uuid', 'index', 'blobs',
                                    'max_versions', 'shared'])
+        out['metadata'] = metadata
         print(json.dumps(out, indent=4, sort_keys=True))
         return
 
@@ -276,6 +279,17 @@ def artifact_show(ctx, artifact_ref=None):
     print(format_string % ('number of versions', len(a.get('blobs'))))
     print(format_string % ('maximum versions', a['max_versions']))
     print(format_string % ('shared', a.get('shared', False)))
+
+    print()
+    if ctx.obj['OUTPUT'] == 'pretty':
+        format_string = '    %-8s: %s'
+        print('Metadata:')
+        for key in metadata:
+            print(format_string % (key, metadata[key]))
+    else:
+        print('metadata,key,value')
+        for key in metadata:
+            print('metadata,%s,%s' % (key, metadata[key]))
 
     if ctx.obj['OUTPUT'] == 'simple':
         print('version,size,instance')
@@ -371,3 +385,32 @@ def artifact_events(ctx, artifact_ref=None):
 
     elif ctx.obj['OUTPUT'] == 'json':
         print(json.dumps(events, indent=4, sort_keys=True))
+
+
+@artifact.command(name='set-metadata', help='Set a metadata item')
+@click.argument('artifact_ref', type=click.STRING, shell_complete=_get_artifacts)
+@click.argument('key', type=click.STRING)
+@click.argument('value', type=click.STRING)
+@click.pass_context
+def instance_set_metadata(ctx, artifact_ref=None, key=None, value=None):
+    if not ctx.obj['CLIENT'].check_capability('artifact-metadata'):
+        sys.stderr.write(
+            'Unfortunately this server does not implement artifact metadata.\n')
+        sys.exit(1)
+    ctx.obj['CLIENT'].set_instance_metadata_item(artifact_ref, key, value)
+    if ctx.obj['OUTPUT'] == 'json':
+        print('{}')
+
+
+@artifact.command(name='delete-metadata', help='Delete a metadata item')
+@click.argument('artifact_ref', type=click.STRING, shell_complete=_get_artifacts)
+@click.argument('key', type=click.STRING)
+@click.pass_context
+def instance_delete_metadata(ctx, artifact_ref=None, key=None):
+    if not ctx.obj['CLIENT'].check_capability('artifact-metadata'):
+        sys.stderr.write(
+            'Unfortunately this server does not implement artifact metadata.\n')
+        sys.exit(1)
+    ctx.obj['CLIENT'].delete_instance_metadata_item(artifact_ref, key)
+    if ctx.obj['OUTPUT'] == 'json':
+        print('{}')

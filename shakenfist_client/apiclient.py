@@ -619,6 +619,21 @@ class Client(object):
             'POST', '/artifacts/' + artifact_ref + '/unshare')
         return r.json()
 
+    def get_artifact_metadata(self, artifact_ref):
+        r = self._request_url('GET', '/artifacts/' + artifact_ref +
+                              '/metadata')
+        return r.json()
+
+    def set_artifact_metadata_item(self, artifact_ref, key, value):
+        r = self._request_url('PUT', '/artifacts/' + artifact_ref +
+                              '/metadata/' + key, data={'value': value})
+        return r.json()
+
+    def delete_artifact_metadata_item(self, artifact_ref, key):
+        r = self._request_url('DELETE', '/artifacts/' + artifact_ref +
+                              '/metadata/' + key)
+        return r.json()
+
     def get_blob(self, blob_uuid):
         r = self._request_url('GET', '/blobs/' + blob_uuid)
         return r.json()
