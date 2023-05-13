@@ -299,7 +299,7 @@ class Client(object):
 
     # The metadata calls are repetitive and handled here as a group
     def _get_metadata(self, object_plural, object_reference):
-        r = self._request_url
+        r = self._request_url(
             'GET', '/' + object_plural + '/' + object_reference + '/metadata')
         return r.json()
 
@@ -334,7 +334,7 @@ class Client(object):
         return self._set_metadata('instances', instance_ref, key, value)
 
     def set_namespace_metadata_item(self, namespace, key, value):
-        return self._set_metadata('auth/namespaces', network_ref, key, value)
+        return self._set_metadata('auth/namespaces', namespace, key, value)
 
     def set_network_metadata_item(self, network_ref, key, value):
         return self._set_metadata('networks', network_ref, key, value)
@@ -346,19 +346,19 @@ class Client(object):
         return r.json()
 
     def delete_artifact_metadata_item(self, artifact_ref, key):
-        return self._set_metadata('artifacts', artifact_ref, key)
+        return self._delete_metadata('artifacts', artifact_ref, key)
 
     def delete_blob_metadata_item(self, blob_uuid, key):
-        return self._set_metadata('blobs', blob_uuid, key)
+        return self._delete_metadata('blobs', blob_uuid, key)
 
     def delete_instance_metadata_item(self, instance_ref, key):
-        return self._set_metadata('instances', instance_ref, key)
+        return self._delete_metadata('instances', instance_ref, key)
 
     def delete_namespace_metadata_item(self, namespace, key):
-        return self._set_metadata('auth/namespaces', network_ref, key)
+        return self._delete_metadata('auth/namespaces', namespace, key)
 
     def delete_network_metadata_item(self, network_ref, key):
-        return self._set_metadata('networks', network_ref, key)
+        return self._delete_metadata('networks', network_ref, key)
 
     # Other calls
     def get_instances(self, all=False):

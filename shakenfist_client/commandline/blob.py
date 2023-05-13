@@ -2,6 +2,7 @@ import click
 from collections import defaultdict
 import json
 from prettytable import PrettyTable
+import sys
 
 
 GiB = 1024 * 1024 * 1024
@@ -29,9 +30,9 @@ def blob_list(ctx, node=None, audit=False):
                 if blob_uuid:
                     discovered_blob_references[blob_uuid] += 1
 
-        for artifact in ctx.obj['CLIENT'].get_artifacts():
-            for index in artifact['blobs']:
-                discovered_blob_references[artifact['blobs']
+        for blob in ctx.obj['CLIENT'].get_blobs():
+            for index in blob['blobs']:
+                discovered_blob_references[blob['blobs']
                                            [index]['uuid']] += 1
 
         for b in ctx.obj['CLIENT'].get_blobs():
@@ -118,6 +119,8 @@ def _blob_show(ctx, b):
     else:
         format_string = '%-16s: %s'
 
+    metadata = ctx.obj['CLIENT'].get_blob_metadata(b['uuid'])
+
     print(format_string % ('uuid', b['uuid']))
     print(format_string % ('state', b['state']))
     print(format_string % ('actual size', b['size']))
@@ -128,6 +131,17 @@ def _blob_show(ctx, b):
     print(format_string % ('last used', b['last_used']))
     print(format_string % ('reference count', b['reference_count']))
     print(format_string % ('locations', ' '.join(b['locations'])))
+
+    print()
+    if ctx.obj['OUTPUT'] == 'pretty':
+        format_string = '    %-8s: %s'
+        print('Metadata:')
+        for key in metadata:
+            print(format_string % (key, metadata[key]))
+    else:
+        print('metadata,key,value')
+        for key in metadata:
+            print('metadata,%s,%s' % (key, metadata[key]))
 
     print()
     for t in b.get('transcodes'):
@@ -170,3 +184,32 @@ def blob_sha512(ctx, hash=None):
         return
 
     _blob_show(ctx, blob)
+
+
+@blob.command(name='set-metadata', help='Set a metadata item')
+@click.argument('uuid', type=click.STRING, shell_complete=_get_blobs)
+@click.argument('key', type=click.STRING)
+@click.argument('value', type=click.STRING)
+@click.pass_context
+def instance_set_metadata(ctx, uuid=None, key=None, value=None):
+    if not ctx.obj['CLIENT'].check_capability('blob-metadata'):
+        sys.stderr.write(
+            'Unfortunately this server does not implement blob metadata.\n')
+        sys.exit(1)
+    ctx.obj['CLIENT'].set_instance_metadata_item(uuid, key, value)
+    if ctx.obj['OUTPUT'] == 'json':
+        print('{}')
+
+
+@blob.command(name='delete-metadata', help='Delete a metadata item')
+@click.argument('uuid', type=click.STRING, shell_complete=_get_blobs)
+@click.argument('key', type=click.STRING)
+@click.pass_context
+def instance_delete_metadata(ctx, uuid=None, key=None):
+    if not ctx.obj['CLIENT'].check_capability('blob-metadata'):
+        sys.stderr.write(
+            'Unfortunately this server does not implement blob metadata.\n')
+        sys.exit(1)
+    ctx.obj['CLIENT'].delete_instance_metadata_item(uuid, key)
+    if ctx.obj['OUTPUT'] == 'json':
+        print('{}')
