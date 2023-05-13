@@ -297,6 +297,61 @@ class Client(object):
                 LOG.debug('Dependencies not ready, retrying')
                 time.sleep(1)
 
+    # The metadata calls are repetitive and handled here as a group
+    def _get_metadata(self, object_plural, object_reference):
+        r = self._request_url
+            'GET', '/' + object_plural + '/' + object_reference + '/metadata')
+        return r.json()
+
+    def get_artifact_metadata(self, artifact_ref):
+        return self._get_metadata('artifacts', artifact_ref)
+
+    def get_instance_metadata(self, instance_ref):
+        return self._get_metadata('instances', instance_ref)
+
+    def get_namespace_metadata(self, namespace):
+        return self._get_metadata('auth/namespaces', namespace)
+
+    def get_network_metadata(self, network_ref):
+        return self._get_metadata('networks', network_ref)
+
+    def _set_metadata(self, object_plural, object_reference, key, value):
+        r = self._request_url(
+            'PUT', '/' + object_plural + '/' + object_reference +
+            '/metadata/' + key, data={'value': value})
+        return r.json()
+
+    def set_artifact_metadata_item(self, artifact_ref, key, value):
+        return self._set_metadata('artifacts', artifact_ref, key, value)
+
+    def set_instance_metadata_item(self, instance_ref, key, value):
+        return self._set_metadata('instances', instance_ref, key, value)
+
+    def set_namespace_metadata_item(self, namespace, key, value):
+        return self._set_metadata('auth/namespaces', network_ref, key, value)
+
+    def set_network_metadata_item(self, network_ref, key, value):
+        return self._set_metadata('networks', network_ref, key, value)
+
+    def _delete_metadata(self, object_plural, object_reference, key):
+        r = self._request_url(
+            'DELETE', '/' + object_plural + '/' + object_reference +
+            '/metadata/' + key)
+        return r.json()
+
+    def delete_artifact_metadata_item(self, artifact_ref, key):
+        return self._set_metadata('artifacts', artifact_ref, key)
+
+    def delete_instance_metadata_item(self, instance_ref, key):
+        return self._set_metadata('instances', instance_ref, key)
+
+    def delete_namespace_metadata_item(self, namespace, key):
+        return self._set_metadata('auth/namespaces', network_ref, key)
+
+    def delete_network_metadata_item(self, network_ref, key):
+        return self._set_metadata('networks', network_ref, key)
+
+    # Other calls
     def get_instances(self, all=False):
         r = self._request_url('GET', '/instances', data={'all': all})
         return r.json()
@@ -332,21 +387,6 @@ class Client(object):
     def get_instance_interfaces(self, instance_ref):
         r = self._request_url('GET', '/instances/' + instance_ref +
                               '/interfaces')
-        return r.json()
-
-    def get_instance_metadata(self, instance_ref):
-        r = self._request_url('GET', '/instances/' + instance_ref +
-                              '/metadata')
-        return r.json()
-
-    def set_instance_metadata_item(self, instance_ref, key, value):
-        r = self._request_url('PUT', '/instances/' + instance_ref +
-                              '/metadata/' + key, data={'value': value})
-        return r.json()
-
-    def delete_instance_metadata_item(self, instance_ref, key):
-        r = self._request_url('DELETE', '/instances/' + instance_ref +
-                              '/metadata/' + key)
         return r.json()
 
     def create_instance(self, name, cpus, memory, network, disk, sshkey, userdata,
@@ -619,21 +659,6 @@ class Client(object):
             'POST', '/artifacts/' + artifact_ref + '/unshare')
         return r.json()
 
-    def get_artifact_metadata(self, artifact_ref):
-        r = self._request_url('GET', '/artifacts/' + artifact_ref +
-                              '/metadata')
-        return r.json()
-
-    def set_artifact_metadata_item(self, artifact_ref, key, value):
-        r = self._request_url('PUT', '/artifacts/' + artifact_ref +
-                              '/metadata/' + key, data={'value': value})
-        return r.json()
-
-    def delete_artifact_metadata_item(self, artifact_ref, key):
-        r = self._request_url('DELETE', '/artifacts/' + artifact_ref +
-                              '/metadata/' + key)
-        return r.json()
-
     def get_blob(self, blob_uuid):
         r = self._request_url('GET', '/blobs/' + blob_uuid)
         return r.json()
@@ -710,21 +735,6 @@ class Client(object):
     def get_network_interfaces(self, network_ref):
         r = self._request_url('GET', '/networks/' +
                               network_ref + '/interfaces')
-        return r.json()
-
-    def get_network_metadata(self, network_ref):
-        r = self._request_url('GET', '/networks/' + network_ref +
-                              '/metadata')
-        return r.json()
-
-    def set_network_metadata_item(self, network_ref, key, value):
-        r = self._request_url('PUT', '/networks/' + network_ref +
-                              '/metadata/' + key, data={'value': value})
-        return r.json()
-
-    def delete_network_metadata_item(self, network_ref, key):
-        r = self._request_url('DELETE', '/networks/' + network_ref +
-                              '/metadata/' + key)
         return r.json()
 
     def get_nodes(self):
@@ -808,21 +818,6 @@ class Client(object):
     def delete_namespace_key(self, namespace, key_name):
         self._request_url(
             'DELETE', '/auth/namespaces/' + namespace + '/keys/' + key_name)
-
-    def get_namespace_metadata(self, namespace):
-        r = self._request_url('GET', '/auth/namespaces/' + namespace +
-                              '/metadata')
-        return r.json()
-
-    def set_namespace_metadata_item(self, namespace, key, value):
-        r = self._request_url('PUT', '/auth/namespaces/' + namespace +
-                              '/metadata/' + key, data={'value': value})
-        return r.json()
-
-    def delete_namespace_metadata_item(self, namespace, key):
-        r = self._request_url(
-            'DELETE', '/auth/namespaces/' + namespace + '/metadata/' + key)
-        return r.json()
 
     def add_namespace_trust(self, namespace, trusted_namespace):
         r = self._request_url('POST', '/auth/namespaces/' + namespace + '/trust',
