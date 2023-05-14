@@ -254,7 +254,10 @@ def artifact_show(ctx, artifact_ref=None):
         print('Artifact not found')
         sys.exit(1)
 
-    metadata = ctx.obj['CLIENT'].get_artifact_metadata(a['uuid'])
+    if not ctx.obj['CLIENT'].check_capability('artifact-metadata'):
+        metadata = {}
+    else:
+        metadata = ctx.obj['CLIENT'].get_artifact_metadata(a['uuid'])
 
     if ctx.obj['OUTPUT'] == 'json':
         out = util.filter_dict(a, ['uuid', 'namespace', 'artifact_type', 'state',

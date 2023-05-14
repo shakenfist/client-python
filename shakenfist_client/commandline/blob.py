@@ -119,7 +119,10 @@ def _blob_show(ctx, b):
     else:
         format_string = '%-16s: %s'
 
-    metadata = ctx.obj['CLIENT'].get_blob_metadata(b['uuid'])
+    if not ctx.obj['CLIENT'].check_capability('blob-metadata'):
+        metadata = {}
+    else:
+        metadata = ctx.obj['CLIENT'].get_blob_metadata(b['uuid'])
 
     print(format_string % ('uuid', b['uuid']))
     print(format_string % ('state', b['state']))
