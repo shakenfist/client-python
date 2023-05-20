@@ -309,6 +309,9 @@ class Client(object):
     def get_blob_metadata(self, blob_uuid):
         return self._get_metadata('blobs', blob_uuid)
 
+    def get_interface_metadata(self, interface_uuid):
+        return self._get_metadata('interfaces', interface_uuid)
+
     def get_instance_metadata(self, instance_ref):
         return self._get_metadata('instances', instance_ref)
 
@@ -330,6 +333,9 @@ class Client(object):
     def set_blob_metadata_item(self, blob_uuid, key, value):
         return self._set_metadata('blobs', blob_uuid, key, value)
 
+    def set_interface_metadata_item(self, interface_uuid, key, value):
+        return self._set_metadata('interfaces', interface_uuid, key, value)
+
     def set_instance_metadata_item(self, instance_ref, key, value):
         return self._set_metadata('instances', instance_ref, key, value)
 
@@ -350,6 +356,9 @@ class Client(object):
 
     def delete_blob_metadata_item(self, blob_uuid, key):
         return self._delete_metadata('blobs', blob_uuid, key)
+
+    def delete_interface_metadata_item(self, interface_uuid, key):
+        return self._delete_metadata('interfaces', interface_uuid, key)
 
     def delete_instance_metadata_item(self, instance_ref, key):
         return self._delete_metadata('instances', instance_ref, key)

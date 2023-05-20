@@ -17,6 +17,11 @@ def show_interface(ctx, interface, out=[]):
         print('Interface not found')
         sys.exit(1)
 
+    if not ctx.obj['CLIENT'].check_capability('interface-metadata'):
+        metadata = {}
+    else:
+        metadata = ctx.obj['CLIENT'].get_interface_metadata(interface['uuid'])
+
     if ctx.obj['OUTPUT'] == 'json':
         if 'network_interfaces' not in out:
             out['network_interfaces'] = []
@@ -42,6 +47,17 @@ def show_interface(ctx, interface, out=[]):
                  interface['macaddr'], interface['order'], interface.get(
                      'ipv4', ''),
                  interface.get('floating', ''), interface['model']))
+
+    print()
+    if ctx.obj['OUTPUT'] == 'pretty':
+        format_string = '    %-8s: %s'
+        print('Metadata:')
+        for key in metadata:
+            print(format_string % (key, metadata[key]))
+    else:
+        print('metadata,key,value')
+        for key in metadata:
+            print('metadata,%s,%s' % (key, metadata[key]))
 
 
 def get_client(ctx):

@@ -1,5 +1,6 @@
 import click
 import json
+import sys
 
 
 from shakenfist_client import util
@@ -58,5 +59,34 @@ def interface_float(ctx, interface_uuid=None):
 @click.pass_context
 def interface_defloat(ctx, interface_uuid=None):
     ctx.obj['CLIENT'].defloat_interface(interface_uuid)
+    if ctx.obj['OUTPUT'] == 'json':
+        print('{}')
+
+
+@interface.command(name='set-metadata', help='Set a metadata item')
+@click.argument('interface_uuid', type=click.STRING, shell_complete=_get_instance_interfaces)
+@click.argument('key', type=click.STRING)
+@click.argument('value', type=click.STRING)
+@click.pass_context
+def interface_set_metadata(ctx, interface_uuid=None, key=None, value=None):
+    if not ctx.obj['CLIENT'].check_capability('interface-metadata'):
+        sys.stderr.write(
+            'Unfortunately this server does not implement interface metadata.\n')
+        sys.exit(1)
+    ctx.obj['CLIENT'].set_interface_metadata_item(interface_uuid, key, value)
+    if ctx.obj['OUTPUT'] == 'json':
+        print('{}')
+
+
+@interface.command(name='delete-metadata', help='Delete a metadata item')
+@click.argument('interface_uuid', type=click.STRING, shell_complete=_get_instance_interfaces)
+@click.argument('key', type=click.STRING)
+@click.pass_context
+def interface_delete_metadata(ctx, interface_uuid=None, key=None):
+    if not ctx.obj['CLIENT'].check_capability('interface-metadata'):
+        sys.stderr.write(
+            'Unfortunately this server does not implement interface metadata.\n')
+        sys.exit(1)
+    ctx.obj['CLIENT'].delete_interface_metadata_item(interface_uuid, key)
     if ctx.obj['OUTPUT'] == 'json':
         print('{}')
