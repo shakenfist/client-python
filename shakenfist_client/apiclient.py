@@ -755,6 +755,10 @@ class Client(object):
                               network_ref + '/interfaces')
         return r.json()
 
+    def get_node(self, node):
+        r = self._request_url('GET', '/nodes/' + node)
+        return r.json()
+
     def get_nodes(self):
         r = self._request_url('GET', '/nodes')
         return r.json()
