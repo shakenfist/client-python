@@ -249,7 +249,6 @@ def artifact_list(ctx, node=None):
 @click.pass_context
 def artifact_show(ctx, artifact_ref=None):
     a = ctx.obj['CLIENT'].get_artifact(artifact_ref)
-
     if not a:
         print('Artifact not found')
         sys.exit(1)
@@ -277,8 +276,7 @@ def artifact_show(ctx, artifact_ref=None):
     print(format_string % ('type', a['artifact_type']))
     print(format_string % ('state', a['state']))
     print(format_string % ('source url', a['source_url']))
-    print(format_string
-          % ('current version blob uuid', a.get('blob_uuid', 'None')))
+    print(format_string % ('current version blob uuid', a.get('blob_uuid', 'None')))
     print(format_string % ('number of versions', len(a.get('blobs'))))
     print(format_string % ('maximum versions', a['max_versions']))
     print(format_string % ('shared', a.get('shared', False)))

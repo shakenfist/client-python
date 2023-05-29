@@ -26,6 +26,10 @@ class IncapableException(Exception):
     pass
 
 
+class InvalidException(Exception):
+    pass
+
+
 class APIException(Exception):
     def __init__(self, message, method, url, status_code, text):
         self.message = message
@@ -321,6 +325,9 @@ class Client(object):
     def get_network_metadata(self, network_ref):
         return self._get_metadata('networks', network_ref)
 
+    def get_node_metadata(self, node):
+        return self._get_node('nodes', node)
+
     def _set_metadata(self, object_plural, object_reference, key, value):
         r = self._request_url(
             'PUT', '/' + object_plural + '/' + object_reference +
@@ -345,6 +352,9 @@ class Client(object):
     def set_network_metadata_item(self, network_ref, key, value):
         return self._set_metadata('networks', network_ref, key, value)
 
+    def set_node_metadata_item(self, node, key, value):
+        return self._set_metadata('nodes', node, key, value)
+
     def _delete_metadata(self, object_plural, object_reference, key):
         r = self._request_url(
             'DELETE', '/' + object_plural + '/' + object_reference +
@@ -368,6 +378,9 @@ class Client(object):
 
     def delete_network_metadata_item(self, network_ref, key):
         return self._delete_metadata('networks', network_ref, key)
+
+    def delete_node_metadata_item(self, node, key):
+        return self._delete_metadata('nodes', node, key)
 
     # Other calls
     def get_instances(self, all=False):
@@ -593,11 +606,11 @@ class Client(object):
     def upload_artifact(self, name, upload_uuid, source_url=None, shared=False,
                         namespace=None, artifact_type='image'):
         if '/' in name:
-            raise RequestMalformedException('Names must not contain /')
+            raise InvalidException('Names must not contain /')
 
         if artifact_type != 'image':
             if not self.check_capability('artifact-upload-types'):
-                raise RequestMalformedException(
+                raise IncapableException(
                     'The API server version you are talking to does not support '
                     'specifying upload artifact types other than image.')
 
@@ -613,7 +626,7 @@ class Client(object):
     def blob_artifact(self, name, blob_uuid, source_url=None, shared=False,
                       namespace=None):
         if '/' in name:
-            raise RequestMalformedException('Names must not contain /')
+            raise InvalidException('Names must not contain /')
 
         r = self._request_url('POST', '/artifacts/upload/%s' % name,
                               data={
@@ -756,6 +769,10 @@ class Client(object):
         return r.json()
 
     def get_node(self, node):
+        if not self.check_capability('node-get'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'showing a single node, try "node list" instead.')
         r = self._request_url('GET', '/nodes/' + node)
         return r.json()
 
