@@ -382,6 +382,24 @@ class Client(object):
     def delete_node_metadata_item(self, node, key):
         return self._delete_metadata('nodes', node, key)
 
+    # Similarly the event calls are repetitive and handled as a group
+    def _get_events(self, object_plural, object_reference):
+        r = self._request_url('GET', '/' + object_plural + '/' +
+                              object_reference + '/events')
+        return r.json()
+
+    def get_artifact_events(self, artifact_ref):
+        return self._get_events('artifacts', artifact_ref)
+
+    def get_instance_events(self, instance_ref):
+        return self._get_events('instances', instance_ref)
+
+    def get_network_events(self, network_ref):
+        return self._get_events('networks', network_ref)
+
+    def get_node_events(self, node):
+        return self._get_events('nodes', node)
+
     # Other calls
     def get_instances(self, all=False):
         r = self._request_url('GET', '/instances', data={'all': all})
@@ -590,10 +608,6 @@ class Client(object):
 
             time.sleep(1)
 
-    def get_instance_events(self, instance_ref):
-        r = self._request_url('GET', '/instances/' + instance_ref + '/events')
-        return r.json()
-
     def cache_artifact(self, image_url, shared=False, namespace=None):
         r = self._request_url('POST', '/artifacts',
                               data={
@@ -648,10 +662,6 @@ class Client(object):
         for a in r.json():
             out.append(_correct_blob_indexes(a))
         return out
-
-    def get_artifact_events(self, artifact_ref):
-        r = self._request_url('GET', '/artifacts/' + artifact_ref + '/events')
-        return r.json()
 
     def get_artifact_versions(self, artifact_ref):
         r = self._request_url(
@@ -733,10 +743,6 @@ class Client(object):
                                     'namespace': namespace,
                                     'clean_wait': clean_wait,
                                     })
-        return r.json()
-
-    def get_network_events(self, network_ref):
-        r = self._request_url('GET', '/networks/' + network_ref + '/events')
         return r.json()
 
     def allocate_network(self, netblock, provide_dhcp, provide_nat, name, namespace=None):

@@ -1,4 +1,5 @@
 import click
+import datetime
 import json
 from prettytable import PrettyTable
 import sys
@@ -66,6 +67,7 @@ def node_show(ctx, node=None):
         for key in metadata:
             print('metadata,%s,%s' % (key, metadata[key]))
 
+
 def _roles_to_string(n):
     roles = []
     for role, symbol in [('is_etcd_master', 'D'), ('is_hypervisor', 'H'),
@@ -123,3 +125,29 @@ def network_delete(ctx, node=None):
     out = ctx.obj['CLIENT'].delete_node(node)
     if ctx.obj['OUTPUT'] == 'json':
         print(json.dumps(out, indent=4, sort_keys=True))
+
+
+@node.command(name='events', help='Display events for a node')
+@click.argument('node', type=click.STRING, shell_complete=_get_nodes)
+@click.pass_context
+def artifact_events(ctx, node=None):
+    events = ctx.obj['CLIENT'].get_node_events(node)
+    if ctx.obj['OUTPUT'] == 'pretty':
+        x = PrettyTable()
+        x.field_names = ['timestamp', 'node', 'duration', 'message', 'extra']
+        for e in events:
+            e['timestamp'] = datetime.datetime.fromtimestamp(e['timestamp'])
+            x.add_row([e['timestamp'], e['fqdn'], e['duration'], e['message'],
+                       e.get('extra', '')])
+        print(x)
+
+    elif ctx.obj['OUTPUT'] == 'simple':
+        print('timestamp,node,duration,message,extra')
+        for e in events:
+            e['timestamp'] = datetime.datetime.fromtimestamp(e['timestamp'])
+            print('%s,%s,%s,%s,%s'
+                  % (e['timestamp'], e['fqdn'], e['duration'], e['message'],
+                     e.get('extra', '')))
+
+    elif ctx.obj['OUTPUT'] == 'json':
+        print(json.dumps(events, indent=4, sort_keys=True))
