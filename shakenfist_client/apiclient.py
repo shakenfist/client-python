@@ -326,7 +326,7 @@ class Client(object):
         return self._get_metadata('networks', network_ref)
 
     def get_node_metadata(self, node):
-        return self._get_node('nodes', node)
+        return self._get_metadata('nodes', node)
 
     def _set_metadata(self, object_plural, object_reference, key, value):
         r = self._request_url(
