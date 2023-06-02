@@ -831,7 +831,7 @@ class Client(object):
     def put_instance_blob(self, instance_ref, blob_uuid, path, mode):
         r = self._request_url('POST', '/instances/' + instance_ref + '/agent/put',
                               data={'blob_uuid': blob_uuid, 'path': path, 'mode': mode})
-        return r.text
+        return r.json()
 
     def get_namespaces(self):
         r = self._request_url('GET', '/auth/namespaces')
