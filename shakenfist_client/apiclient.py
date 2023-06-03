@@ -829,6 +829,11 @@ class Client(object):
         return r.text
 
     def put_instance_blob(self, instance_ref, blob_uuid, path, mode):
+        if not self.check_capability('instance-put-blob'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'placing a blob on an instance.')
+
         r = self._request_url('POST', '/instances/' + instance_ref + '/agent/put',
                               data={'blob_uuid': blob_uuid, 'path': path, 'mode': mode})
         return r.json()
@@ -939,11 +944,21 @@ class Client(object):
         return r.json()
 
     def get_agent_operation(self, operation_uuid):
-        r = self._request_url('GET', '/agentoperation/' + operation_uuid)
+        if not self.check_capability('agentoperations-crud'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'agent operations.')
+
+        r = self._request_url('GET', '/agentoperations/' + operation_uuid)
         return r.json()
 
     def delete_agent_operation(self, operation_uuid):
-        self._request_url('DELETE', '/agentoperation/' + operation_uuid)
+        if not self.check_capability('agentoperations-crud'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'agent operations.')
+
+        self._request_url('DELETE', '/agentoperations/' + operation_uuid)
 
 
 def get_user_agent():
