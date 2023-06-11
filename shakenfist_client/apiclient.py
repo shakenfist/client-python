@@ -838,6 +838,16 @@ class Client(object):
                               data={'blob_uuid': blob_uuid, 'path': path, 'mode': mode})
         return r.json()
 
+    def instance_execute(self, instance_ref, command_line):
+        if not self.check_capability('instance-execute'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'executing a command within an instance.')
+
+        r = self._request_url('POST', '/instances/' + instance_ref + '/agent/execute',
+                              data={'command_line': command_line})
+        return r.json()
+
     def get_namespaces(self):
         r = self._request_url('GET', '/auth/namespaces')
         return r.json()
