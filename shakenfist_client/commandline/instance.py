@@ -7,6 +7,7 @@ from prettytable import PrettyTable
 import subprocess
 import sys
 import tempfile
+import time
 
 from shakenfist_client import apiclient, util
 
@@ -659,3 +660,85 @@ def instance_snapshot(ctx, instance_uuid=None, all=False, device=None, label_nam
         print(json.dumps(snapshot, indent=4, sort_keys=True))
     else:
         print('Created snapshot %s' % snapshot)
+
+
+@instance.command(name='upload', help='Upload a file to an instance')
+@click.argument('instance_uuid', type=click.STRING, shell_complete=_get_instances)
+@click.argument('source', type=click.Path(exists=True))
+@click.argument('destination', type=click.Path())
+@click.pass_context
+def instance_upload(ctx, instance_uuid=None, source=None, destination=None):
+    if not ctx.obj['CLIENT'].check_capability('instance-put-blob'):
+        sys.stderr.write(
+            'Unfortunately this server does not implement copying files into instances.\n')
+        sys.exit(1)
+
+    if not ctx.obj['CLIENT'].check_capability('blob-search-by-hash'):
+        blob = None
+    else:
+        # We can cheat here -- if we already have a blob in the cluster with the
+        # checksum of the file we're uploading, we can skip the upload entirely and
+        # just reuse that blob.
+        blob = util.checksum_with_progress(ctx.obj['CLIENT'], source)
+
+    if not blob:
+        artifact = util.upload_artifact_with_progress(
+            ctx.obj['CLIENT'], 'upload-to-%s' % instance_uuid, source, None)
+    else:
+        print('Recycling existing blob')
+        artifact = ctx.obj['CLIENT'].blob_artifact(
+            'upload-to-%s' % instance_uuid, blob['uuid'], source_url=None)
+    print('Created artifact %s' % artifact['uuid'])
+
+    st = os.stat(source)
+    op = ctx.obj['CLIENT'].put_instance_blob(
+            instance_uuid, artifact['blob_uuid'], destination, st.st_mode)
+
+    # Wait for the copy to complete
+    while True:
+        if op['state'] == 'complete':
+            break
+        time.sleep(5)
+        op = ctx.obj['CLIENT'].get_agent_operation(op['uuid'])
+
+    print('Done')
+
+
+@instance.command(name='execute', help='Execute a command on an instance')
+@click.argument('instance_uuid', type=click.STRING, shell_complete=_get_instances)
+@click.argument('commandline', type=click.STRING)
+@click.pass_context
+def instance_execute(ctx, instance_uuid=None, commandline=None):
+    if not ctx.obj['CLIENT'].check_capability('instance-execute'):
+        sys.stderr.write(
+            'Unfortunately this server does not implement executing commands on instances.\n')
+        sys.exit(1)
+
+    op = ctx.obj['CLIENT'].instance_execute(instance_uuid, commandline)
+
+    # Wait for the operation to be complete
+    while True:
+        if op['state'] == 'complete':
+            break
+        time.sleep(5)
+        op = ctx.obj['CLIENT'].get_agent_operation(op['uuid'])
+
+    # Wait for the operation to have results
+    while True:
+        if op['results'] != {}:
+            break
+        time.sleep(5)
+        op = ctx.obj['CLIENT'].get_agent_operation(op['uuid'])
+
+    if ctx.obj['OUTPUT'] == 'json':
+        print(json.dumps(op, indent=4, sort_keys=True))
+        return
+
+    if ctx.obj['OUTPUT'] == 'simple':
+        format_string = '%s:%s'
+    else:
+        format_string = '%-14s: %s'
+
+    print(format_string % ('exit code', op['return-code']))
+    print(format_string % ('stdout', op['stdout']))
+    print(format_string % ('stderr', op['stderr']))

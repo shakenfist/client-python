@@ -1,17 +1,13 @@
 import click
 import datetime
-import hashlib
 import http
 import json
-import os
 from prettytable import PrettyTable
 from tqdm import tqdm
 import requests
 import sys
-import time
 import urllib3
 
-from shakenfist_client import apiclient
 from shakenfist_client import util
 
 
@@ -63,91 +59,18 @@ def artifact_upload(ctx, name=None, source=None, source_url=None, not_shared=Tru
         # We can cheat here -- if we already have a blob in the cluster with the
         # checksum of the file we're uploading, we can skip the upload entirely and
         # just reuse that blob.
-        st = os.stat(source)
-
-        sha512_hash = hashlib.sha512()
-        with open(source, 'rb') as f:
-            with tqdm(total=st.st_size, unit='B', unit_scale=True,
-                      desc='Calculate checksum') as pbar:
-                d = f.read(4096)
-                while d:
-                    sha512_hash.update(d)
-                    pbar.update(len(d))
-                    d = f.read(4096)
-                    while d:
-                        sha512_hash.update(d)
-                        pbar.update(len(d))
-                        d = f.read(4096)
-
-        print('Searching for a pre-existing blob with this hash...')
-        blob = ctx.obj['CLIENT'].get_blob_by_sha512(sha512_hash.hexdigest())
+        blob = util.checksum_with_progress(ctx.obj['CLIENT'], source)
 
     if not blob:
-        print('None found, uploading')
-        buffer_size = 4096
-
-        # We do not use send_upload_file because we want to hook in our own
-        # progress bar.
-        upload = ctx.obj['CLIENT'].create_upload()
-        total = 0
-        retries = 0
-        with tqdm(total=st.st_size, unit='B', unit_scale=True,
-                  desc='Uploading %s to %s' % (upload['uuid'], upload['node'])) as pbar:
-            with open(source, 'rb') as f:
-                d = f.read(buffer_size)
-                while d:
-                    start_time = time.time()
-                    try:
-                        remote_total = ctx.obj['CLIENT'].send_upload(
-                            upload['uuid'], d)
-                        retries = 0
-                    except apiclient.APIException as e:
-                        retries += 1
-
-                        if retries > 5:
-                            print('Repeated failures, aborting')
-                            raise e
-
-                        print('Upload error, retrying...')
-                        ctx.obj['CLIENT'].truncate_upload(
-                            upload['uuid'], total)
-                        f.seek(total)
-                        buffer_size = 4096
-                        d = f.read(buffer_size)
-                        continue
-
-                    # We aim for each chunk to take three seconds to transfer. This is
-                    # partially because of the API timeout on the other end, but also
-                    # so that uploads don't appear to stall over very slow networks.
-                    # However, the buffer size must also always be between 4kb and 4mb.
-                    elapsed = time.time() - start_time
-                    buffer_size = int(buffer_size * 3.0 / elapsed)
-                    buffer_size = max(4 * 1024, buffer_size)
-                    buffer_size = min(2 * 1024 * 1024, buffer_size)
-
-                    sent = len(d)
-                    total += sent
-                    pbar.update(sent)
-
-                    if total != remote_total:
-                        print('Remote side has %d, we have sent %d!'
-                              % (remote_total, total))
-                        sys.exit(1)
-
-                    d = f.read(buffer_size)
-
-        print('Creating artifact')
-        s = not not_shared
-        artifact = ctx.obj['CLIENT'].upload_artifact(
-            name, upload['uuid'], source_url=source_url, shared=s, namespace=namespace)
-        print('Created artifact %s' % artifact['uuid'])
-
+        artifact = util.upload_artifact_with_progress(
+            ctx.obj['CLIENT'], name, source, source_url,
+            namespace=namespace, shared=(not not_shared))
     else:
         print('Recycling existing blob')
         s = not not_shared
         artifact = ctx.obj['CLIENT'].blob_artifact(
             name, blob['uuid'], source_url=source_url, shared=s, namespace=namespace)
-        print('Created artifact %s' % artifact['uuid'])
+    print('Created artifact %s' % artifact['uuid'])
 
 
 @artifact.command(name='download', help='Download an artifact.')
