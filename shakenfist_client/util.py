@@ -20,10 +20,10 @@ def show_interface(ctx, interface, out=[]):
         print('Interface not found')
         sys.exit(1)
 
-    if not apiclient.check_capability('interface-metadata'):
+    if not ctx.obj['CLIENT'].check_capability('interface-metadata'):
         metadata = {}
     else:
-        metadata = apiclient.get_interface_metadata(interface['uuid'])
+        metadata = ctx.obj['CLIENT'].get_interface_metadata(interface['uuid'])
 
     if ctx.obj['OUTPUT'] == 'json':
         if 'network_interfaces' not in out:

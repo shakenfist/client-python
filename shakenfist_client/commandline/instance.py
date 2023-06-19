@@ -246,12 +246,12 @@ def _show_instance(ctx, i, include_snapshots=False):
 
 
 @instance.command(name='show', help='Show an instance')
-@click.argument('instance_uuid', type=click.STRING, shell_complete=_get_instances)
+@click.argument('instance_ref', type=click.STRING, shell_complete=_get_instances)
 @click.argument('snapshots', type=click.BOOL, default=False)
 @click.pass_context
-def instance_show(ctx, instance_uuid=None, snapshots=False):
+def instance_show(ctx, instance_ref=None, snapshots=False):
     _show_instance(ctx, ctx.obj['CLIENT'].get_instance(
-        instance_uuid), snapshots)
+        instance_ref), snapshots)
 
 
 def _parse_spec(spec):
@@ -463,11 +463,11 @@ def instance_create(ctx, name=None, cpus=None, memory=None, network=None, floate
 
 
 @instance.command(name='delete', help='Delete an instance')
-@click.argument('instance_uuid', type=click.STRING, shell_complete=_get_instances)
+@click.argument('instance_ref', type=click.STRING, shell_complete=_get_instances)
 @click.option('--namespace', type=click.STRING)
 @click.pass_context
-def instance_delete(ctx, instance_uuid=None, namespace=None):
-    out = ctx.obj['CLIENT'].delete_instance(instance_uuid, namespace=namespace)
+def instance_delete(ctx, instance_ref=None, namespace=None):
+    out = ctx.obj['CLIENT'].delete_instance(instance_ref, namespace=namespace)
     if ctx.obj['OUTPUT'] == 'json':
         print(json.dumps(out, indent=4, sort_keys=True))
 
@@ -485,10 +485,10 @@ def instance_delete_all(ctx, confirm=False, namespace=None):
 
 
 @instance.command(name='events', help='Display events for an instance')
-@click.argument('instance_uuid', type=click.STRING, shell_complete=_get_instances)
+@click.argument('instance_ref', type=click.STRING, shell_complete=_get_instances)
 @click.pass_context
-def instance_events(ctx, instance_uuid=None):
-    events = ctx.obj['CLIENT'].get_instance_events(instance_uuid)
+def instance_events(ctx, instance_ref=None):
+    events = ctx.obj['CLIENT'].get_instance_events(instance_ref)
     if ctx.obj['OUTPUT'] == 'pretty':
         x = PrettyTable()
         x.field_names = ['timestamp', 'node', 'duration', 'message', 'extra']
@@ -511,95 +511,95 @@ def instance_events(ctx, instance_uuid=None):
 
 
 @instance.command(name='set-metadata', help='Set a metadata item')
-@click.argument('instance_uuid', type=click.STRING, shell_complete=_get_instances)
+@click.argument('instance_ref', type=click.STRING, shell_complete=_get_instances)
 @click.argument('key', type=click.STRING)
 @click.argument('value', type=click.STRING)
 @click.pass_context
-def instance_set_metadata(ctx, instance_uuid=None, key=None, value=None):
+def instance_set_metadata(ctx, instance_ref=None, key=None, value=None):
     try:
         value = _convert_metadata(key, value)
     except json.decoder.JSONDecodeError:
         return
-    ctx.obj['CLIENT'].set_instance_metadata_item(instance_uuid, key, value)
+    ctx.obj['CLIENT'].set_instance_metadata_item(instance_ref, key, value)
     if ctx.obj['OUTPUT'] == 'json':
         print('{}')
 
 
 @instance.command(name='delete-metadata', help='Delete a metadata item')
-@click.argument('instance_uuid', type=click.STRING, shell_complete=_get_instances)
+@click.argument('instance_ref', type=click.STRING, shell_complete=_get_instances)
 @click.argument('key', type=click.STRING)
 @click.pass_context
-def instance_delete_metadata(ctx, instance_uuid=None, key=None):
-    ctx.obj['CLIENT'].delete_instance_metadata_item(instance_uuid, key)
+def instance_delete_metadata(ctx, instance_ref=None, key=None):
+    ctx.obj['CLIENT'].delete_instance_metadata_item(instance_ref, key)
     if ctx.obj['OUTPUT'] == 'json':
         print('{}')
 
 
 @instance.command(name='reboot', help='Reboot instance')
-@click.argument('instance_uuid', type=click.STRING, shell_complete=_get_instances)
+@click.argument('instance_ref', type=click.STRING, shell_complete=_get_instances)
 @click.option('--hard/--soft', default=False)
 @click.pass_context
-def instance_reboot(ctx, instance_uuid=None, hard=False):
-    ctx.obj['CLIENT'].reboot_instance(instance_uuid, hard=hard)
+def instance_reboot(ctx, instance_ref=None, hard=False):
+    ctx.obj['CLIENT'].reboot_instance(instance_ref, hard=hard)
     if ctx.obj['OUTPUT'] == 'json':
         print('{}')
 
 
 @instance.command(name='poweron', help='Power on an instance')
-@click.argument('instance_uuid', type=click.STRING, shell_complete=_get_instances)
+@click.argument('instance_ref', type=click.STRING, shell_complete=_get_instances)
 @click.pass_context
-def instance_power_on(ctx, instance_uuid=None):
-    ctx.obj['CLIENT'].power_on_instance(instance_uuid)
+def instance_power_on(ctx, instance_ref=None):
+    ctx.obj['CLIENT'].power_on_instance(instance_ref)
     if ctx.obj['OUTPUT'] == 'json':
         print('{}')
 
 
 @instance.command(name='poweroff', help='Power off an instance')
-@click.argument('instance_uuid', type=click.STRING, shell_complete=_get_instances)
+@click.argument('instance_ref', type=click.STRING, shell_complete=_get_instances)
 @click.pass_context
-def instance_power_off(ctx, instance_uuid=None):
-    ctx.obj['CLIENT'].power_off_instance(instance_uuid)
+def instance_power_off(ctx, instance_ref=None):
+    ctx.obj['CLIENT'].power_off_instance(instance_ref)
     if ctx.obj['OUTPUT'] == 'json':
         print('{}')
 
 
 @instance.command(name='pause', help='Pause an instance')
-@click.argument('instance_uuid', type=click.STRING, shell_complete=_get_instances)
+@click.argument('instance_ref', type=click.STRING, shell_complete=_get_instances)
 @click.pass_context
-def instance_pause(ctx, instance_uuid=None):
-    ctx.obj['CLIENT'].pause_instance(instance_uuid)
+def instance_pause(ctx, instance_ref=None):
+    ctx.obj['CLIENT'].pause_instance(instance_ref)
     if ctx.obj['OUTPUT'] == 'json':
         print('{}')
 
 
 @instance.command(name='unpause', help='Unpause an instance')
-@click.argument('instance_uuid', type=click.STRING, shell_complete=_get_instances)
+@click.argument('instance_ref', type=click.STRING, shell_complete=_get_instances)
 @click.pass_context
-def instance_unpause(ctx, instance_uuid=None):
-    ctx.obj['CLIENT'].unpause_instance(instance_uuid)
+def instance_unpause(ctx, instance_ref=None):
+    ctx.obj['CLIENT'].unpause_instance(instance_ref)
     if ctx.obj['OUTPUT'] == 'json':
         print('{}')
 
 
 @instance.command(name='consoledata', help='Get console data for an instance')
-@click.argument('instance_uuid', type=click.STRING, shell_complete=_get_instances)
+@click.argument('instance_ref', type=click.STRING, shell_complete=_get_instances)
 @click.argument('length', type=click.INT, default=10240)
 @click.pass_context
-def instance_consoledata(ctx, instance_uuid=None, length=None):
-    print(ctx.obj['CLIENT'].get_console_data(instance_uuid, length=length))
+def instance_consoledata(ctx, instance_ref=None, length=None):
+    print(ctx.obj['CLIENT'].get_console_data(instance_ref, length=length))
 
 
 @instance.command(name='consoledelete', help='Clear the console log for this instance')
-@click.argument('instance_uuid', type=click.STRING, shell_complete=_get_instances)
+@click.argument('instance_ref', type=click.STRING, shell_complete=_get_instances)
 @click.pass_context
-def instance_consoledelete(ctx, instance_uuid=None):
-    ctx.obj['CLIENT'].delete_console_data(instance_uuid)
+def instance_consoledelete(ctx, instance_ref=None):
+    ctx.obj['CLIENT'].delete_console_data(instance_ref)
 
 
 @instance.command(name='vdiconsole', help='Launch a VDI console for the instance')
-@click.argument('instance_uuid', type=click.STRING, shell_complete=_get_instances)
+@click.argument('instance_ref', type=click.STRING, shell_complete=_get_instances)
 @click.pass_context
-def instance_vdiconsole(ctx, instance_uuid=None):
+def instance_vdiconsole(ctx, instance_ref=None):
     if not ctx.obj['CLIENT'].check_capability('vdi-console-helper'):
         sys.stderr.write(
             'Unfortunately this server does not implement VDI console helpers.\n')
@@ -615,7 +615,7 @@ def instance_vdiconsole(ctx, instance_uuid=None):
     os.close(temp_handle)
     try:
         with open(temp_name, 'w') as f:
-            f.write(ctx.obj['CLIENT'].get_vdi_console_helper(instance_uuid))
+            f.write(ctx.obj['CLIENT'].get_vdi_console_helper(instance_ref))
 
         p = subprocess.run('remote-viewer %s %s' % (debug, temp_name), shell=True)
         if ctx.obj['VERBOSE']:
@@ -627,19 +627,19 @@ def instance_vdiconsole(ctx, instance_uuid=None):
 
 
 @instance.command(name='vdiconsolefile', help='Download a .vv file for the VDI console')
-@click.argument('instance_uuid', type=click.STRING, shell_complete=_get_instances)
+@click.argument('instance_ref', type=click.STRING, shell_complete=_get_instances)
 @click.pass_context
-def instance_vdiconsolefile(ctx, instance_uuid=None):
+def instance_vdiconsolefile(ctx, instance_ref=None):
     if not ctx.obj['CLIENT'].check_capability('vdi-console-helper'):
         sys.stderr.write(
             'Unfortunately this server does not implement VDI console helpers.\n')
         sys.exit(1)
 
-    print(ctx.obj['CLIENT'].get_vdi_console_helper(instance_uuid))
+    print(ctx.obj['CLIENT'].get_vdi_console_helper(instance_ref))
 
 
 @instance.command(name='snapshot', help='Snapshot instance')
-@click.argument('instance_uuid', type=click.STRING, shell_complete=_get_instances)
+@click.argument('instance_ref', type=click.STRING, shell_complete=_get_instances)
 @click.option('-a', '--all', is_flag=True,
               help='Snapshot all disks, not just disk 0.')
 @click.option('-d', '--device', default=None,
@@ -650,10 +650,10 @@ def instance_vdiconsolefile(ctx, instance_uuid=None):
               is_flag=True, default=False)
 @click.option('--thin/--flatten', is_flag=True, default=False)
 @click.pass_context
-def instance_snapshot(ctx, instance_uuid=None, all=False, device=None, label_name=None,
+def instance_snapshot(ctx, instance_ref=None, all=False, device=None, label_name=None,
                       delete_snapshot_after_label=None, thin=None):
     snapshot = ctx.obj['CLIENT'].snapshot_instance(
-        instance_uuid, all, device=device, label_name=label_name,
+        instance_ref, all, device=device, label_name=label_name,
         delete_snapshot_after_label=delete_snapshot_after_label,
         thin=thin)
     if ctx.obj['OUTPUT'] == 'json':
@@ -663,11 +663,11 @@ def instance_snapshot(ctx, instance_uuid=None, all=False, device=None, label_nam
 
 
 @instance.command(name='upload', help='Upload a file to an instance')
-@click.argument('instance_uuid', type=click.STRING, shell_complete=_get_instances)
+@click.argument('instance_ref', type=click.STRING, shell_complete=_get_instances)
 @click.argument('source', type=click.Path(exists=True))
 @click.argument('destination', type=click.Path())
 @click.pass_context
-def instance_upload(ctx, instance_uuid=None, source=None, destination=None):
+def instance_upload(ctx, instance_ref=None, source=None, destination=None):
     if not ctx.obj['CLIENT'].check_capability('instance-put-blob'):
         sys.stderr.write(
             'Unfortunately this server does not implement copying files into instances.\n')
@@ -683,16 +683,16 @@ def instance_upload(ctx, instance_uuid=None, source=None, destination=None):
 
     if not blob:
         artifact = util.upload_artifact_with_progress(
-            ctx.obj['CLIENT'], 'upload-to-%s' % instance_uuid, source, None)
+            ctx.obj['CLIENT'], 'upload-to-%s' % instance_ref, source, None)
     else:
         print('Recycling existing blob')
         artifact = ctx.obj['CLIENT'].blob_artifact(
-            'upload-to-%s' % instance_uuid, blob['uuid'], source_url=None)
+            'upload-to-%s' % instance_ref, blob['uuid'], source_url=None)
     print('Created artifact %s' % artifact['uuid'])
 
     st = os.stat(source)
     op = ctx.obj['CLIENT'].put_instance_blob(
-            instance_uuid, artifact['blob_uuid'], destination, st.st_mode)
+            instance_ref, artifact['blob_uuid'], destination, st.st_mode)
 
     # Wait for the copy to complete
     while True:
@@ -705,16 +705,16 @@ def instance_upload(ctx, instance_uuid=None, source=None, destination=None):
 
 
 @instance.command(name='execute', help='Execute a command on an instance')
-@click.argument('instance_uuid', type=click.STRING, shell_complete=_get_instances)
+@click.argument('instance_ref', type=click.STRING, shell_complete=_get_instances)
 @click.argument('commandline', type=click.STRING)
 @click.pass_context
-def instance_execute(ctx, instance_uuid=None, commandline=None):
+def instance_execute(ctx, instance_ref=None, commandline=None):
     if not ctx.obj['CLIENT'].check_capability('instance-execute'):
         sys.stderr.write(
             'Unfortunately this server does not implement executing commands on instances.\n')
         sys.exit(1)
 
-    op = ctx.obj['CLIENT'].instance_execute(instance_uuid, commandline)
+    op = ctx.obj['CLIENT'].instance_execute(instance_ref, commandline)
 
     # Wait for the operation to be complete
     while True:
