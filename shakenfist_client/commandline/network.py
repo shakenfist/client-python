@@ -79,10 +79,10 @@ def _show_network(ctx, n):
 
 
 @network.command(name='show', help='Show a network')
-@click.argument('network_uuid', type=click.STRING, shell_complete=util.get_networks)
+@click.argument('network_ref', type=click.STRING, shell_complete=util.get_networks)
 @click.pass_context
-def network_show(ctx, network_uuid=None):
-    _show_network(ctx, ctx.obj['CLIENT'].get_network(network_uuid))
+def network_show(ctx, network_ref=None):
+    _show_network(ctx, ctx.obj['CLIENT'].get_network(network_ref))
 
 
 @network.command(name='create',
@@ -120,10 +120,10 @@ def network_delete_all(ctx, confirm=False, namespace=None):
 
 
 @network.command(name='events', help='Display events for a network')
-@click.argument('network_uuid', type=click.STRING, shell_complete=util.get_networks)
+@click.argument('network_ref', type=click.STRING, shell_complete=util.get_networks)
 @click.pass_context
-def network_events(ctx, network_uuid=None):
-    events = ctx.obj['CLIENT'].get_network_events(network_uuid)
+def network_events(ctx, network_ref=None):
+    events = ctx.obj['CLIENT'].get_network_events(network_ref)
     if ctx.obj['OUTPUT'] == 'pretty':
         x = PrettyTable()
         x.field_names = ['timestamp', 'node', 'duration', 'message', 'extra']
@@ -146,21 +146,21 @@ def network_events(ctx, network_uuid=None):
 
 
 @network.command(name='delete', help='Delete a network')
-@click.argument('network_uuid', type=click.STRING, shell_complete=util.get_networks)
+@click.argument('network_ref', type=click.STRING, shell_complete=util.get_networks)
 @click.option('--namespace', type=click.STRING)
 @click.pass_context
-def network_delete(ctx, network_uuid=None, namespace=None):
-    out = ctx.obj['CLIENT'].delete_network(network_uuid, namespace=None)
+def network_delete(ctx, network_ref=None, namespace=None):
+    out = ctx.obj['CLIENT'].delete_network(network_ref, namespace=None)
     if ctx.obj['OUTPUT'] == 'json':
         print(json.dumps(out, indent=4, sort_keys=True))
 
 
 @network.command(name='instances', help='List instances on a network')
-@click.argument('network_uuid',
+@click.argument('network_ref',
                 type=click.STRING, shell_complete=util.get_networks)
 @click.pass_context
-def network_list_instances(ctx, network_uuid=None):
-    interfaces = ctx.obj['CLIENT'].get_network_interfaces(network_uuid)
+def network_list_instances(ctx, network_ref=None):
+    interfaces = ctx.obj['CLIENT'].get_network_interfaces(network_ref)
 
     if ctx.obj['OUTPUT'] == 'pretty':
         x = PrettyTable()
@@ -180,32 +180,32 @@ def network_list_instances(ctx, network_uuid=None):
 
 
 @network.command(name='set-metadata', help='Set a metadata item')
-@click.argument('network_uuid', type=click.STRING, shell_complete=util.get_networks)
+@click.argument('network_ref', type=click.STRING, shell_complete=util.get_networks)
 @click.argument('key', type=click.STRING)
 @click.argument('value', type=click.STRING)
 @click.pass_context
-def network_set_metadata(ctx, network_uuid=None, key=None, value=None):
-    ctx.obj['CLIENT'].set_network_metadata_item(network_uuid, key, value)
+def network_set_metadata(ctx, network_ref=None, key=None, value=None):
+    ctx.obj['CLIENT'].set_network_metadata_item(network_ref, key, value)
     if ctx.obj['OUTPUT'] == 'json':
         print('{}')
 
 
 @network.command(name='delete-metadata', help='Delete a metadata item')
-@click.argument('network_uuid', type=click.STRING, shell_complete=util.get_networks)
+@click.argument('network_ref', type=click.STRING, shell_complete=util.get_networks)
 @click.argument('key', type=click.STRING)
 @click.pass_context
-def network_delete_metadata(ctx, network_uuid=None, key=None, value=None):
-    ctx.obj['CLIENT'].delete_network_metadata_item(network_uuid, key)
+def network_delete_metadata(ctx, network_ref=None, key=None, value=None):
+    ctx.obj['CLIENT'].delete_network_metadata_item(network_ref, key)
     if ctx.obj['OUTPUT'] == 'json':
         print('{}')
 
 
 @network.command(name='ping', help='Ping on this network')
-@click.argument('network_uuid', type=click.STRING, shell_complete=util.get_networks)
+@click.argument('network_ref', type=click.STRING, shell_complete=util.get_networks)
 @click.argument('address', type=click.STRING)
 @click.pass_context
-def network_ping(ctx, network_uuid=None, address=None):
-    output = ctx.obj['CLIENT'].ping(network_uuid, address)
+def network_ping(ctx, network_ref=None, address=None):
+    output = ctx.obj['CLIENT'].ping(network_ref, address)
     if ctx.obj['OUTPUT'] in ['pretty', 'simple']:
         for line in output.get('stdout', '').split('\n'):
             print('stdout: %s' % line)
