@@ -915,6 +915,7 @@ class Client(object):
     def send_upload_file(self, upload_uuid, flo):
         buffer_size = 4096
         total = 0
+        retries = 0
 
         d = flo.read(buffer_size)
         while d:
