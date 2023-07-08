@@ -121,9 +121,11 @@ def network_delete_all(ctx, confirm=False, namespace=None):
 
 @network.command(name='events', help='Display events for a network')
 @click.argument('network_ref', type=click.STRING, shell_complete=util.get_networks)
+@click.option('-t', '--type', help='The event type to return')
+@click.option('-l', '--limit', help='The maximum number of events to return')
 @click.pass_context
-def network_events(ctx, network_ref=None):
-    events = ctx.obj['CLIENT'].get_network_events(network_ref)
+def network_events(ctx, network_ref=None, type=None, limit=None):
+    events = ctx.obj['CLIENT'].get_network_events(network_ref, event_type=type, limit=limit)
     if ctx.obj['OUTPUT'] == 'pretty':
         x = PrettyTable()
         x.field_names = ['timestamp', 'node', 'duration', 'message', 'extra']

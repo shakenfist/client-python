@@ -486,9 +486,11 @@ def instance_delete_all(ctx, confirm=False, namespace=None):
 
 @instance.command(name='events', help='Display events for an instance')
 @click.argument('instance_ref', type=click.STRING, shell_complete=_get_instances)
+@click.option('-t', '--type', help='The event type to return')
+@click.option('-l', '--limit', help='The maximum number of events to return')
 @click.pass_context
-def instance_events(ctx, instance_ref=None):
-    events = ctx.obj['CLIENT'].get_instance_events(instance_ref)
+def instance_events(ctx, instance_ref=None, type=None, limit=None):
+    events = ctx.obj['CLIENT'].get_instance_events(instance_ref, event_type=type, limit=limit)
     if ctx.obj['OUTPUT'] == 'pretty':
         x = PrettyTable()
         x.field_names = ['timestamp', 'node', 'duration', 'message', 'extra']

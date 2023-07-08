@@ -287,9 +287,11 @@ def artifact_unshare(ctx, artifact_ref=None):
 
 @artifact.command(name='events', help='Display events for an artifact')
 @click.argument('artifact_ref', type=click.STRING, shell_complete=_get_artifacts)
+@click.option('-t', '--type', help='The event type to return')
+@click.option('-l', '--limit', help='The maximum number of events to return')
 @click.pass_context
-def artifact_events(ctx, artifact_ref=None):
-    events = ctx.obj['CLIENT'].get_artifact_events(artifact_ref)
+def artifact_events(ctx, artifact_ref=None, type=None, limit=None):
+    events = ctx.obj['CLIENT'].get_artifact_events(artifact_ref, event_type=type, limit=limit)
     if ctx.obj['OUTPUT'] == 'pretty':
         x = PrettyTable()
         x.field_names = ['timestamp', 'node', 'duration', 'message', 'extra']
