@@ -383,22 +383,35 @@ class Client(object):
         return self._delete_metadata('nodes', node, key)
 
     # Similarly the event calls are repetitive and handled as a group
-    def _get_events(self, object_plural, object_reference):
-        r = self._request_url('GET', '/' + object_plural + '/' +
-                              object_reference + '/events')
+    def _get_events(self, object_plural, object_reference, event_type, limit):
+        if event_type or limit:
+            if not self.check_capability('events-by-type'):
+                raise IncapableException(
+                    'The API server version you are talking to does not support '
+                    'filtering by event type or count.')
+
+        body = {}
+        if event_type:
+            body['event_type'] = event_type
+        if limit:
+            body['limit'] = limit
+
+        r = self._request_url(
+            'GET', '/' + object_plural + '/' + object_reference + '/events',
+            body)
         return r.json()
 
-    def get_artifact_events(self, artifact_ref):
-        return self._get_events('artifacts', artifact_ref)
+    def get_artifact_events(self, artifact_ref, event_type=None, limit=None):
+        return self._get_events('artifacts', artifact_ref, event_type, limit)
 
-    def get_instance_events(self, instance_ref):
-        return self._get_events('instances', instance_ref)
+    def get_instance_events(self, instance_ref, event_type=None, limit=None):
+        return self._get_events('instances', instance_ref, event_type, limit)
 
-    def get_network_events(self, network_ref):
-        return self._get_events('networks', network_ref)
+    def get_network_events(self, network_ref, event_type=None, limit=None):
+        return self._get_events('networks', network_ref, event_type, limit)
 
-    def get_node_events(self, node):
-        return self._get_events('nodes', node)
+    def get_node_events(self, node, event_type=None, limit=None):
+        return self._get_events('nodes', node, event_type, limit)
 
     # Other calls
     def get_instances(self, all=False):

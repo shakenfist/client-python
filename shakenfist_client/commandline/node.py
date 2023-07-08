@@ -129,9 +129,11 @@ def network_delete(ctx, node=None):
 
 @node.command(name='events', help='Display events for a node')
 @click.argument('node', type=click.STRING, shell_complete=_get_nodes)
+@click.option('-t', '--type', help='The event type to return')
+@click.option('-l', '--limit', help='The maximum number of events to return')
 @click.pass_context
-def artifact_events(ctx, node=None):
-    events = ctx.obj['CLIENT'].get_node_events(node)
+def artifact_events(ctx, node=None, type=None, limit=None):
+    events = ctx.obj['CLIENT'].get_node_events(node, event_type=type, limit=limit)
     if ctx.obj['OUTPUT'] == 'pretty':
         x = PrettyTable()
         x.field_names = ['timestamp', 'node', 'duration', 'message', 'extra']
