@@ -132,7 +132,7 @@ def network_delete(ctx, node=None):
 @click.option('-t', '--type', help='The event type to return')
 @click.option('-l', '--limit', help='The maximum number of events to return')
 @click.pass_context
-def artifact_events(ctx, node=None, type=None, limit=None):
+def node_events(ctx, node=None, type=None, limit=None):
     events = ctx.obj['CLIENT'].get_node_events(node, event_type=type, limit=limit)
     if ctx.obj['OUTPUT'] == 'pretty':
         x = PrettyTable()
@@ -153,3 +153,27 @@ def artifact_events(ctx, node=None, type=None, limit=None):
 
     elif ctx.obj['OUTPUT'] == 'json':
         print(json.dumps(events, indent=4, sort_keys=True))
+
+
+@node.command(name='resources', help='Display resources for a node')
+@click.argument('node', type=click.STRING, shell_complete=_get_nodes)
+@click.pass_context
+def node_resources(ctx, node=None, type=None, limit=None):
+    event = ctx.obj['CLIENT'].get_node_events(node, event_type='resources', limit=1)[0]
+    if not event:
+        print('No resources event found')
+
+    if ctx.obj['OUTPUT'] == 'pretty':
+        x = PrettyTable()
+        x.field_names = ['node', 'resource', 'value']
+        for resource in event.get('extra'):
+            x.add_row([node, resource, event['extra']['resource']])
+        print(x)
+
+    elif ctx.obj['OUTPUT'] == 'simple':
+        print('node,resource,value')
+        for resource in event.get('extra'):
+            print('%s,%s,%s' % (node, resource, event['extra']['resource']))
+
+    elif ctx.obj['OUTPUT'] == 'json':
+        print(json.dumps(event.get('extra'), indent=4, sort_keys=True))
