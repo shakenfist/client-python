@@ -158,7 +158,7 @@ def node_events(ctx, node=None, type=None, limit=None):
 @node.command(name='resources', help='Display resources for a node')
 @click.argument('node', type=click.STRING, shell_complete=_get_nodes)
 @click.pass_context
-def node_resources(ctx, node=None, type=None, limit=None):
+def node_resources(ctx, node=None):
     event = ctx.obj['CLIENT'].get_node_events(node, event_type='resources', limit=1)[0]
     if not event:
         print('No resources event found')
@@ -177,3 +177,24 @@ def node_resources(ctx, node=None, type=None, limit=None):
 
     elif ctx.obj['OUTPUT'] == 'json':
         print(json.dumps(event.get('extra'), indent=4, sort_keys=True))
+
+
+# This command is primarily intended for a CI check to ensure we're not spinning
+# too hard in a processing loop, but it may be useful elsewhere.
+@node.command(name='cpuhogs', help='List processes consuming "too much" CPU')
+@click.pass_context
+def node_cpuhogs(ctx):
+    hogs = []
+
+    for node in ctx.obj['CLIENT'].get_nodes():
+        event = ctx.obj['CLIENT'].get_node_events(node, event_type='resources', limit=1)[0]
+        for resource in event.get('extra', {}):
+            value = event['extra'][resource]
+            if resource.startswith('process_cpu_fraction_') and value > 0.5:
+                hogs.append('%s on node %s has consumed %.02f of a CPU'
+                            % (resource[len('process_cpu_fraction_'):],
+                               node, value))
+
+    if hogs:
+        print('\n'.join(hogs))
+        sys.exit(1)
