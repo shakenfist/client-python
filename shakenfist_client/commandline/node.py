@@ -187,7 +187,7 @@ def node_cpuhogs(ctx):
     hogs = []
 
     for node in ctx.obj['CLIENT'].get_nodes():
-        event = ctx.obj['CLIENT'].get_node_events(node, event_type='resources', limit=1)[0]
+        event = ctx.obj['CLIENT'].get_node_events(node['name'], event_type='resources', limit=1)[0]
         for resource in event.get('extra', {}):
             value = event['extra'][resource]
             if resource.startswith('process_cpu_fraction_') and value > 0.5:
