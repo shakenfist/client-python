@@ -182,18 +182,20 @@ def node_resources(ctx, node=None):
 # This command is primarily intended for a CI check to ensure we're not spinning
 # too hard in a processing loop, but it may be useful elsewhere.
 @node.command(name='cpuhogs', help='List processes consuming "too much" CPU')
+@click.option('-t', '--threshold', default=0.25,
+              help='The CPU fraction above which to complain.')
 @click.pass_context
-def node_cpuhogs(ctx):
+def node_cpuhogs(ctx, threshold=0.25):
     hogs = []
 
     for node in ctx.obj['CLIENT'].get_nodes():
         event = ctx.obj['CLIENT'].get_node_events(node['name'], event_type='resources', limit=1)[0]
         for resource in event.get('extra', {}):
             value = event['extra'][resource]
-            if resource.startswith('process_cpu_fraction_') and value > 0.5:
-                hogs.append('%s on node %s has consumed %.02f of a CPU'
+            if resource.startswith('process_cpu_fraction_') and value > threshold:
+                hogs.append('%s on node %s has consumed %.02f of a CPU, threshold is %.02f'
                             % (resource[len('process_cpu_fraction_'):],
-                               node, value))
+                               node, value, threshold))
 
     if hogs:
         print('\n'.join(hogs))
