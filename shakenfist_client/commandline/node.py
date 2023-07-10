@@ -195,7 +195,7 @@ def node_cpuhogs(ctx, threshold=0.25):
             if resource.startswith('process_cpu_fraction_') and value > threshold:
                 hogs.append('%s on node %s has consumed %.02f of a CPU, threshold is %.02f'
                             % (resource[len('process_cpu_fraction_'):],
-                               node, value, threshold))
+                               node['name'], value, threshold))
 
     if hogs:
         print('\n'.join(hogs))
