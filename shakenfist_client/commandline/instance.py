@@ -131,7 +131,7 @@ def _show_instance(ctx, i, include_snapshots=False):
     if ctx.obj['OUTPUT'] == 'json':
         out = util.filter_dict(i, ['uuid', 'name', 'namespace', 'cpus', 'memory',
                                    'disk_spec', 'video', 'node', 'console_port',
-                                   'vdi_port', 'ssh_key', 'user_data',
+                                   'vdi_port', 'vdi_tls_port', 'ssh_key', 'user_data',
                                    'power_state', 'state', 'uefi', 'secure_boot',
                                    'nvram_template', 'side_channels'])
         out['network_interfaces'] = []
