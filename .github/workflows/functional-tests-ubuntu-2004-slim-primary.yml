@@ -218,5 +218,6 @@ jobs:
         if: ${{ ! cancelled() }}
         with:
           name: bundle.zip
-          retention-days: 14
+          retention-days: 90
+          if-no-files-found: error
           path: ${{ github.workspace }}/artifacts/bundle.zip
