@@ -984,6 +984,14 @@ class Client(object):
 
         self._request_url('DELETE', '/agentoperations/' + operation_uuid)
 
+    def get_cluster_cacert(self):
+        if not self.check_capability('cluster-cacert'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'fetching a CA certificate for the cluster.')
+        r = self._request_url('GET', '/admin/cacert')
+        return r.text
+
 
 def get_user_agent():
     sf_version = VersionInfo('shakenfist_client').version_string()

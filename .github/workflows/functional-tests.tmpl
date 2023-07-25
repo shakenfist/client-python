@@ -218,5 +218,6 @@ jobs:
         if: {% raw %}${{{% endraw %} ! cancelled() {% raw %}}}{% endraw %}
         with:
           name: bundle.zip
-          retention-days: 14
+          retention-days: 90
+          if-no-files-found: error
           path: {% raw %}${{{% endraw %} github.workspace {% raw %}}}{% endraw %}/artifacts/bundle.zip
