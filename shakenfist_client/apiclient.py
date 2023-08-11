@@ -841,7 +841,7 @@ class Client(object):
         r = self._request_url('GET', '/instances/' + instance_ref + '/vdiconsolehelper')
         return r.text
 
-    def put_instance_blob(self, instance_ref, blob_uuid, path, mode):
+    def instance_put_blob(self, instance_ref, blob_uuid, path, mode):
         if not self.check_capability('instance-put-blob'):
             raise IncapableException(
                 'The API server version you are talking to does not support '
@@ -859,6 +859,16 @@ class Client(object):
 
         r = self._request_url('POST', '/instances/' + instance_ref + '/agent/execute',
                               data={'command_line': command_line})
+        return r.json()
+
+    def instance_get(self, instance_ref, path):
+        if not self.check_capability('instance-get'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'fetching a file from within an instance.')
+
+        r = self._request_url('POST', '/instances/' + instance_ref + '/agent/get',
+                              data={'path': path})
         return r.json()
 
     def get_namespaces(self):
