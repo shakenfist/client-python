@@ -557,6 +557,15 @@ class Client(object):
                               '/snapshot')
         return r.json()
 
+    def get_instance_agentoperations(self, instance_ref):
+        if not self.check_capability('instance-agentoperations'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'looking up the agent operations for an instance.')
+        r = self._request_url('GET', '/instances/' + instance_ref +
+                              '/agentoperation')
+        return r.json()
+
     def update_label(self, label_name, blob_uuid):
         r = self._request_url(
             'POST', '/label/%s' % label_name, data={'blob_uuid': blob_uuid})

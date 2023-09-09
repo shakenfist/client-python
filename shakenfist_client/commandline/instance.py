@@ -118,7 +118,7 @@ def _pretty_dict(lead_space, rows, space_rules):
     return ret
 
 
-def _show_instance(ctx, i, include_snapshots=False):
+def _show_instance(ctx, i, include_snapshots=False, include_agentoperations=False):
     if not i:
         print('Instance not found')
         sys.exit(1)
@@ -127,13 +127,15 @@ def _show_instance(ctx, i, include_snapshots=False):
     interfaces = ctx.obj['CLIENT'].get_instance_interfaces(i['uuid'])
     if include_snapshots:
         snapshots = ctx.obj['CLIENT'].get_instance_snapshots(i['uuid'])
+    if include_agentoperations:
+        agentops = ctx.obj['CLIENT'].get_instance_agentoperations(i['uuid'])
 
     if ctx.obj['OUTPUT'] == 'json':
         out = util.filter_dict(i, ['uuid', 'name', 'namespace', 'cpus', 'memory',
                                    'disk_spec', 'video', 'node', 'console_port',
                                    'vdi_port', 'vdi_tls_port', 'ssh_key', 'user_data',
                                    'power_state', 'state', 'uefi', 'secure_boot',
-                                   'nvram_template', 'side_channels'])
+                                   'nvram_template', 'side_channels', 'agent_state'])
         out['network_interfaces'] = []
         for interface in interfaces:
             util.show_interface(ctx, interface, out)
@@ -146,6 +148,9 @@ def _show_instance(ctx, i, include_snapshots=False):
                 out['snapshots'].append(util.filter_dict(
                     snap, ['uuid', 'device', 'created']))
 
+        if include_agentoperations:
+            out['agentoperations'] = agentops
+
         print(json.dumps(out, indent=4, sort_keys=True))
         return
 
@@ -153,8 +158,8 @@ def _show_instance(ctx, i, include_snapshots=False):
         format_string = '%s:%s'
     else:
         format_string = '%-14s: %s'
-        d_space = {'type': 5, 'bus': 4, 'size': 2, 'base': 0}
-        v_space = {'model': 0, 'memory': 0}
+        d_space = {'type': 5, 'bus': 4, 'size': 3, 'base': 0}
+        v_space = {'model': 0, 'memory': 0, 'vdi': 0}
 
     print(format_string % ('uuid', i['uuid']))
     print(format_string % ('name', i['name']))
@@ -166,14 +171,13 @@ def _show_instance(ctx, i, include_snapshots=False):
     print(format_string % ('nvram template', i.get('nvram_template')))
 
     if ctx.obj['OUTPUT'] == 'pretty':
-        print(format_string % ('disk spec',
-                               _pretty_dict(16, i['disk_spec'], d_space)))
+        print(format_string % ('disk spec', _pretty_dict(16, i['disk_spec'], d_space)))
     if ctx.obj['OUTPUT'] == 'pretty':
-        print(format_string % ('video',
-                               _pretty_dict(16, (i['video'],), v_space)))
+        print(format_string % ('video', _pretty_dict(16, (i['video'],), v_space)))
     print(format_string % ('node', i.get('node', '')))
     print(format_string % ('power state', i.get('power_state', '')))
     print(format_string % ('state', i.get('state', '')))
+    print(format_string % ('agent_state', i.get('agent_state', '')))
     print(format_string % ('error message', i.get('error_message', '')))
 
     # NOTE(mikal): I am not sure we should expose this, but it will do
@@ -244,14 +248,19 @@ def _show_instance(ctx, i, include_snapshots=False):
                       % (snap['uuid'], snap['device'],
                          datetime.datetime.fromtimestamp(snap['created'])))
 
+    if include_agentoperations:
+        print()
+        print(agentops)
+
 
 @instance.command(name='show', help='Show an instance')
 @click.argument('instance_ref', type=click.STRING, shell_complete=_get_instances)
-@click.argument('snapshots', type=click.BOOL, default=False)
+@click.option('-s', '--snapshots', type=click.BOOL, is_flag=True, default=False)
+@click.option('-a', '--agentoperations', type=click.BOOL, is_flag=True, default=False)
 @click.pass_context
-def instance_show(ctx, instance_ref=None, snapshots=False):
+def instance_show(ctx, instance_ref=None, snapshots=False, agentoperations=False):
     _show_instance(ctx, ctx.obj['CLIENT'].get_instance(
-        instance_ref), snapshots)
+        instance_ref), include_snapshots=snapshots, include_agentoperations=agentoperations)
 
 
 def _parse_spec(spec):
