@@ -128,7 +128,7 @@ def _show_instance(ctx, i, include_snapshots=False, include_agentoperations=Fals
     if include_snapshots:
         snapshots = ctx.obj['CLIENT'].get_instance_snapshots(i['uuid'])
     if include_agentoperations:
-        agentops = ctx.obj['CLIENT'].get_instance_agentoperations(i['uuid'])
+        agentops = ctx.obj['CLIENT'].get_instance_agentoperations(i['uuid'], all=True)
 
     if ctx.obj['OUTPUT'] == 'json':
         out = util.filter_dict(i, ['uuid', 'name', 'namespace', 'cpus', 'memory',
@@ -149,7 +149,7 @@ def _show_instance(ctx, i, include_snapshots=False, include_agentoperations=Fals
                     snap, ['uuid', 'device', 'created']))
 
         if include_agentoperations:
-            out['agentoperations'] = agentops
+            out['agent_operations'] = agentops
 
         print(json.dumps(out, indent=4, sort_keys=True))
         return
@@ -177,7 +177,7 @@ def _show_instance(ctx, i, include_snapshots=False, include_agentoperations=Fals
     print(format_string % ('node', i.get('node', '')))
     print(format_string % ('power state', i.get('power_state', '')))
     print(format_string % ('state', i.get('state', '')))
-    print(format_string % ('agent_state', i.get('agent_state', '')))
+    print(format_string % ('agent state', i.get('agent_state', '')))
     print(format_string % ('error message', i.get('error_message', '')))
 
     # NOTE(mikal): I am not sure we should expose this, but it will do
@@ -702,7 +702,7 @@ def instance_upload(ctx, instance_ref=None, source=None, destination=None):
     print('Created artifact %s' % artifact['uuid'])
 
     st = os.stat(source)
-    op = ctx.obj['CLIENT'].put_instance_blob(
+    op = ctx.obj['CLIENT'].instance_put_blob(
             instance_ref, artifact['blob_uuid'], destination, st.st_mode)
 
     # Wait for the copy to complete
