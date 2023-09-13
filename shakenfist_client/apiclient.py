@@ -557,13 +557,18 @@ class Client(object):
                               '/snapshot')
         return r.json()
 
-    def get_instance_agentoperations(self, instance_ref):
+    def get_instance_agentoperations(self, instance_ref, all=False):
         if not self.check_capability('instance-agentoperations'):
             raise IncapableException(
                 'The API server version you are talking to does not support '
                 'looking up the agent operations for an instance.')
+        if all and not self.check_capability('instance-agentoperations-all'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'looking up all agent operations for an instance.')
+
         r = self._request_url('GET', '/instances/' + instance_ref +
-                              '/agentoperation')
+                              '/agentoperation', data={'all': all})
         return r.json()
 
     def update_label(self, label_name, blob_uuid):
@@ -850,6 +855,20 @@ class Client(object):
         r = self._request_url('GET', '/instances/' + instance_ref + '/vdiconsolehelper')
         return r.text
 
+    def _await_agentop(self, r):
+        deadline = time.time() + _calculate_async_deadline(self.async_strategy)
+        while True:
+            if r['state'] == 'complete':
+                return r
+
+            LOG.debug('Waiting for agent operation to be complete')
+            if time.time() > deadline:
+                LOG.debug('Deadline exceeded waiting for agent operation to complete')
+                return r
+
+            time.sleep(1)
+            r = self.get_agent_operation(r['uuid'])
+
     def instance_put_blob(self, instance_ref, blob_uuid, path, mode):
         if not self.check_capability('instance-put-blob'):
             raise IncapableException(
@@ -858,7 +877,7 @@ class Client(object):
 
         r = self._request_url('POST', '/instances/' + instance_ref + '/agent/put',
                               data={'blob_uuid': blob_uuid, 'path': path, 'mode': mode})
-        return r.json()
+        return self._await_agentop(r.json())
 
     def instance_execute(self, instance_ref, command_line):
         if not self.check_capability('instance-execute'):
@@ -868,7 +887,7 @@ class Client(object):
 
         r = self._request_url('POST', '/instances/' + instance_ref + '/agent/execute',
                               data={'command_line': command_line})
-        return r.json()
+        return self._await_agentop(r.json())
 
     def instance_get(self, instance_ref, path):
         if not self.check_capability('instance-get'):
@@ -878,7 +897,7 @@ class Client(object):
 
         r = self._request_url('POST', '/instances/' + instance_ref + '/agent/get',
                               data={'path': path})
-        return r.json()
+        return self._await_agentop(r.json())
 
     def get_namespaces(self):
         r = self._request_url('GET', '/auth/namespaces')

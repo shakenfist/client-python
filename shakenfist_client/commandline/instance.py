@@ -7,7 +7,6 @@ from prettytable import PrettyTable
 import subprocess
 import sys
 import tempfile
-import time
 
 from shakenfist_client import apiclient, util
 
@@ -128,7 +127,7 @@ def _show_instance(ctx, i, include_snapshots=False, include_agentoperations=Fals
     if include_snapshots:
         snapshots = ctx.obj['CLIENT'].get_instance_snapshots(i['uuid'])
     if include_agentoperations:
-        agentops = ctx.obj['CLIENT'].get_instance_agentoperations(i['uuid'])
+        agentops = ctx.obj['CLIENT'].get_instance_agentoperations(i['uuid'], all=True)
 
     if ctx.obj['OUTPUT'] == 'json':
         out = util.filter_dict(i, ['uuid', 'name', 'namespace', 'cpus', 'memory',
@@ -149,7 +148,7 @@ def _show_instance(ctx, i, include_snapshots=False, include_agentoperations=Fals
                     snap, ['uuid', 'device', 'created']))
 
         if include_agentoperations:
-            out['agentoperations'] = agentops
+            out['agent_operations'] = agentops
 
         print(json.dumps(out, indent=4, sort_keys=True))
         return
@@ -177,7 +176,7 @@ def _show_instance(ctx, i, include_snapshots=False, include_agentoperations=Fals
     print(format_string % ('node', i.get('node', '')))
     print(format_string % ('power state', i.get('power_state', '')))
     print(format_string % ('state', i.get('state', '')))
-    print(format_string % ('agent_state', i.get('agent_state', '')))
+    print(format_string % ('agent state', i.get('agent_state', '')))
     print(format_string % ('error message', i.get('error_message', '')))
 
     # NOTE(mikal): I am not sure we should expose this, but it will do
@@ -250,7 +249,27 @@ def _show_instance(ctx, i, include_snapshots=False, include_agentoperations=Fals
 
     if include_agentoperations:
         print()
-        print(agentops)
+        if ctx.obj['OUTPUT'] == 'pretty':
+            print('Agent Operations:')
+            print()
+
+            x = PrettyTable()
+            x.field_names = ['uuid', 'state', 'commands']
+            for agentop in agentops:
+                cmds = []
+                for cmd in agentop.get('commands', []):
+                    cmds.append(cmd['command'])
+                x.add_row([agentop['uuid'], agentop['state'], '; '.join(cmds)])
+            print(x)
+
+        else:
+            print('agentop,uuid,state,commands')
+            for agentop in agentops:
+                cmds = []
+                for cmd in agentop.get('commands', []):
+                    cmds.append(cmd['command'])
+                print('agentop, %s,%s,%s'
+                      % (agentop['uuid'], agentop['state'], ';'.join(cmds)))
 
 
 @instance.command(name='show', help='Show an instance')
@@ -679,11 +698,6 @@ def instance_snapshot(ctx, instance_ref=None, all=False, device=None, label_name
 @click.argument('destination', type=click.Path())
 @click.pass_context
 def instance_upload(ctx, instance_ref=None, source=None, destination=None):
-    if not ctx.obj['CLIENT'].check_capability('instance-put-blob'):
-        sys.stderr.write(
-            'Unfortunately this server does not implement copying files into instances.\n')
-        sys.exit(1)
-
     if not ctx.obj['CLIENT'].check_capability('blob-search-by-hash'):
         blob = None
     else:
@@ -702,17 +716,8 @@ def instance_upload(ctx, instance_ref=None, source=None, destination=None):
     print('Created artifact %s' % artifact['uuid'])
 
     st = os.stat(source)
-    op = ctx.obj['CLIENT'].put_instance_blob(
+    ctx.obj['CLIENT'].instance_put_blob(
             instance_ref, artifact['blob_uuid'], destination, st.st_mode)
-
-    # Wait for the copy to complete
-    while True:
-        if op['state'] == 'complete':
-            break
-        time.sleep(5)
-        op = ctx.obj['CLIENT'].get_agent_operation(op['uuid'])
-
-    print('Done')
 
 
 @instance.command(name='execute', help='Execute a command on an instance')
@@ -720,36 +725,50 @@ def instance_upload(ctx, instance_ref=None, source=None, destination=None):
 @click.argument('commandline', type=click.STRING)
 @click.pass_context
 def instance_execute(ctx, instance_ref=None, commandline=None):
-    if not ctx.obj['CLIENT'].check_capability('instance-execute'):
-        sys.stderr.write(
-            'Unfortunately this server does not implement executing commands on instances.\n')
-        sys.exit(1)
-
     op = ctx.obj['CLIENT'].instance_execute(instance_ref, commandline)
-
-    # Wait for the operation to be complete
-    while True:
-        if op['state'] == 'complete':
-            break
-        time.sleep(5)
-        op = ctx.obj['CLIENT'].get_agent_operation(op['uuid'])
-
-    # Wait for the operation to have results
-    while True:
-        if op['results'] != {}:
-            break
-        time.sleep(5)
-        op = ctx.obj['CLIENT'].get_agent_operation(op['uuid'])
 
     if ctx.obj['OUTPUT'] == 'json':
         print(json.dumps(op, indent=4, sort_keys=True))
         return
 
+    if '0' not in op.get('results', {}):
+        print('Results not available.')
+        sys.exit(1)
+
     if ctx.obj['OUTPUT'] == 'simple':
         format_string = '%s:%s'
+        joiner_template = '\n%(file)s:'
     else:
         format_string = '%-14s: %s'
+        joiner_template = '\n                '
 
-    print(format_string % ('exit code', op['return-code']))
-    print(format_string % ('stdout', op['stdout']))
-    print(format_string % ('stderr', op['stderr']))
+    print(format_string % ('exit code', op['results']['0']['return-code']))
+
+    joiner = joiner_template % {'file': 'stdout'}
+    print(format_string %
+          ('stdout', joiner.join(op['results']['0']['stdout'].split('\n'))))
+
+    joiner = joiner_template % {'file': 'stderr'}
+    print(format_string %
+          ('stderr', joiner.join(op['results']['0']['stderr'].split('\n'))))
+
+
+@instance.command(name='download', help='Download a file from an instance')
+@click.argument('instance_ref', type=click.STRING, shell_complete=_get_instances)
+@click.argument('source', type=click.Path())
+@click.argument('destination', type=click.Path())
+@click.pass_context
+def instance_download(ctx, instance_ref=None, source=None, destination=None):
+    op = ctx.obj['CLIENT'].instance_get(instance_ref, source)
+    if '0' not in op.get('results', {}):
+        print('Results not available.')
+        sys.exit(1)
+
+    blob_uuid = op['results']['0'].get('content_blob')
+    if not blob_uuid:
+        print('Results did not include content')
+        sys.exit(1)
+
+    with open(destination, 'wb') as f:
+        for chunk in ctx.obj['CLIENT'].get_blob_data(blob_uuid):
+            f.write(chunk)
