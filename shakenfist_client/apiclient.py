@@ -568,7 +568,7 @@ class Client(object):
                 'looking up all agent operations for an instance.')
 
         r = self._request_url('GET', '/instances/' + instance_ref +
-                              '/agentoperation', data={'all': all})
+                              '/agentoperations', data={'all': all})
         return r.json()
 
     def update_label(self, label_name, blob_uuid):
