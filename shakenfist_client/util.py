@@ -83,7 +83,7 @@ def get_networks(ctx, args, incomplete):
     return [arg for arg in choices if arg.startswith(incomplete)]
 
 
-def checksum_with_progress(apiclient, source):
+def checksum_with_progress(client, source):
     st = os.stat(source)
 
     sha512_hash = hashlib.sha512()
@@ -101,10 +101,10 @@ def checksum_with_progress(apiclient, source):
                     d = f.read(4096)
 
     print('Searching for a pre-existing blob with this hash...')
-    return apiclient.get_blob_by_sha512(sha512_hash.hexdigest())
+    return client.get_blob_by_sha512(sha512_hash.hexdigest())
 
 
-def upload_artifact_with_progress(apiclient, name, source, source_url,
+def upload_artifact_with_progress(client, name, source, source_url,
                                   namespace=None, shared=False):
     print('None found, uploading')
     buffer_size = 4096
@@ -112,7 +112,7 @@ def upload_artifact_with_progress(apiclient, name, source, source_url,
 
     # We do not use send_upload_file because we want to hook in our own
     # progress bar.
-    upload = apiclient.create_upload()
+    upload = client.create_upload()
     total = 0
     retries = 0
     with tqdm(total=st.st_size, unit='B', unit_scale=True,
@@ -122,8 +122,7 @@ def upload_artifact_with_progress(apiclient, name, source, source_url,
             while d:
                 start_time = time.time()
                 try:
-                    remote_total = apiclient.send_upload(
-                        upload['uuid'], d)
+                    remote_total = client.send_upload(upload['uuid'], d)
                     retries = 0
                 except apiclient.APIException as e:
                     retries += 1
@@ -133,8 +132,7 @@ def upload_artifact_with_progress(apiclient, name, source, source_url,
                         raise e
 
                     print('Upload error, retrying...')
-                    apiclient.truncate_upload(
-                        upload['uuid'], total)
+                    client.truncate_upload(upload['uuid'], total)
                     f.seek(total)
                     buffer_size = 4096
                     d = f.read(buffer_size)
@@ -160,6 +158,6 @@ def upload_artifact_with_progress(apiclient, name, source, source_url,
                 d = f.read(buffer_size)
 
     print('Creating artifact')
-    artifact = apiclient.upload_artifact(
+    artifact = client.upload_artifact(
         name, upload['uuid'], source_url=source_url, shared=shared, namespace=namespace)
     return artifact
