@@ -1,5 +1,6 @@
 import click
 import datetime
+import ipaddress
 import json
 from prettytable import PrettyTable
 import sys
@@ -216,3 +217,62 @@ def network_ping(ctx, network_ref=None, address=None):
 
     elif ctx.obj['OUTPUT'] == 'json':
         print(output)
+
+
+@network.command(name='addresses', help='Display address allocations for a network')
+@click.argument('network_ref', type=click.STRING, shell_complete=util.get_networks)
+@click.pass_context
+def network_addresses(ctx, network_ref=None):
+    addresses = ctx.obj['CLIENT'].get_network_addresses(network_ref)
+    if ctx.obj['OUTPUT'] == 'json':
+        print(json.dumps(addresses, indent=4, sort_keys=True))
+        return
+
+    info_by_addr = {}
+    for addr in addresses:
+        info_by_addr[int(ipaddress.IPv4Address(addr['address']))] = addr
+
+    if ctx.obj['OUTPUT'] == 'pretty':
+        x = PrettyTable()
+        x.field_names = ['address', 'type', 'user', 'comment']
+    else:
+        print('address,type,user,comment')
+
+    for addr in sorted(info_by_addr.keys()):
+        if not info_by_addr[addr]['user']:
+            user = ''
+        elif type(info_by_addr[addr]['user']) is list:
+            user = ' '.join(info_by_addr[addr]['user'])
+        else:
+            user = info_by_addr[addr]['user']
+
+        if ctx.obj['OUTPUT'] == 'pretty':
+            x.add_row([info_by_addr[addr]['address'],
+                       info_by_addr[addr]['type'],
+                       user,
+                       info_by_addr[addr]['comment']])
+        else:
+            print('%s,%s,%s,%s'
+                  % (info_by_addr[addr]['address'],
+                     info_by_addr[addr]['type'],
+                     ' '.join(info_by_addr[addr]['user']),
+                     info_by_addr[addr]['comment']))
+
+    if ctx.obj['OUTPUT'] == 'pretty':
+        print(x)
+
+
+@network.command(name='add-routed', help='Add a routed address to the network')
+@click.argument('network_ref', type=click.STRING, shell_complete=util.get_networks)
+@click.pass_context
+def network_route(ctx, network_ref=None):
+    routed = ctx.obj['CLIENT'].route_network_address(network_ref)
+    print(routed)
+
+
+@network.command(name='delete-routed', help='Remove a routed address from the network')
+@click.argument('network_ref', type=click.STRING, shell_complete=util.get_networks)
+@click.argument('address', type=click.STRING)
+@click.pass_context
+def network_unroute(ctx, network_ref=None, address=None):
+    ctx.obj['CLIENT'].unroute_network_address(network_ref, address)
