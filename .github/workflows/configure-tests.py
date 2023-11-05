@@ -5,13 +5,6 @@ import jinja2
 JOBS = {
     'functional-tests': [
         {
-            'name': 'debian-10-localhost',
-            'baseimage': 'sf://label/ci-images/debian-10',
-            'baseuser': 'debian',
-            'topology': 'localhost',
-            'concurrency': 3
-        },
-        {
             'name': 'debian-11-slim-primary',
             'baseimage': 'sf://label/ci-images/debian-11',
             'baseuser': 'debian',

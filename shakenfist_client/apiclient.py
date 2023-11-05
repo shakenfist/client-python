@@ -797,8 +797,35 @@ class Client(object):
             n = self.get_network(n['uuid'])
 
     def get_network_interfaces(self, network_ref):
-        r = self._request_url('GET', '/networks/' +
-                              network_ref + '/interfaces')
+        r = self._request_url('GET', '/networks/' + network_ref + '/interfaces')
+        return r.json()
+
+    def get_network_addresses(self, network_ref):
+        if not self.check_capability('list-addresses'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'listing network addresses.')
+
+        r = self._request_url('GET', '/networks/' + network_ref + '/addresses')
+        return r.json()
+
+    def route_network_address(self, network_ref):
+        if not self.check_capability('route-addresses'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'routing addresses.')
+
+        r = self._request_url('POST', '/networks/' + network_ref + '/route')
+        return r.json()
+
+    def unroute_network_address(self, network_ref, address):
+        if not self.check_capability('route-addresses'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'routing addresses.')
+
+        r = self._request_url(
+            'DELETE', '/networks/' + network_ref + '/route' + '/' + address)
         return r.json()
 
     def get_node(self, node):
