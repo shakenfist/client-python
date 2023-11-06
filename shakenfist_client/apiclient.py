@@ -882,6 +882,15 @@ class Client(object):
         r = self._request_url('GET', '/instances/' + instance_ref + '/vdiconsolehelper')
         return r.text
 
+    def get_screenshot(self, instance_ref):
+        if not self.check_capability('instance-screenshot'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'fetching a screenshot of an instance.')
+
+        r = self._request_url('GET', '/instances/' + instance_ref + '/screenshot')
+        return self.get_blob_data(r.json())
+
     def _await_agentop(self, r):
         deadline = time.time() + _calculate_async_deadline(self.async_strategy)
         while True:
