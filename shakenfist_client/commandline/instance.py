@@ -772,3 +772,14 @@ def instance_download(ctx, instance_ref=None, source=None, destination=None):
     with open(destination, 'wb') as f:
         for chunk in ctx.obj['CLIENT'].get_blob_data(blob_uuid):
             f.write(chunk)
+
+
+@instance.command(name='screenshot',
+                  help='Download a screenshot of the console of an instance')
+@click.argument('instance_ref', type=click.STRING, shell_complete=_get_instances)
+@click.argument('destination', type=click.Path())
+@click.pass_context
+def instance_screenshot(ctx, instance_ref=None, destination=None):
+    with open(destination, 'wb') as f:
+        for chunk in ctx.obj['CLIENT'].get_screenshot(instance_ref):
+            f.write(chunk)
