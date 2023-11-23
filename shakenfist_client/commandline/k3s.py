@@ -424,7 +424,10 @@ def k3s_delete(ctx, name=None, namespace=None):
 
     # Free any routed ips
     for addr in md.get('routed_addresses', []):
-        ctx.obj['CLIENT'].unroute_network_address(md['node_network'], addr)
+        try:
+            ctx.obj['CLIENT'].unroute_network_address(md['node_network'], addr)
+        except apiclient.UnauthorizedException:
+            _emit_debug(ctx, '...Address %s was not routed to this network' % addr)
 
     # Delete node network
     if md['node_network']:
