@@ -7,3 +7,4 @@ urllib3>=1.26.14         # mit -- required by requests with this version pin
 tqdm                     # mit / mozilla
 shakenfist-utilities     # apache2
 pbr                      # apache2
+pyyaml                   # mit
