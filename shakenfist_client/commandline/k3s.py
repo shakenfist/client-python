@@ -1,11 +1,16 @@
 import click
 import copy
+import os
 from shakenfist_client import apiclient
+import subprocess
 import sys
+import tempfile
 import time
+import yaml
 
 
-METADATA_KEY = 'orchestrated_k3s_%s'
+CLUSTER_LIST = 'orchestrated_k3s_clusters'
+METADATA_KEY = 'orchestrated_k3s_cluster_%s'
 LATEST_RELEASE = 'v1.28.2+k3s1'
 
 
@@ -114,6 +119,26 @@ def _reap_execute(ctx, aop):
         sys.exit(1)
 
 
+@k3s.command(name='list', help='List managed k3s clusters')
+@click.option('--namespace', type=click.STRING,
+              help=('If you are an admin, you can create this cluster in a '
+                    'different namespace.'))
+@click.pass_context
+def k3s_list(ctx, namespace=None, ):
+    ctx.obj['CLIENT'] = apiclient.Client(async_strategy=apiclient.ASYNC_CONTINUE)
+    if not namespace:
+        namespace = ctx.obj['CLIENT'].namespace
+
+    namespace_md = ctx.obj['CLIENT'].get_namespace_metadata(namespace)
+    all_clusters = namespace_md.get(CLUSTER_LIST, [])
+
+    for cluster in all_clusters:
+        print(cluster)
+
+
+k3s.add_command(k3s_list)
+
+
 @k3s.command(name='create', help='Create a new k3s cluster')
 @click.argument('name', type=click.STRING)
 @click.option('--worker-count', type=click.INT, help='The number of workers',
@@ -137,6 +162,8 @@ def k3s_create(ctx, name=None, worker_count=None, metal_address_count=None,
         if not ns:
             ctx.obj['CLIENT'].create_namespace(namespace)
             print('Created namespace %s' % namespace)
+    else:
+        namespace = ctx.obj['CLIENT'].namespace
 
     # Log general information
     md_key = METADATA_KEY % name
@@ -145,9 +172,16 @@ def k3s_create(ctx, name=None, worker_count=None, metal_address_count=None,
     # Ensure this name isn't already taken
     _emit_debug(ctx, 'Checking the cluster metadata key %s is free' % md_key)
     namespace_md = ctx.obj['CLIENT'].get_namespace_metadata(namespace)
+    all_clusters = namespace_md.get(CLUSTER_LIST, [])
+
+    if name in all_clusters:
+        print('Sorry, that cluster name is already taken')
+        sys.exit(1)
     if md_key in namespace_md:
         print('Sorry, that cluster name is already taken')
         sys.exit(1)
+    all_clusters.append(name)
+    ctx.obj['CLIENT'].set_namespace_metadata_item(namespace, CLUSTER_LIST, all_clusters)
 
     # A place to store outstanding agent operations
     aops = []
@@ -253,12 +287,22 @@ def k3s_create(ctx, name=None, worker_count=None, metal_address_count=None,
         _reap_execute(ctx, aop)
     aops = []
 
-    # Fetch kubecfg and correct IP
+    # Fetch kubecfg, correct IP, and include cluster name instead of "default"
     print('Fetching kubecfg for cluster')
     aop = ctx.obj['CLIENT'].instance_get(
         md['control_plane_nodes'][0], '/etc/rancher/k3s/k3s.yaml')
-    md['kubeconfig'] = _await_fetch(ctx, aop).replace(
+    kubeconfig = _await_fetch(ctx, aop).replace(
         '127.0.0.1', md['api_address_floating'])
+
+    kc = yaml.safe_load(kubeconfig)
+    fqcn = '%s.%s' % (name, namespace)
+    kc['clusters'][0]['name'] = fqcn
+    kc['contexts'][0]['name'] = fqcn
+    kc['contexts'][0]['context']['cluster'] = fqcn
+    kc['contexts'][0]['context']['user'] = fqcn
+    kc['users'][0]['name'] = fqcn
+    kc['current-context'] = fqcn
+    md['kubeconfig'] = yaml.dump(kc)
     ctx.obj['CLIENT'].set_namespace_metadata_item(namespace, md_key, md)
 
     # Fetch the node token from the first control plane node
@@ -337,6 +381,28 @@ def k3s_create(ctx, name=None, worker_count=None, metal_address_count=None,
         _reap_execute(ctx, aop)
     aops = []
 
+    # Fetch the kubeconfig and install it
+    with tempfile.TemporaryDirectory() as tempdir:
+        new_config_path = os.path.join(tempdir, 'config')
+        kube_dir = os.path.join(os.path.expanduser('~'), '.kube')
+        main_config_path = os.path.join(kube_dir, 'config')
+        os.makedirs(kube_dir, exist_ok=True)
+
+        with open(new_config_path, 'w') as f:
+            f.write(yaml.dump(kc))
+        p = subprocess.run(
+            'kubectl config view --flatten', shell=True, capture_output=True,
+            env={
+                'KUBECONFIG': ('%s/.kube/config:%s'
+                               % (os.path.expanduser('~'), new_config_path))
+                })
+        if p.returncode != 0:
+            print('Failed up update %s/.kube/config, return code %d'
+                  % (os.path.expanduser('~'), p.returncode))
+            sys.exit(1)
+        with open(main_config_path, 'wb') as f:
+            f.write(p.stdout)
+
 
 k3s.add_command(k3s_create)
 
@@ -349,6 +415,9 @@ k3s.add_command(k3s_create)
 @click.pass_context
 def k3s_getconfig(ctx, name=None, namespace=None):
     ctx.obj['CLIENT'] = apiclient.Client(async_strategy=apiclient.ASYNC_CONTINUE)
+    if not namespace:
+        namespace = ctx.obj['CLIENT'].namespace
+
     namespace_md = ctx.obj['CLIENT'].get_namespace_metadata(namespace)
     md_key = METADATA_KEY % name
     if md_key not in namespace_md:
@@ -439,6 +508,24 @@ def k3s_delete(ctx, name=None, namespace=None):
 
     # Then remove the metadata
     ctx.obj['CLIENT'].delete_namespace_metadata_item(namespace, md_key)
+    all_clusters = namespace_md.get(CLUSTER_LIST, [])
+    all_clusters.remove(name)
+    if not all_clusters:
+        ctx.obj['CLIENT'].delete_namespace_metadata_item(namespace, CLUSTER_LIST)
+    else:
+        ctx.obj['CLIENT'].set_namespace_metadata_item(
+            namespace, CLUSTER_LIST, all_clusters)
+
+    # And remove the local config
+    fqcn = '%s.%s' % (name, namespace)
+    for config_elem in ['users.%s' % fqcn,
+                        'contexts.%s' % fqcn,
+                        'clusters.%s' % fqcn]:
+        p = subprocess.run(
+            'kubectl config unset %s' % config_elem, shell=True)
+        if p.returncode != 0:
+            print('Could not unset kubectl config element %s' % config_elem)
+            sys.exit(1)
 
 
 k3s.add_command(k3s_delete)
