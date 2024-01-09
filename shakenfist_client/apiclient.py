@@ -844,6 +844,14 @@ class Client(object):
         r = self._request_url('DELETE', '/nodes/' + node)
         return r.json()
 
+    def get_node_process_metrics(self, node):
+        if not self.check_capability('node-process-metrics'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'fetching process metrics for a node.')
+        r = self._request_url('GET', '/nodes/' + node + '/processmetrics')
+        return r.json()
+
     def get_interface(self, interface_uuid):
         r = self._request_url('GET', '/interfaces/' + interface_uuid)
         return r.json()
