@@ -5,6 +5,7 @@ from prettytable import PrettyTable
 import sys
 import time
 
+from shakenfist_client.apiclient import IncapableException
 from shakenfist_client import util
 
 
@@ -189,13 +190,25 @@ def node_cpuhogs(ctx, threshold=0.25):
     hogs = []
 
     for node in ctx.obj['CLIENT'].get_nodes():
-        event = ctx.obj['CLIENT'].get_node_events(node['name'], event_type='resources', limit=1)[0]
-        for resource in event.get('extra', {}):
-            value = event['extra'][resource]
-            if resource.startswith('process_cpu_fraction_') and value > threshold:
-                hogs.append('%s on node %s has consumed %.02f of a CPU, threshold is %.02f'
-                            % (resource[len('process_cpu_fraction_'):],
-                               node['name'], value, threshold))
+        try:
+            metrics = ctx.obj['CLIENT'].get_node_process_metrics(node['name'])
+            for resource in metrics:
+                value = metrics[resource]
+                if resource.startswith('process_cpu_fraction_') and value > threshold:
+                    hogs.append('%s on node %s has consumed %.02f of a CPU, threshold is %.02f'
+                                % (resource[len('process_cpu_fraction_'):],
+                                   node['name'], value, threshold))
+
+        except IncapableException:
+            # Fall back to the old way
+            event = ctx.obj['CLIENT'].get_node_events(node['name'], event_type='resources',
+                                                      limit=1)[0]
+            for resource in event.get('extra', {}):
+                value = event['extra'][resource]
+                if resource.startswith('process_cpu_fraction_') and value > threshold:
+                    hogs.append('%s on node %s has consumed %.02f of a CPU, threshold is %.02f'
+                                % (resource[len('process_cpu_fraction_'):],
+                                   node['name'], value, threshold))
 
     if hogs:
         print('\n'.join(hogs))
