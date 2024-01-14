@@ -185,9 +185,12 @@ def node_resources(ctx, node=None):
 @node.command(name='cpuhogs', help='List processes consuming "too much" CPU')
 @click.option('-t', '--threshold', default=0.25,
               help='The CPU fraction above which to complain.')
+@click.option('-i', '--ignore', default='',
+              help='A comma separated list of processes to ignore')
 @click.pass_context
-def node_cpuhogs(ctx, threshold=0.25):
+def node_cpuhogs(ctx, threshold=0.25, ignore=None):
     hogs = []
+    ignore_processes = ignore.split(',')
 
     for node in ctx.obj['CLIENT'].get_nodes():
         try:
@@ -195,9 +198,11 @@ def node_cpuhogs(ctx, threshold=0.25):
             for resource in metrics:
                 value = metrics[resource]
                 if resource.startswith('process_cpu_fraction_') and value > threshold:
+                    process = resource[len('process_cpu_fraction_'):]
+                    if process in ignore_processes:
+                        continue
                     hogs.append('%s on node %s has consumed %.02f of a CPU, threshold is %.02f'
-                                % (resource[len('process_cpu_fraction_'):],
-                                   node['name'], value, threshold))
+                                % (process, node['name'], value, threshold))
 
         except IncapableException:
             # Fall back to the old way
@@ -206,9 +211,11 @@ def node_cpuhogs(ctx, threshold=0.25):
             for resource in event.get('extra', {}):
                 value = event['extra'][resource]
                 if resource.startswith('process_cpu_fraction_') and value > threshold:
+                    process = resource[len('process_cpu_fraction_'):]
+                    if process in ignore_processes:
+                        continue
                     hogs.append('%s on node %s has consumed %.02f of a CPU, threshold is %.02f'
-                                % (resource[len('process_cpu_fraction_'):],
-                                   node['name'], value, threshold))
+                                % (process, node['name'], value, threshold))
 
     if hogs:
         print('\n'.join(hogs))
