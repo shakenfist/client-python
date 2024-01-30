@@ -119,6 +119,7 @@ class Client(object):
         if logger:
             LOG = logger
 
+        self.most_recent_request_id = None
         self.sync_request_timeout = sync_request_timeout
 
         LOG.debug('Client initially configured with apiurl of %s for namespace %s '
@@ -192,8 +193,10 @@ class Client(object):
                             allow_redirects=True, stream=False):
         url = self.base_url + url
 
-        h = {'Authorization': self.cached_auth,
-             'User-Agent': get_user_agent()}
+        h = {
+                'Authorization': self.cached_auth,
+                'User-Agent': get_user_agent()
+            }
         if data:
             if request_body_is_binary:
                 h['Content-Type'] = 'application/octet-stream'
@@ -208,6 +211,11 @@ class Client(object):
 
         LOG.debug('-------------------------------------------------------')
         LOG.debug('API client requested: %s %s' % (method, url))
+        for hkey in h:
+            if hkey == 'Authorization' and h[hkey]:
+                LOG.debug('Header: Authorization = Bearer *****')
+            else:
+                LOG.debug('Header: %s = %s' % (hkey, h[hkey]))
         if data:
             if request_body_is_binary:
                 LOG.debug('Data: ...%d bytes of binary omitted...' % len(data))
@@ -218,6 +226,10 @@ class Client(object):
                       % (h.url, h.status_code, h.headers.get('Location')))
         LOG.debug('API client response: code = %s (took %.02f seconds)'
                   % (r.status_code, (end_time - start_time)))
+
+        self.most_recent_request_id = r.headers['X-Request-ID']
+        for hkey in r.headers:
+            LOG.debug('Header: %s = %s' % (hkey, r.headers[hkey]))
 
         if not stream and r.text:
             if response_body_is_binary:
