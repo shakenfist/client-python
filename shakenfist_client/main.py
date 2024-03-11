@@ -8,6 +8,7 @@ import sys
 
 from shakenfist_client import apiclient
 from shakenfist_client.commandline import admin
+from shakenfist_client.commandline import ansible
 from shakenfist_client.commandline import artifact
 from shakenfist_client.commandline import backup
 from shakenfist_client.commandline import blob
@@ -120,6 +121,7 @@ def version(ctx):
 
 
 cli.add_command(admin.admin)
+cli.add_command(ansible.ansible)
 cli.add_command(artifact.artifact)
 cli.add_command(backup.backup)
 cli.add_command(blob.blob)
