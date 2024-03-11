@@ -29,6 +29,7 @@ LOG = []
 
 
 def _result(changed, error, meta, error_msg=None):
+    global LOG
     sys.stdout.write(json.dumps(
         {
             'changed': changed,
@@ -41,6 +42,7 @@ def _result(changed, error, meta, error_msg=None):
 
 
 def _log(msg):
+    global LOG
     LOG.append(msg)
     sys.stderr.write(msg)
     sys.stderr.write('\n')
@@ -50,6 +52,7 @@ def _log(msg):
 @click.argument('args', type=click.Path(exists=True))
 @click.pass_context
 def namespace(ctx, args):
+    global LOG
     LOG = []
     with open(args) as f:
         input = f.read()
@@ -112,6 +115,7 @@ def namespace(ctx, args):
 @click.argument('args', type=click.Path(exists=True))
 @click.pass_context
 def network(ctx, args):
+    global LOG
     LOG = []
     with open(args) as f:
         input = f.read()

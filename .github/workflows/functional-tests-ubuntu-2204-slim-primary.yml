@@ -1,4 +1,4 @@
-name: Test ubuntu-2004-slim-primary
+name: Test ubuntu-2204-slim-primary
 
 on:
   push:
@@ -11,7 +11,7 @@ on:
       - v*-releases
 
 jobs:
-  ubuntu-2004-slim-primary:
+  ubuntu-2204-slim-primary:
     runs-on: self-hosted
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}
@@ -43,7 +43,7 @@ jobs:
           cd ${GITHUB_WORKSPACE}/shakenfist
           ansible-playbook -i /home/debian/ansible-hosts \
               --extra-vars "identifier=${SHAKENFIST_NAMESPACE} source_path=${GITHUB_WORKSPACE} \
-              base_image=sf://label/ci-images/ubuntu-2004 base_image_user=ubuntu" \
+              base_image=sf://label/ci-images/ubuntu-2204 base_image_user=ubuntu" \
               deploy/ansible/ci-topology-slim-primary.yml
 
       - name: Copy CI tools to primary
