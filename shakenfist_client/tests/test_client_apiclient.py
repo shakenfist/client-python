@@ -295,7 +295,7 @@ class ApiClientTestCase(testtools.TestCase):
         client.get_network('notreallyauuid')
 
         self.mock_request.assert_called_with(
-            'GET', '/networks/notreallyauuid')
+            'GET', '/networks/notreallyauuid', data=None)
 
     def test_delete_network(self):
         client = apiclient.Client(suppress_configuration_lookup=True,

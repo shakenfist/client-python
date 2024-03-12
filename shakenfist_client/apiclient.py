@@ -762,8 +762,16 @@ class Client(object):
         r = self._request_url('GET', '/networks', data={'all': all})
         return r.json()
 
-    def get_network(self, network_ref):
-        r = self._request_url('GET', '/networks/' + network_ref)
+    def get_network(self, network_ref, namespace=None):
+        if namespace and not self.check_capability('get-network-namespace'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'lookup of networks with a specific namespace.')
+
+        data = None
+        if namespace:
+            data = {'namespace': namespace}
+        r = self._request_url('GET', '/networks/' + network_ref, data=data)
         return r.json()
 
     def delete_network(self, network_ref, namespace=None):

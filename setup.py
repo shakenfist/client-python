@@ -35,7 +35,8 @@ setuptools.setup(
         (
             'share/shakenfist/ansible', [
                 'ansible/sf_instance.py',
-                'ansible/sf_network.py',
+                'ansible/sf_namespace',
+                'ansible/sf_network',
                 'ansible/sf_snapshot.py'
             ]
         )
