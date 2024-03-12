@@ -93,7 +93,7 @@ def namespace(ctx, args):
 
         try:
             start_time = time.time()
-            while time.time() - start_time < 5:
+            while time.time() - start_time < 30:
                 _log('Attempt deletion...')
                 client.delete_namespace(name)
                 time.sleep(1)
@@ -180,7 +180,7 @@ def network(ctx, args):
         if dirty:
             try:
                 start_time = time.time()
-                while time.time() - start_time < 5:
+                while time.time() - start_time < 30:
                     _log('Attempt deletion...')
                     client.delete_network(
                         n['uuid'], namespace=input.get('namespace'))
@@ -221,7 +221,7 @@ def network(ctx, args):
 
         try:
             start_time = time.time()
-            while time.time() - start_time < 5:
+            while time.time() - start_time < 30:
                 _log('Attempt deletion...')
                 client.delete_network(
                     identifier, namespace=input.get('namespace'))
