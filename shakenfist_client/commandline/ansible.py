@@ -95,7 +95,7 @@ def namespace(ctx, args):
             start_time = time.time()
             while time.time() - start_time < 180:
                 try:
-                    _log('Attempt deletion...')
+                    _log('Attempt deletion (state is %s)...' % n['state'])
                     client.delete_namespace(name)
                     time.sleep(1)
                     n = client.get_namespace(name)
@@ -110,6 +110,8 @@ def namespace(ctx, args):
                 return _result(
                     True, True, n,
                     error_msg='Deletion of namespace failed')
+
+            return _result(True, False, n)
         except apiclient.ResourceNotFoundException:
             return _result(True, False, None)
 
