@@ -454,8 +454,16 @@ class Client(object):
 
         return deleted
 
-    def get_instance(self, instance_ref):
-        r = self._request_url('GET', '/instances/' + instance_ref)
+    def get_instance(self, instance_ref, namespace=None):
+        if namespace and not self.check_capability('get-instance-namespace'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'lookup of instances with a specific namespace.')
+
+        data = None
+        if namespace:
+            data = {'namespace': namespace}
+        r = self._request_url('GET', '/instances/' + instance_ref, data=data)
         return r.json()
 
     def get_instance_interfaces(self, instance_ref):
@@ -499,8 +507,7 @@ class Client(object):
             clean_disks.append(d)
         body['disk'] = clean_disks
 
-        r = self._request_url('POST', '/instances',
-                              data=body)
+        r = self._request_url('POST', '/instances', data=body)
         i = r.json()
 
         deadline = time.time() + _calculate_async_deadline(self.async_strategy)
