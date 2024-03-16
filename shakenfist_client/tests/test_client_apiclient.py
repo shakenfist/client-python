@@ -38,7 +38,7 @@ class ApiClientTestCase(testtools.TestCase):
         client.get_instance('notreallyauuid')
 
         self.mock_request.assert_called_with(
-            'GET', '/instances/notreallyauuid')
+            'GET', '/instances/notreallyauuid', data=None)
 
     def test_get_instance_interfaces(self):
         client = apiclient.Client(suppress_configuration_lookup=True,

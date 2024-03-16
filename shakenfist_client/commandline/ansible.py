@@ -101,10 +101,12 @@ def namespace(ctx, args):
                     n = client.get_namespace(name)
                     if not n:
                         break
+                    if n['state'] == 'deleted':
+                        break
                 except apiclient.ResourceNotFoundException:
                     n = {}
 
-            if n:
+            if n and n['state'] != 'deleted':
                 return _result(
                     True, True, n,
                     error_msg='Deletion of namespace failed')
@@ -505,7 +507,7 @@ def instance(ctx, args):
             return _result(False, True, None, error_msg=str(e))
 
         if not needs_replacement:
-            return _result(False, False, None)
+            return _result(False, False, i)
 
         start_time = time.time()
         while time.time() - start_time < 180:
