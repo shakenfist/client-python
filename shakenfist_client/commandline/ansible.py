@@ -84,8 +84,13 @@ def namespace(ctx, args):
         return _result(False, False, n)
 
     if state == 'absent':
+        n = {}
         try:
             n = client.get_namespace(name)
+            if n['state'] == 'deleted':
+                _log('Namespace is already deleted')
+                return (False, False, None)
+
         except apiclient.ResourceNotFoundException:
             _log('Namespace did not exist')
             return _result(
@@ -95,7 +100,7 @@ def namespace(ctx, args):
             start_time = time.time()
             while time.time() - start_time < 180:
                 try:
-                    _log('Attempt deletion (state is %s)...' % n['state'])
+                    _log('Attempt deletion (state is %s)...' % n.get('state'))
                     client.delete_namespace(name)
                     time.sleep(1)
                     n = client.get_namespace(name)
@@ -108,8 +113,7 @@ def namespace(ctx, args):
 
             if n and n['state'] != 'deleted':
                 return _result(
-                    True, True, n,
-                    error_msg='Deletion of namespace failed')
+                    True, True, n, error_msg='Deletion of namespace failed')
 
             return _result(True, False, n)
         except apiclient.ResourceNotFoundException:
