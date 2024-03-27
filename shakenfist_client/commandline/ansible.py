@@ -458,8 +458,8 @@ def _check_instance(client, existing, input):
                 key == 'force_placement'
             instance_kwargs[key] = input[key]
 
-    # Metadata is a list
-    metadata = []
+    # Metadata is a dict
+    metadata = {}
     for k, v in input.get('metadata', {}).items():
         metadata[k] = v
     if metadata:
