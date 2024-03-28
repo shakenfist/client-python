@@ -36,7 +36,7 @@ jobs:
 
       - name: Determine if there is any dependency between the repositories
         run: |
-          python3 ${GITHUB_WORKSPACE}/shakenfist/tools/clone_with_depends.py
+          python3 ${GITHUB_WORKSPACE}/client-python/tools/clone_with_depends.py
 
       - name: Build infrastructure
         run: |
@@ -45,6 +45,20 @@ jobs:
               --extra-vars "identifier=${SHAKENFIST_NAMESPACE} source_path=${GITHUB_WORKSPACE} \
               base_image=sf://label/ci-images/debian-11 base_image_user=debian" \
               deploy/ansible/ci-topology-slim-primary.yml
+
+      - name: Copy CI tools to primary
+        run: |
+          . ${GITHUB_WORKSPACE}/ci-environment.sh
+          cd ${GITHUB_WORKSPACE}/shakenfist
+          scp -i /srv/github/id_ci -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null -rp tools \
+              debian@$primary:.
+
+      - name: Log github actions buffering status
+        run: |
+          . ${GITHUB_WORKSPACE}/ci-environment.sh
+          cd ${GITHUB_WORKSPACE}/shakenfist
+          tools/run_remote ${primary} python3 tools/buffer.py
 
       - name: Run getsf installer on primary
         run: |
