@@ -227,7 +227,7 @@ class Client(object):
         LOG.debug('API client response: code = %s (took %.02f seconds)'
                   % (r.status_code, (end_time - start_time)))
 
-        self.most_recent_request_id = r.headers['X-Request-ID']
+        self.most_recent_request_id = r.headers.get('X-Request-ID')
         for hkey in r.headers:
             LOG.debug('Header: %s = %s' % (hkey, r.headers[hkey]))
 
