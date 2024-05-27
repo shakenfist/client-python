@@ -56,9 +56,15 @@ def _show_network(ctx, n):
     if ctx.obj['OUTPUT'] == 'simple':
         format_string = '%s:%s'
 
+    vxid = None
+    if 'vxid' in n:
+        vxid = n['vxid']
+    else:
+        vxid = n.get('vxlan_id')
+
     print(format_string % ('uuid', n['uuid']))
     print(format_string % ('name', n['name']))
-    print(format_string % ('vxlan id', n['vxid']))
+    print(format_string % ('vxlan id', vxid))
     print(format_string % ('netblock', n['netblock']))
     print(format_string % ('provide dhcp', n['provide_dhcp']))
     print(format_string % ('provide nat', n['provide_nat']))
