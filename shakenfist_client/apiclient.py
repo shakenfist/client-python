@@ -754,12 +754,38 @@ class Client(object):
         r = self._request_url('GET', '/blob_checksums/sha512/' + sha512)
         return r.json()
 
-    def get_blob_data(self, blob_uuid, offset=0):
-        r = self._request_url(
-            'GET', '/blobs/' + blob_uuid + '/data?offset=' + str(offset),
-            stream=True)
-        for chunk in r.iter_content(chunk_size=8192):
-            yield chunk
+    def get_blob_data(self, blob_uuid, offset=0, limit=0):
+        supports_limits = self.check_capability('blob-data-limit')
+        if limit != 0 and not supports_limits:
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'fetching a subsection of a blob.')
+
+        if not supports_limits:
+            # If we don't support limits, then we just do a simple single read.
+            r = self._request_url(
+                'GET', '/blobs/' + blob_uuid + '/data?offset=' + str(offset),
+                stream=True)
+            for chunk in r.iter_content(chunk_size=8192):
+                yield chunk
+            return
+
+        # If we do support limits, then we use them to do a series of smaller,
+        # probobly slightly slower, but more reliable reads.
+        limit = 1024 * 1024 * 1024
+        while True:
+            r = self._request_url(
+                'GET',
+                ('/blobs/' + blob_uuid + '/data?offset=' + str(offset) +
+                 '&limit=' + str(limit)),
+                stream=True)
+            fetched = 0
+            for chunk in r.iter_content(chunk_size=8192):
+                fetched += len(chunk)
+                yield chunk
+
+            if fetched < limit:
+                return
 
     def get_blobs(self, node=None):
         r = self._request_url('GET', '/blobs', data={'node': node})
