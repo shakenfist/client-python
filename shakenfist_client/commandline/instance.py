@@ -309,7 +309,7 @@ order you specify them being significant."""))
               help='A short form definition of a network to attach.')
 @click.option('-f', '--floated', type=click.STRING, multiple=True,
               shell_complete=util.get_networks,
-              help='As for --network, but with implied float of the interface.')
+              help='As for --networkspec, but with implied float of the interface.')
 @click.option('-N', '--networkspec', type=click.STRING, multiple=True,
               help='A long form "networkspec" definition of a network to attach.')
 @click.option('-d', '--disk', type=click.STRING, multiple=True,
@@ -783,3 +783,53 @@ def instance_screenshot(ctx, instance_ref=None, destination=None):
     with open(destination, 'wb') as f:
         for chunk in ctx.obj['CLIENT'].get_screenshot(instance_ref):
             f.write(chunk)
+
+
+@instance.command(name='await',
+                  help='Await an agent ready from the specified instance')
+@click.argument('instance_ref', type=click.STRING, shell_complete=_get_instances)
+@click.pass_context
+def instance_await(ctx, instance_ref=None):
+    try:
+        ctx.obj['CLIENT'].instance_await_agent_ready(instance_ref)
+
+    except apiclient.InstanceWillNeverBeReady as e:
+        print('Instance will never be ready: %s' % e)
+        sys.exit(1)
+
+
+@instance.command(name='add-interface', help='Add a network interface to an instance')
+@click.argument('instance_ref', type=click.STRING, shell_complete=_get_instances)
+@click.option('-f', '--floated', type=click.STRING, shell_complete=util.get_networks,
+              help='As for --networkspec, but with implied float of the interface.')
+@click.option('-N', '--networkspec', type=click.STRING,
+              help='A long form "networkspec" definition of a network to attach.')
+@click.pass_context
+def instance_add_interface(ctx, instance_ref=None, floated=None, networkspec=None):
+    if floated and networkspec:
+        print('Please specify only one interface.')
+        sys.exit(1)
+
+    netdesc = None
+    if floated:
+        network_uuid, address = _parse_spec(floated)
+        netdesc = {
+            'network_uuid': network_uuid,
+            'macaddress': None,
+            'model': 'virtio',
+            'float': True
+        }
+        if address:
+            netdesc['address'] = address
+
+    if networkspec:
+        network_uuid, address = _parse_spec(networkspec)
+        netdesc = {
+            'network_uuid': network_uuid,
+            'macaddress': None,
+            'model': 'virtio'
+        }
+        if address:
+            netdesc['address'] = address
+
+    ctx.obj['CLIENT'].add_instance_interface(instance_ref, netdesc)
