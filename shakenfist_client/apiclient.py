@@ -19,15 +19,19 @@ ASYNC_BLOCK = 'block'
 
 
 class UnconfiguredException(Exception):
-    pass
+    ...
 
 
 class IncapableException(Exception):
-    pass
+    ...
 
 
 class InvalidException(Exception):
-    pass
+    ...
+
+
+class InstanceWillNeverBeReady(Exception):
+    ...
 
 
 class APIException(Exception):
@@ -40,39 +44,39 @@ class APIException(Exception):
 
 
 class RequestMalformedException(APIException):
-    pass
+    ...
 
 
 class UnauthenticatedException(APIException):
-    pass
+    ...
 
 
 class UnauthorizedException(APIException):
-    pass
+    ...
 
 
 class ResourceNotFoundException(APIException):
-    pass
+    ...
 
 
 class DependenciesNotReadyException(APIException):
-    pass
+    ...
 
 
 class ResourceStateConflictException(APIException):
-    pass
+    ...
 
 
 class InternalServerError(APIException):
-    pass
+    ...
 
 
 class InsufficientResourcesException(APIException):
-    pass
+    ...
 
 
 class UnknownAsyncStrategy(APIException):
-    pass
+    ...
 
 
 STATUS_CODES_TO_ERRORS = {
@@ -623,6 +627,16 @@ class Client(object):
                               '/unpause')
         return r.json()
 
+    def add_instance_interface(self, instance_ref, netdesc):
+        if not self.check_capability('hot-plug-interface'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'hot plugging an interface into an instance.')
+
+        r = self._request_url('POST', '/instances/' + instance_ref +
+                              '/interfaces', body=netdesc)
+        return r.json()
+
     def delete_instance(self, instance_ref, namespace=None, async_request=False):
         # Why pass a namespace when you're passing an exact UUID? The idea here
         # is that it provides a consistent interface, but also a safety check
@@ -771,7 +785,7 @@ class Client(object):
             return
 
         # If we do support limits, then we use them to do a series of smaller,
-        # probobly slightly slower, but more reliable reads.
+        # probably slightly slower, but more reliable reads.
         limit = 1024 * 1024 * 1024
         while True:
             r = self._request_url(
@@ -995,6 +1009,51 @@ class Client(object):
         r = self._request_url('POST', '/instances/' + instance_ref + '/agent/get',
                               data={'path': path})
         return self._await_agentop(r.json())
+
+    def _instance_await_sanity_check(self, inst):
+        if not inst:
+            raise InstanceWillNeverBeReady('instance missing')
+
+        if inst['state'] == 'deleted':
+            raise InstanceWillNeverBeReady('instance deleted')
+
+        if inst['state'].endswith('-error'):
+            raise InstanceWillNeverBeReady('instance in error state')
+
+        if 'sf-agent' not in inst['side_channels']:
+            raise InstanceWillNeverBeReady(
+                'instance does not have agent side channel')
+
+    def instance_await_agent_ready(self, instance_ref, max_wait=600):
+        inst = self.get_instance(instance_ref)
+        self._instance_await_sanity_check(inst)
+
+        start_time = time.time()
+        while time.time() - start_time < max_wait:
+            if inst['state'] == 'created':
+                break
+            time.sleep(10)
+
+            inst = self.get_instance(instance_ref)
+            self._instance_await_sanity_check(inst)
+
+        self._instance_await_sanity_check(inst)
+        if inst['state'] != 'created':
+            raise InstanceWillNeverBeReady(
+                'instance never reached created state')
+
+        while time.time() - start_time < max_wait:
+            if inst['agent_state'].startswith('ready'):
+                break
+            time.sleep(10)
+
+            inst = self.get_instance(instance_ref)
+            self._instance_await_sanity_check(inst)
+
+        self._instance_await_sanity_check(inst)
+        if inst['agent_state'].startswith('ready'):
+            raise InstanceWillNeverBeReady(
+                'instance never reached ready agent state')
 
     def get_namespaces(self):
         r = self._request_url('GET', '/auth/namespaces')
