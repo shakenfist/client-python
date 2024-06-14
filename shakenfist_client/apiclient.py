@@ -634,7 +634,7 @@ class Client(object):
                 'hot plugging an interface into an instance.')
 
         r = self._request_url('POST', '/instances/' + instance_ref +
-                              '/interfaces', body=netdesc)
+                              '/interfaces', data={'network': netdesc})
         return r.json()
 
     def delete_instance(self, instance_ref, namespace=None, async_request=False):
