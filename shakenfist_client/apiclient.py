@@ -79,6 +79,14 @@ class UnknownAsyncStrategy(APIException):
     ...
 
 
+class AgentAwaitTimeout(Exception):
+    ...
+
+
+class AgentCommandError(Exception):
+    ...
+
+
 STATUS_CODES_TO_ERRORS = {
     400: RequestMalformedException,
     401: UnauthenticatedException,
@@ -1010,51 +1018,6 @@ class Client(object):
                               data={'path': path})
         return self._await_agentop(r.json())
 
-    def _instance_await_sanity_check(self, inst):
-        if not inst:
-            raise InstanceWillNeverBeReady('instance missing')
-
-        if inst['state'] == 'deleted':
-            raise InstanceWillNeverBeReady('instance deleted')
-
-        if inst['state'].endswith('-error'):
-            raise InstanceWillNeverBeReady('instance in error state')
-
-        if 'sf-agent' not in inst['side_channels']:
-            raise InstanceWillNeverBeReady(
-                'instance does not have agent side channel')
-
-    def instance_await_agent_ready(self, instance_ref, max_wait=600):
-        inst = self.get_instance(instance_ref)
-        self._instance_await_sanity_check(inst)
-
-        start_time = time.time()
-        while time.time() - start_time < max_wait:
-            if inst['state'] == 'created':
-                break
-            time.sleep(10)
-
-            inst = self.get_instance(instance_ref)
-            self._instance_await_sanity_check(inst)
-
-        self._instance_await_sanity_check(inst)
-        if inst['state'] != 'created':
-            raise InstanceWillNeverBeReady(
-                'instance never reached created state')
-
-        while time.time() - start_time < max_wait:
-            if inst['agent_state'].startswith('ready'):
-                break
-            time.sleep(10)
-
-            inst = self.get_instance(instance_ref)
-            self._instance_await_sanity_check(inst)
-
-        self._instance_await_sanity_check(inst)
-        if inst['agent_state'].startswith('ready'):
-            raise InstanceWillNeverBeReady(
-                'instance never reached ready agent state')
-
     def get_namespaces(self):
         r = self._request_url('GET', '/auth/namespaces')
         return r.json()
@@ -1185,6 +1148,190 @@ class Client(object):
                 'fetching a CA certificate for the cluster.')
         r = self._request_url('GET', '/admin/cacert')
         return r.text
+
+    # The following methods are convenience wrappers around methods above.
+    def _instance_await_sanity_check(self, inst):
+        if not inst:
+            raise InstanceWillNeverBeReady('instance missing')
+
+        if inst['state'] == 'deleted':
+            raise InstanceWillNeverBeReady('instance deleted')
+
+        if inst['state'].endswith('-error'):
+            raise InstanceWillNeverBeReady('instance in error state')
+
+        if 'sf-agent' not in inst['side_channels']:
+            raise InstanceWillNeverBeReady(
+                'instance does not have agent side channel')
+
+    def await_agent_ready(self, instance_ref, timeout=600):
+        inst = self.get_instance(instance_ref)
+        self._instance_await_sanity_check(inst)
+
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            if inst['state'] == 'created':
+                break
+            time.sleep(5)
+
+            inst = self.get_instance(instance_ref)
+            self._instance_await_sanity_check(inst)
+
+        self._instance_await_sanity_check(inst)
+        if inst['state'] != 'created':
+            raise InstanceWillNeverBeReady(
+                'instance never reached created state')
+
+        while time.time() - start_time < timeout:
+            if inst['agent_state'].startswith('ready'):
+                break
+            time.sleep(5)
+
+            inst = self.get_instance(instance_ref)
+            self._instance_await_sanity_check(inst)
+
+        self._instance_await_sanity_check(inst)
+        if inst['agent_state'].startswith('ready'):
+            raise InstanceWillNeverBeReady(
+                'instance never reached ready agent state')
+
+    def await_agent_command(self, instance_uuid, command, exit_codes=[0],
+                            ignore_stderr=False, timeout=120):
+        start_time = time.time()
+        self.await_agent_ready(instance_uuid, timeout=timeout)
+        op = self.instance_execute(instance_uuid, command)
+
+        # Wait for the operation to be complete
+        while time.time() - start_time < timeout:
+            if op['state'] == 'complete':
+                break
+            time.sleep(5)
+            op = self.get_agent_operation(op['uuid'])
+
+        if op['state'] != 'complete':
+            i = self.get_instance(instance_uuid)
+            raise AgentAwaitTimeout(
+                'Agent execute operation %s did not complete within specified timeout\n'
+                '    Timeout: %s\n'
+                '    Operation state: %s\n'
+                '    Agent state: %s'
+                % (timeout, op['uuid'], op['state'], i['agent_state']))
+
+        # Wait for the operation to have results.
+        while time.time() - start_time < timeout:
+            if op['results'] != {}:
+                break
+            time.sleep(5)
+            op = self.get_agent_operation(op['uuid'])
+
+        exit_code = op['results']['0']['return-code']
+        stderr = op['results']['0']['stderr']
+        self.assertNotEqual({}, op['results'])
+
+        if not ignore_stderr:
+            raise AgentCommandError(f'stderr was "{stderr}", not empty')
+
+        # Short results are directing in the operation, longer results are in
+        # a blob.
+        if 'stdout' in op['results']['0']:
+            data = op['results']['0']['stdout']
+        else:
+            self.assertTrue('stdout_blob' in op['results']['0'])
+
+            # Wait for the blob containing stdout to be ready
+            b = self.get_blob(op['results']['0']['stdout_blob'])
+            while time.time() - start_time < timeout:
+                if b['state'] == 'created':
+                    break
+                time.sleep(5)
+                b = self.get_blob(op['results']['0']['stdout_blob'])
+
+            # Fetch the blob containing stdout
+            data = ''
+            for chunk in self.get_blob_data(op['results']['0']['stdout_blob']):
+                data += chunk.decode('utf-8')
+
+        if exit_code not in exit_codes:
+            raise AgentCommandError(f'unexpected exit code {exit_code}')
+
+        return exit_code, data
+
+    def await_agent_fetch(self, instance_uuid, path, timeout=120):
+        start_time = time.time()
+        self.await_agent_ready(instance_uuid, timeout=timeout)
+        op = self.instance_get(instance_uuid, path)
+
+        # Wait for the operation to be complete
+        while time.time() - start_time < 120:
+            if op['state'] == 'complete':
+                break
+            time.sleep(5)
+            op = self.get_agent_operation(op['uuid'])
+
+        if op['state'] != 'complete':
+            self.fail('Agent execute operation %s did not complete in 120 seconds (%s)'
+                      % (op['uuid'], op['state']))
+
+        # Wait for the operation to have results
+        while time.time() - start_time < 60:
+            if op['results'] != {}:
+                break
+            time.sleep(5)
+            op = self.get_agent_operation(op['uuid'])
+
+        self.assertNotEqual({}, op['results'])
+        self.assertTrue('content_blob' in op['results']['0'])
+
+        # Wait for the blob containing the file to be ready
+        b = self.get_blob(op['results']['0']['content_blob'])
+        while time.time() - start_time < 60:
+            if b['state'] == 'created':
+                break
+            time.sleep(5)
+            b = self.get_blob(op['results']['0']['content_blob'])
+
+        # Fetch the blob containing the file
+        data = ''
+        for chunk in self.get_blob_data(op['results']['0']['content_blob']):
+            data += chunk.decode('utf-8')
+
+        return data
+
+    def await_agent_add_instance_interface(
+            self, instance_uuid, netdesc, timeout=120):
+        self.await_agent_ready(instance_uuid, timeout=timeout)
+        netdesc = self.add_instance_interface(instance_uuid, netdesc)
+
+        # I don't love this sleep, but we don't have any other way to test
+        # whether the command has executed on the hypervisor right now.
+        time.sleep(5)
+
+        # List interfaces
+        _, data = self._await_agent_command(instance_uuid, 'ip -json link')
+
+        if not netdesc['macaddr'] in data:
+            raise AgentCommandError(
+                'interface not found in `ip -json link` output:\n%s' % data)
+
+        # Determine which interface the new one was added as
+        d = json.loads(data)
+        new_interface = None
+        for i in d:
+            if i['address'] == netdesc['macaddr']:
+                new_interface = i['ifname']
+        if not new_interface:
+            raise AgentCommandError('interface not found')
+
+        # DHCP on the new interface
+        _, data = self._await_agent_command(
+            instance_uuid, f'dhclient {new_interface}')
+
+        # Ensure interface picked up the right address
+        _, data = self._await_agent_command(
+            instance_uuid, f'ip -json -o addr show dev {new_interface}')
+        d = json.loads(data)
+        if d[0]['addr_info'][0]['local'] != netdesc['ipv4']:
+            raise AgentCommandError('wrong address assigned to interface')
 
 
 def get_user_agent():
