@@ -800,18 +800,38 @@ def instance_await(ctx, instance_ref=None):
 
 @instance.command(name='add-interface', help='Add a network interface to an instance')
 @click.argument('instance_ref', type=click.STRING, shell_complete=_get_instances)
+@click.option('-n', '--network', type=click.STRING,
+              shell_complete=util.get_networks,
+              help='A short form definition of a network to attach.')
 @click.option('-f', '--floated', type=click.STRING, shell_complete=util.get_networks,
               help='As for --networkspec, but with implied float of the interface.')
 @click.option('-N', '--networkspec', type=click.STRING,
               help='A long form "networkspec" definition of a network to attach.')
 @click.pass_context
-def instance_add_interface(ctx, instance_ref=None, floated=None, networkspec=None):
-    if floated and networkspec:
+def instance_add_interface(ctx, instance_ref=None, floated=None, network=None,
+                           networkspec=None):
+    requested = 0
+    if network:
+        requested += 1
+    if floated:
+        requested += 1
+    if networkspec:
+        requested += 1
+
+    if requested == 0:
+        print('Please specify an interface.')
+        sys.exit(1)
+    if requested > 1:
         print('Please specify only one interface.')
         sys.exit(1)
 
     netdesc = None
-    if floated:
+    if network:
+        netdesc = {
+            'network_uuid': network
+        }
+
+    elif floated:
         network_uuid, address = _parse_spec(floated)
         netdesc = {
             'network_uuid': network_uuid,
@@ -822,7 +842,7 @@ def instance_add_interface(ctx, instance_ref=None, floated=None, networkspec=Non
         if address:
             netdesc['address'] = address
 
-    if networkspec:
+    elif networkspec:
         network_uuid, address = _parse_spec(networkspec)
         netdesc = {
             'network_uuid': network_uuid,
