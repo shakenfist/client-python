@@ -1191,7 +1191,7 @@ class Client(object):
             self._instance_await_sanity_check(inst)
 
         self._instance_await_sanity_check(inst)
-        if inst['agent_state'].startswith('ready'):
+        if not inst['agent_state'].startswith('ready'):
             raise InstanceWillNeverBeReady(
                 'instance never reached ready agent state')
 
