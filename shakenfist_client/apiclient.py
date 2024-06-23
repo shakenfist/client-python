@@ -1226,7 +1226,8 @@ class Client(object):
 
         exit_code = op['results']['0']['return-code']
         stderr = op['results']['0']['stderr']
-        self.assertNotEqual({}, op['results'])
+        if not op['results']:
+            raise AgentCommandError('operation returned no results')
 
         if not ignore_stderr:
             raise AgentCommandError(f'stderr was "{stderr}", not empty')
@@ -1236,7 +1237,8 @@ class Client(object):
         if 'stdout' in op['results']['0']:
             data = op['results']['0']['stdout']
         else:
-            self.assertTrue('stdout_blob' in op['results']['0'])
+            if 'stdout_blob' not in op['results']['0']:
+                raise AgentCommandError('operation returned no stdout blob')
 
             # Wait for the blob containing stdout to be ready
             b = self.get_blob(op['results']['0']['stdout_blob'])
@@ -1279,8 +1281,10 @@ class Client(object):
             time.sleep(5)
             op = self.get_agent_operation(op['uuid'])
 
-        self.assertNotEqual({}, op['results'])
-        self.assertTrue('content_blob' in op['results']['0'])
+        if not op['results']:
+            raise AgentCommandError('operation returned no results')
+        if 'content_blob' not in op['results']['0']:
+            raise AgentCommandError('operation returned no content blob')
 
         # Wait for the blob containing the file to be ready
         b = self.get_blob(op['results']['0']['content_blob'])
