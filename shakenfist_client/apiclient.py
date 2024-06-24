@@ -1229,7 +1229,7 @@ class Client(object):
         if not op['results']:
             raise AgentCommandError('operation returned no results')
 
-        if not ignore_stderr:
+        if not ignore_stderr and stderr:
             raise AgentCommandError(f'stderr was "{stderr}", not empty')
 
         # Short results are directing in the operation, longer results are in
