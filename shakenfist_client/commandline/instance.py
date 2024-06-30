@@ -288,6 +288,23 @@ def _parse_spec(spec):
     return spec.split('@')
 
 
+def _parse_detailed_netspec(spec):
+    defn = {}
+    for elem in spec.split(','):
+        s = elem.split('=')
+        if len(s) != 2:
+            print('Error in network specification - should be key=value: %s' % elem)
+            return
+
+        value = s[1]
+        if s[0] == 'float':
+            value = s[1] in ['true', 'True']
+
+        defn[s[0]] = value
+
+    return defn
+
+
 # TODO(mikal): this misses the detailed version of disk and network specs, as well
 # as guidance on how to use the video command line. We need to rethink how we're
 # doing this, as its getting pretty long.
@@ -435,20 +452,7 @@ def instance_create(ctx, name=None, cpus=None, memory=None, network=None, floate
         if address:
             netdefs[-1]['address'] = address
     for n in networkspec:
-        defn = {}
-        for elem in n.split(','):
-            s = elem.split('=')
-            if len(s) != 2:
-                print('Error in network specification -'
-                      ' should be key=value: %s' % elem)
-                return
-
-            value = s[1]
-            if s[0] == 'float':
-                value = s[1] in ['true', 'True']
-
-            defn[s[0]] = value
-        netdefs.append(defn)
+        netdefs.append(_parse_detailed_netspec(n))
 
     video = {'model': 'cirrus', 'memory': 16384}
     if videospec:
@@ -827,8 +831,10 @@ def instance_add_interface(ctx, instance_ref=None, floated=None, network=None,
 
     netdesc = None
     if network:
+        network_uuid, address = _parse_spec(network)
         netdesc = {
-            'network_uuid': network
+            'network_uuid': network_uuid,
+            'address': address
         }
 
     elif floated:
@@ -843,13 +849,6 @@ def instance_add_interface(ctx, instance_ref=None, floated=None, network=None,
             netdesc['address'] = address
 
     elif networkspec:
-        network_uuid, address = _parse_spec(networkspec)
-        netdesc = {
-            'network_uuid': network_uuid,
-            'macaddress': None,
-            'model': 'virtio'
-        }
-        if address:
-            netdesc['address'] = address
+        netdesc = _parse_detailed_netspec(networkspec)
 
     ctx.obj['CLIENT'].add_instance_interface(instance_ref, netdesc)
