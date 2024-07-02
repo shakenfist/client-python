@@ -512,39 +512,44 @@ def instance(ctx, args):
         except InstanceCreationException as e:
             return _result(False, True, None, error_msg=str(e))
 
-        if not needs_replacement:
-            return _result(False, False, i)
+        if needs_replacement:
+            if i:
+                start_time = time.time()
+                while time.time() - start_time < 180:
+                    try:
+                        _log('Attempt deletion...')
+                        client.delete_instance(
+                            identifier, namespace=input.get('namespace'))
+                        time.sleep(1)
+                        i = client.get_instance(
+                            identifier, namespace=input.get('namespace'))
+                        if not i or i['state'] == 'deleted':
+                            break
+                    except apiclient.ResourceNotFoundException:
+                        i = {}
+                        break
 
-        start_time = time.time()
-        while time.time() - start_time < 180:
-            try:
-                _log('Attempt deletion...')
-                client.delete_instance(
-                    identifier, namespace=input.get('namespace'))
-                time.sleep(1)
-                n = client.get_instance(
-                    identifier, namespace=input.get('namespace'))
-                if not n or n['state'] == 'deleted':
-                    break
-            except apiclient.ResourceNotFoundException:
-                i = {}
-                break
+            if i and i['state'] != 'deleted':
+                _log('Repeated attempts at deletion failed')
+                return _result(
+                    True, True, None,
+                    error_msg={'error': ('Deletion of instance for update failed.')})
 
-        if i and i['state'] != 'deleted':
-            _log('Repeated attempts at deletion failed')
-            return _result(
-                True, True, None,
-                error_msg={'error': ('Deletion of instance for update failed.')})
+            i = client.create_instance(*instance_args, **instance_kwargs)
 
-        i = client.create_instance(*instance_args, **instance_kwargs)
-        if input.get('await', False):
+        if not input.get('await', False):
+            _log('Not awaiting instance')
+        else:
+            _log('Awaiting instance')
             try:
                 client.await_instance_create(i['uuid'])
             except Exception as e:
                 _log('Waiting for instance failed: %s' % e)
-                return _result(True, True, client.get_instance(i['uuid']))
+                return _result(
+                    needs_replacement, True, None,
+                    error_msg={'error': 'Waiting for instance failed: %s' % e})
 
-        return _result(True, False, client.get_instance(i['uuid']))
+        return _result(needs_replacement, False, client.get_instance(i['uuid']))
 
     if state == 'absent':
         try:
