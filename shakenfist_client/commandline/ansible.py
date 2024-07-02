@@ -537,7 +537,14 @@ def instance(ctx, args):
                 error_msg={'error': ('Deletion of instance for update failed.')})
 
         i = client.create_instance(*instance_args, **instance_kwargs)
-        return _result(True, False, i)
+        if input.get('await', False):
+            try:
+                client.await_instance_create(i['uuid'])
+            except Exception as e:
+                _log('Waiting for instance failed: %s' % e)
+                return _result(True, True, client.get_instance(i['uuid']))
+
+        return _result(True, False, client.get_instance(i['uuid']))
 
     if state == 'absent':
         try:

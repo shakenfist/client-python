@@ -34,6 +34,10 @@ class InstanceWillNeverBeReady(Exception):
     ...
 
 
+class TimeoutException(Exception):
+    ...
+
+
 class APIException(Exception):
     def __init__(self, message, method, url, status_code, text):
         self.message = message
@@ -1150,6 +1154,25 @@ class Client(object):
         return r.text
 
     # The following methods are convenience wrappers around methods above.
+    def await_instance_create(self, instance_uuid):
+        # Wait up to 5 minutes for the instance to be created. On a slow
+        # morning it can take over 2 minutes to download a Ubuntu image.
+        start_time = time.time()
+        final = False
+        while time.time() - start_time < 5 * 60:
+            i = self.get_instance(instance_uuid)
+            if i['state'] in ['created', 'error']:
+                final = True
+                break
+            time.sleep(5)
+
+        if i['state'].endswith('-error'):
+            raise InstanceWillNeverBeReady(
+                'failed to start (marked as error state, %s)' % i)
+
+        if not final:
+            raise TimeoutException('not created in a reasonable time')
+
     def _instance_await_sanity_check(self, inst):
         if not inst:
             raise InstanceWillNeverBeReady('instance missing')
