@@ -1154,12 +1154,12 @@ class Client(object):
         return r.text
 
     # The following methods are convenience wrappers around methods above.
-    def await_instance_create(self, instance_uuid):
+    def await_instance_create(self, instance_uuid, timeout=600):
         # Wait up to 5 minutes for the instance to be created. On a slow
         # morning it can take over 2 minutes to download a Ubuntu image.
         start_time = time.time()
         final = False
-        while time.time() - start_time < 5 * 60:
+        while time.time() - start_time < timeout:
             i = self.get_instance(instance_uuid)
             if i['state'] in ['created', 'error']:
                 final = True
@@ -1171,7 +1171,8 @@ class Client(object):
                 'failed to start (marked as error state, %s)' % i)
 
         if not final:
-            raise TimeoutException('not created in a reasonable time')
+            raise TimeoutException(
+                'not created within %d second timeout' % timeout)
 
     def _instance_await_sanity_check(self, inst):
         if not inst:
