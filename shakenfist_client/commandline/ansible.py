@@ -540,9 +540,10 @@ def instance(ctx, args):
         if not input.get('await', False):
             _log('Not awaiting instance')
         else:
-            _log('Awaiting instance')
+            _log('Awaiting instance %s' % i['uuid'])
             try:
-                client.await_instance_create(i['uuid'])
+                client.await_instance_create(
+                    i['uuid'], timeout=input.get('await_timeout', 600))
             except Exception as e:
                 _log('Waiting for instance failed: %s' % e)
                 return _result(
