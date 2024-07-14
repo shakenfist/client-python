@@ -442,6 +442,15 @@ def _check_instance(client, existing, input):
                 key == 'force_placement'
             instance_kwargs[key] = input[key]
 
+    # What about optional values which might be a list of strings?
+    for key in ['side_channels']:
+        values = input.get(key, [])
+        if existing.get(key) != values:
+            _log('Instance dirty: %s has changed' % key)
+            dirty = True
+
+        instance_kwargs[key] = values
+
     # Does the instance definition specify optional single boolean values?
     for key in ['uefi', 'secureboot']:
         if key in input:
