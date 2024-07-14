@@ -125,6 +125,12 @@ jobs:
               '. /etc/sf/sfrc; for i in `seq 100`; do sf-client --async=continue network create background-$i 10.$i.0.0/24 > /dev/null; echo -n "."; done'
           echo ""
 
+      - name: Make the traces directory
+        run: |
+          . ${GITHUB_WORKSPACE}/ci-environment.sh
+          ssh -i /srv/github/id_ci -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              ubuntu@${primary} "sudo mkdir -p /srv/ci/traces; sudo chown -R ubuntu:ubuntu /srv/ci/traces"
+
       - name: Run functional tests
         timeout-minutes: 120
         run: |
