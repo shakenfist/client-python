@@ -834,8 +834,12 @@ def instance_add_interface(ctx, instance_ref=None, floated=None, network=None,
         network_uuid, address = _parse_spec(network)
         netdesc = {
             'network_uuid': network_uuid,
-            'address': address
+            'macaddress': None,
+            'model': 'virtio',
+            'float': False
         }
+        if address:
+            netdesc['address'] = address
 
     elif floated:
         network_uuid, address = _parse_spec(floated)
