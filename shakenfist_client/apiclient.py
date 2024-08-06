@@ -1278,7 +1278,8 @@ class Client(object):
                 data += chunk.decode('utf-8')
 
         if exit_code not in exit_codes:
-            raise AgentCommandError(f'unexpected exit code {exit_code}')
+            raise AgentCommandError(
+                f'unexpected exit code {exit_code} with stderr {stderr}')
 
         return exit_code, data
 
