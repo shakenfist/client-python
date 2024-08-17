@@ -3,6 +3,7 @@
 import click
 import json
 import logging
+from pkg_resources import iter_entry_points
 from shakenfist_utilities import logs
 import sys
 
@@ -14,7 +15,6 @@ from shakenfist_client.commandline import backup
 from shakenfist_client.commandline import blob
 from shakenfist_client.commandline import instance
 from shakenfist_client.commandline import interface
-from shakenfist_client.commandline import k3s
 from shakenfist_client.commandline import label
 from shakenfist_client.commandline import namespace
 from shakenfist_client.commandline import network
@@ -127,9 +127,13 @@ cli.add_command(backup.backup)
 cli.add_command(blob.blob)
 cli.add_command(instance.instance)
 cli.add_command(interface.interface)
-cli.add_command(k3s.k3s)
 cli.add_command(label.label)
 cli.add_command(namespace.namespace)
 cli.add_command(network.network)
 cli.add_command(node.node)
 cli.add_command(version)
+
+
+# Load plugins
+for ep in iter_entry_points(group='shakenfist_client.plugin', name=None):
+    ep.load()(cli)
