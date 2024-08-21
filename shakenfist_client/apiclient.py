@@ -1296,8 +1296,9 @@ class Client(object):
             op = self.get_agent_operation(op['uuid'])
 
         if op['state'] != 'complete':
-            self.fail('Agent execute operation %s did not complete in 120 seconds (%s)'
-                      % (op['uuid'], op['state']))
+            raise AgentCommandError(
+                f'Agent execute operation {op["uuid"]} did not complete in '
+                f'120 seconds with state {op["state"]}')
 
         # Wait for the operation to have results
         while time.time() - start_time < 60:
