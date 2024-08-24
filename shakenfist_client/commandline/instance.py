@@ -750,11 +750,11 @@ def instance_execute(ctx, instance_ref=None, commandline=None):
 
     joiner = joiner_template % {'file': 'stdout'}
     print(format_string %
-          ('stdout', joiner.join(op['results']['0']['stdout'].split('\n'))))
+          ('stdout', joiner.join(op['results']['0'].get('stdout', '').split('\n'))))
 
     joiner = joiner_template % {'file': 'stderr'}
     print(format_string %
-          ('stderr', joiner.join(op['results']['0']['stderr'].split('\n'))))
+          ('stderr', joiner.join(op['results']['0'].get('stderr', '').split('\n'))))
 
 
 @instance.command(name='download', help='Download a file from an instance')
