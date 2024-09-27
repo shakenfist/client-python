@@ -2,6 +2,7 @@ import hashlib
 import os
 import sys
 import time
+
 from tqdm import tqdm
 
 from shakenfist_client import apiclient
@@ -60,7 +61,7 @@ def show_interface(ctx, interface, out=[]):
     else:
         print('metadata,key,value')
         for key in metadata:
-            print('metadata,%s,%s' % (key, metadata[key]))
+            print('metadata,{},{}'.format(key, metadata[key]))
 
 
 def get_client(ctx):
@@ -116,7 +117,7 @@ def upload_artifact_with_progress(client, name, source, source_url,
     total = 0
     retries = 0
     with tqdm(total=st.st_size, unit='B', unit_scale=True,
-              desc='Uploading %s to %s' % (upload['uuid'], upload['node'])) as pbar:
+              desc='Uploading {} to {}'.format(upload['uuid'], upload['node'])) as pbar:
         with open(source, 'rb') as f:
             d = f.read(buffer_size)
             while d:

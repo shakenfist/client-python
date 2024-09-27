@@ -3,9 +3,10 @@ import errno
 import json
 import logging
 import os
-from pbr.version import VersionInfo
-import requests
 import time
+
+import requests
+from pbr.version import VersionInfo
 
 
 LOG = logging.getLogger(__name__)
@@ -124,7 +125,7 @@ def _correct_blob_indexes(d):
     return d
 
 
-class Client(object):
+class Client:
     def __init__(self, base_url=None, verbose=False,
                  namespace=None, key=None, sync_request_timeout=300,
                  suppress_configuration_lookup=False, logger=None,
@@ -174,7 +175,7 @@ class Client(object):
                                 key = d['key']
                             if not base_url:
                                 base_url = d['apiurl']
-                except IOError as e:
+                except OSError as e:
                     if e.errno != errno.EACCES:
                         raise
 
@@ -226,12 +227,12 @@ class Client(object):
         end_time = time.time()
 
         LOG.debug('-------------------------------------------------------')
-        LOG.debug('API client requested: %s %s' % (method, url))
+        LOG.debug('API client requested: {} {}'.format(method, url))
         for hkey in h:
             if hkey == 'Authorization' and h[hkey]:
                 LOG.debug('Header: Authorization = Bearer *****')
             else:
-                LOG.debug('Header: %s = %s' % (hkey, h[hkey]))
+                LOG.debug('Header: {} = {}'.format(hkey, h[hkey]))
         if data:
             if request_body_is_binary:
                 LOG.debug('Data: ...%d bytes of binary omitted...' % len(data))
@@ -245,7 +246,7 @@ class Client(object):
 
         self.most_recent_request_id = r.headers.get('X-Request-ID')
         for hkey in r.headers:
-            LOG.debug('Header: %s = %s' % (hkey, r.headers[hkey]))
+            LOG.debug('Header: {} = {}'.format(hkey, r.headers[hkey]))
 
         if not stream and r.text:
             if response_body_is_binary:
