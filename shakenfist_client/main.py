@@ -1,11 +1,11 @@
 # Copyright 2020 Michael Still
-
-import click
 import json
 import logging
+import sys
+
+import click
 from pkg_resources import iter_entry_points
 from shakenfist_utilities import logs
-import sys
 
 from shakenfist_client import apiclient
 from shakenfist_client.commandline import admin
