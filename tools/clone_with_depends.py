@@ -1,8 +1,9 @@
 #!/usr/bin/python3
+import os
+import re
+import sys
 
 import git
-import re
-import os
 
 # Clone all the required repositories, with handling for dependencies between
 # them. This script assumes it is being called by a github action and that
@@ -44,8 +45,13 @@ def main():
     primary_repo_path = os.path.join(
         os.environ['GITHUB_WORKSPACE'], os.environ['SF_PRIMARY_REPO'])
     primary_repo = git.Repo(primary_repo_path)
-    primary_base_reference = os.environ.get('GITHUB_BASE_REF')
 
+    if len(sys.argv) > 1:
+        primary_base_reference = sys.argv[1]
+    else:
+        primary_base_reference = os.environ.get('GITHUB_BASE_REF')
+
+    print('Run with arguments: %s' % sys.argv)
     print('Primary repo: %s' % os.environ['SF_PRIMARY_REPO'])
     print('Primary commit: %s' % os.environ['SF_HEAD_SHA'])
     print('Primary base reference: %s' % primary_base_reference)

@@ -851,15 +851,24 @@ class Client(object):
                                     })
         return r.json()
 
-    def allocate_network(self, netblock, provide_dhcp, provide_nat, name, namespace=None):
-        r = self._request_url('POST', '/networks',
-                              data={
-                                  'netblock': netblock,
-                                  'provide_dhcp': provide_dhcp,
-                                  'provide_nat': provide_nat,
-                                  'name': name,
-                                  'namespace': namespace
-                              })
+    def allocate_network(self, netblock, provide_dhcp, provide_nat, name,
+                         namespace=None, provide_dns=False):
+        data = {
+            'netblock': netblock,
+            'provide_dhcp': provide_dhcp,
+            'provide_nat': provide_nat,
+            'name': name,
+            'namespace': namespace
+        }
+
+        if provide_dns and not self.check_capability('provide-dns'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'virtual network DNS services.')
+        if provide_dns:
+            data['provide_dns'] = provide_dns
+
+        r = self._request_url('POST', '/networks', data=data)
         n = r.json()
 
         deadline = time.time() + _calculate_async_deadline(self.async_strategy)
