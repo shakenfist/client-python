@@ -227,12 +227,12 @@ class Client:
         end_time = time.time()
 
         LOG.debug('-------------------------------------------------------')
-        LOG.debug('API client requested: {} {}'.format(method, url))
+        LOG.debug(f'API client requested: {method} {url}')
         for hkey in h:
             if hkey == 'Authorization' and h[hkey]:
                 LOG.debug('Header: Authorization = Bearer *****')
             else:
-                LOG.debug('Header: {} = {}'.format(hkey, h[hkey]))
+                LOG.debug(f'Header: {hkey} = {h[hkey]}')
         if data:
             if request_body_is_binary:
                 LOG.debug('Data: ...%d bytes of binary omitted...' % len(data))
@@ -246,7 +246,7 @@ class Client:
 
         self.most_recent_request_id = r.headers.get('X-Request-ID')
         for hkey in r.headers:
-            LOG.debug('Header: {} = {}'.format(hkey, r.headers[hkey]))
+            LOG.debug(f'Header: {hkey} = {r.headers[hkey]}')
 
         if not stream and r.text:
             if response_body_is_binary:

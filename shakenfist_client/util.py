@@ -61,7 +61,7 @@ def show_interface(ctx, interface, out=[]):
     else:
         print('metadata,key,value')
         for key in metadata:
-            print('metadata,{},{}'.format(key, metadata[key]))
+            print(f'metadata,{key},{metadata[key]}')
 
 
 def get_client(ctx):

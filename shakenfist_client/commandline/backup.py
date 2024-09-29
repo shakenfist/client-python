@@ -1,11 +1,12 @@
-import click
 import http
 import json
 import os
-import requests
 import sys
-from tqdm import tqdm
+
+import click
+import requests
 import urllib3
+from tqdm import tqdm
 
 
 @click.group(help='Backup commands')
@@ -49,7 +50,7 @@ def artifact_list(ctx, destination=None):
             total = 0
 
             with tqdm(total=size, unit='B', unit_scale=True,
-                      desc='Downloading %s to %s' % (blob, blob_path)) as pbar:
+                      desc='Downloading {} to {}'.format(blob, blob_path)) as pbar:
                 with open(blob_path, 'wb') as f:
                     while size != total:
                         this_attempt = 0
