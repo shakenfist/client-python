@@ -1,7 +1,7 @@
-import click
 import json
 import sys
 
+import click
 
 from shakenfist_client import util
 
