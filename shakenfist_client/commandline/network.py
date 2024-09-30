@@ -82,7 +82,7 @@ def _show_network(ctx, n):
     else:
         print('metadata,key,value')
         for key in metadata:
-            print('metadata,%s,%s' % (key, metadata[key]))
+            print('metadata,{},{}'.format(key, metadata[key]))
 
 
 @network.command(name='show', help='Show a network')
