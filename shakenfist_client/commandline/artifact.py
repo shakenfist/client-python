@@ -1,12 +1,13 @@
-import click
 import datetime
 import http
 import json
+import sys
+
+import click
+import requests
+import urllib3
 from prettytable import PrettyTable
 from tqdm import tqdm
-import requests
-import sys
-import urllib3
 
 from shakenfist_client import util
 
@@ -97,7 +98,7 @@ def artifact_download(ctx, artifact_ref=None, destination=None):
     done = False
 
     with tqdm(total=size, unit='B', unit_scale=True,
-              desc='Downloading %s to %s' % (artifact_ref, destination)) as pbar:
+              desc='Downloading {} to {}'.format(artifact_ref, destination)) as pbar:
         with open(destination, 'wb') as f:
             while not done:
                 bytes_in_attempt = 0
@@ -157,7 +158,7 @@ def artifact_list(ctx, node=None):
         for meta in artifacts:
             versions = '%d of %d' % (len(meta.get('blobs', [])),
                                      meta.get('index', 'unknown'))
-            print('%s,%s,%s,%s,%s,%s,%s' % (
+            print('{},{},{},{},{},{},{}'.format(
                 meta.get('uuid', ''), meta.get('namespace', ''),
                 meta.get('artifact_type', ''),
                 meta.get('source_url', ''), versions,
@@ -213,7 +214,7 @@ def artifact_show(ctx, artifact_ref=None):
     else:
         print('metadata,key,value')
         for key in metadata:
-            print('metadata,%s,%s' % (key, metadata[key]))
+            print('metadata,{},{}'.format(key, metadata[key]))
 
     if ctx.obj['OUTPUT'] == 'simple':
         print('version,size,instance')

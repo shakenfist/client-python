@@ -1,14 +1,14 @@
 import json
-import mock
-import testtools
+from unittest import mock
 
+import testtools
 
 from shakenfist_client import apiclient
 
 
 class ApiClientTestCase(testtools.TestCase):
     def setUp(self):
-        super(ApiClientTestCase, self).setUp()
+        super().setUp()
 
         self.request_url = mock.patch(
             'shakenfist_client.apiclient.Client._request_url')
@@ -368,7 +368,7 @@ class GetNodesMock():
 
 class ApiClientGetNodesTestCase(testtools.TestCase):
     def setUp(self):
-        super(ApiClientGetNodesTestCase, self).setUp()
+        super().setUp()
 
         self.capabilities = mock.patch(
             'shakenfist_client.apiclient.Client._collect_capabilities')
