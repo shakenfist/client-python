@@ -1,7 +1,8 @@
-import click
 import json
 import sys
 import time
+
+import click
 
 from shakenfist_client import apiclient
 
