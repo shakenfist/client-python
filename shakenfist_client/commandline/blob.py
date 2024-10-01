@@ -1,8 +1,9 @@
-import click
-from collections import defaultdict
 import json
-from prettytable import PrettyTable
 import sys
+from collections import defaultdict
+
+import click
+from prettytable import PrettyTable
 
 
 GiB = 1024 * 1024 * 1024
@@ -95,7 +96,7 @@ def blob_list(ctx, node=None, audit=False):
             else:
                 reference_count = meta.get('reference_count', 0)
 
-            print('%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s' % (
+            print('{},{},{},{},{},{},{},{},{},{},{}'.format(
                 meta.get('uuid', ''),
                 meta.get('state', ''),
                 '%.02f' % (int(meta.get('size', 0)) / GiB),
@@ -144,11 +145,11 @@ def _blob_show(ctx, b):
     else:
         print('metadata,key,value')
         for key in metadata:
-            print('metadata,%s,%s' % (key, metadata[key]))
+            print('metadata,{},{}'.format(key, metadata[key]))
 
     print()
     for t in b.get('transcodes'):
-        print('Transcoded as %s at %s' % (t, b['transcodes'][t]))
+        print('Transcoded as {} at {}'.format(t, b['transcodes'][t]))
 
     print()
     for i in b.get('instances'):

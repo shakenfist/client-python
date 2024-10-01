@@ -1,8 +1,6 @@
 #!/usr/bin/python
-
 # A simple Shaken Fist ansible module, with thanks to
 # https://blog.toast38coza.me/custom-ansible-module-hello-world/
-
 import json
 
 from ansible.module_utils.basic import AnsibleModule
