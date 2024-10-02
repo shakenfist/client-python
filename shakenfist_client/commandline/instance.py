@@ -80,7 +80,7 @@ def instance_list(ctx, all=False):
         for i in insts:
             ifaces = []
             for interface in _get_interfaces(ctx, i):
-                iface = f'{interface['order']}:{interface.get('ipv4', 'None')}'
+                iface = f"{interface['order']}:{interface.get('ipv4', 'None')}"
                 if interface.get('floating'):
                     iface += '({})'.format(interface['floating'])
                 ifaces.append(iface)
