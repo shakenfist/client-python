@@ -1,14 +1,16 @@
 import base64
-import click
 import datetime
 import json
 import os
-from prettytable import PrettyTable
 import subprocess
 import sys
 import tempfile
 
-from shakenfist_client import apiclient, util
+import click
+from prettytable import PrettyTable
+
+from shakenfist_client import apiclient
+from shakenfist_client import util
 
 
 @click.group(help='Instance commands')
@@ -37,7 +39,7 @@ def _convert_metadata(key, value):
         try:
             value = json.loads(value)
         except json.decoder.JSONDecodeError as e:
-            print('Reserved metadata keys (%s) must contain valid JSON: %s' % (
+            print('Reserved metadata keys ({}) must contain valid JSON: {}'.format(
                   ', '.join(RESERVED_TAGS), e))
             raise e
     return value
@@ -60,10 +62,10 @@ def instance_list(ctx, all=False):
         for i in insts:
             ifaces = []
             for interface in _get_interfaces(ctx, i):
-                iface = '%s: %s' % (interface['order'],
+                iface = '{}: {}'.format(interface['order'],
                                     interface.get('ipv4', 'No address assigned'))
                 if interface.get('floating'):
-                    iface += ' (%s)' % (interface['floating'],)
+                    iface += ' ({})'.format(interface['floating'])
                 ifaces.append(iface)
 
             x.add_row([i['uuid'], i['name'], i['namespace'],
@@ -78,10 +80,10 @@ def instance_list(ctx, all=False):
         for i in insts:
             ifaces = []
             for interface in _get_interfaces(ctx, i):
-                iface = '%s:%s' % (interface['order'],
+                iface = '{}:{}'.format(interface['order'],
                                    interface.get('ipv4', 'None'))
                 if interface.get('floating'):
-                    iface += '(%s)' % (interface['floating'],)
+                    iface += '({})'.format(interface['floating'])
                 ifaces.append(iface)
 
             print('%s,%s,%s,%s,%s,%s,%s,%s,%s'
@@ -197,13 +199,13 @@ def _show_instance(ctx, i, include_snapshots=False, include_agentoperations=Fals
         print()
         print('disk_spec,type,bus,size,base')
         for d in i['disk_spec']:
-            print('disk_spec,%s,%s,%s,%s' % (
+            print('disk_spec,{},{},{},{}'.format(
                 d['type'], d['bus'], d['size'], d['base']))
 
     if ctx.obj['OUTPUT'] == 'simple':
         print()
         print('video,model,memory')
-        print('video,%s,%s' % (i['video']['model'], i['video']['memory']))
+        print('video,{},{}'.format(i['video']['model'], i['video']['memory']))
 
     print()
     if ctx.obj['OUTPUT'] == 'pretty':
@@ -215,7 +217,7 @@ def _show_instance(ctx, i, include_snapshots=False, include_agentoperations=Fals
     else:
         print('metadata,key,value')
         for key in metadata:
-            print('metadata,%s,%s' % (key, metadata[key]))
+            print('metadata,{},{}'.format(key, metadata[key]))
 
     print()
     if ctx.obj['OUTPUT'] == 'pretty':
@@ -651,7 +653,7 @@ def instance_vdiconsole(ctx, instance_ref=None):
         with open(temp_name, 'w') as f:
             f.write(ctx.obj['CLIENT'].get_vdi_console_helper(instance_ref))
 
-        p = subprocess.run('remote-viewer %s %s' % (debug, temp_name), shell=True)
+        p = subprocess.run('remote-viewer {} {}'.format(debug, temp_name), shell=True)
         if ctx.obj['VERBOSE']:
             print('Remote viewer process exited with %d return code'
                   % p.returncode)

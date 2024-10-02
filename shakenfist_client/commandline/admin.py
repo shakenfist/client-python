@@ -29,7 +29,7 @@ def lock_list(ctx):
     elif ctx.obj['OUTPUT'] == 'simple':
         print('lock,pid,node,operation')
         for ref, meta in locks.items():
-            print('%s,%s,%s,%s' % (ref, meta['pid'], meta['node'],
+            print('{},{},{},{}'.format(ref, meta['pid'], meta['node'],
                                    meta.get('operation')))
 
     elif ctx.obj['OUTPUT'] == 'json':
