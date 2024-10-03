@@ -1,12 +1,13 @@
-import click
 import datetime
 import json
-from prettytable import PrettyTable
 import sys
 import time
 
-from shakenfist_client.apiclient import IncapableException
+import click
+from prettytable import PrettyTable
+
 from shakenfist_client import util
+from shakenfist_client.apiclient import IncapableException
 
 
 @click.group(help='Node commands')
@@ -66,7 +67,7 @@ def node_show(ctx, node=None):
     else:
         print('metadata,key,value')
         for key in metadata:
-            print('metadata,%s,%s' % (key, metadata[key]))
+            print('metadata,{},{}'.format(key, metadata[key]))
 
 
 def _roles_to_string(n):
@@ -111,7 +112,7 @@ def node_list(ctx):
             release = n.get('release')
             if not release:
                 release = n.get('version')
-            print('%s,%s,%s,%s,%s,%s' % (
+            print('{},{},{},{},{},{}'.format(
                 n['name'], n['ip'], n['lastseen'], n.get('state', ''),
                 roles, release))
 
@@ -174,7 +175,7 @@ def node_resources(ctx, node=None):
     elif ctx.obj['OUTPUT'] == 'simple':
         print('node,resource,value')
         for resource in event.get('extra'):
-            print('%s,%s,%s' % (node, resource, event['extra']['resource']))
+            print('{},{},{}'.format(node, resource, event['extra']['resource']))
 
     elif ctx.obj['OUTPUT'] == 'json':
         print(json.dumps(event.get('extra'), indent=4, sort_keys=True))
