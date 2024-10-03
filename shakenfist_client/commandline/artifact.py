@@ -98,7 +98,7 @@ def artifact_download(ctx, artifact_ref=None, destination=None):
     done = False
 
     with tqdm(total=size, unit='B', unit_scale=True,
-              desc='Downloading {} to {}'.format(artifact_ref, destination)) as pbar:
+              desc=f'Downloading {artifact_ref} to {destination}') as pbar:
         with open(destination, 'wb') as f:
             while not done:
                 bytes_in_attempt = 0
@@ -214,7 +214,7 @@ def artifact_show(ctx, artifact_ref=None):
     else:
         print('metadata,key,value')
         for key in metadata:
-            print('metadata,{},{}'.format(key, metadata[key]))
+            print(f'metadata,{key},{metadata[key]}')
 
     if ctx.obj['OUTPUT'] == 'simple':
         print('version,size,instance')

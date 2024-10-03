@@ -216,7 +216,7 @@ def _show_instance(ctx, i, include_snapshots=False, include_agentoperations=Fals
     else:
         print('metadata,key,value')
         for key in metadata:
-            print('metadata,{},{}'.format(key, metadata[key]))
+            print(f'metadata,{key},{metadata[key]}')
 
     print()
     if ctx.obj['OUTPUT'] == 'pretty':
@@ -652,7 +652,7 @@ def instance_vdiconsole(ctx, instance_ref=None):
         with open(temp_name, 'w') as f:
             f.write(ctx.obj['CLIENT'].get_vdi_console_helper(instance_ref))
 
-        p = subprocess.run('remote-viewer {} {}'.format(debug, temp_name), shell=True)
+        p = subprocess.run(f'remote-viewer {debug} {temp_name}', shell=True)
         if ctx.obj['VERBOSE']:
             print('Remote viewer process exited with %d return code'
                   % p.returncode)

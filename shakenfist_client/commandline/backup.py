@@ -50,7 +50,7 @@ def artifact_list(ctx, destination=None):
             total = 0
 
             with tqdm(total=size, unit='B', unit_scale=True,
-                      desc='Downloading {} to {}'.format(blob, blob_path)) as pbar:
+                      desc=f'Downloading {blob} to {blob_path}') as pbar:
                 with open(blob_path, 'wb') as f:
                     while size != total:
                         this_attempt = 0
