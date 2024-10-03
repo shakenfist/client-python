@@ -1,7 +1,8 @@
-import click
 import json
-from prettytable import PrettyTable
 import sys
+
+import click
+from prettytable import PrettyTable
 
 from shakenfist_client import util
 
@@ -37,7 +38,7 @@ def namespace_list(ctx):
     elif ctx.obj['OUTPUT'] == 'simple':
         print('name,state')
         for n in namespaces:
-            print('%s,%s' % (n['name'], n['state']))
+            print('{},{}'.format(n['name'], n['state']))
 
     elif ctx.obj['OUTPUT'] == 'json':
         print(json.dumps(namespaces, indent=4, sort_keys=True))
@@ -114,7 +115,7 @@ def namespace_show(ctx, namespace=None):
         if 'metadata' in ns and ns['metadata']:
             print('metadata,key,value')
             for key in ns['metadata']:
-                print('metadata,%s,%s' % (key, ns['metadata'][key]))
+                print('metadata,{},{}'.format(key, ns['metadata'][key]))
             print()
 
         if 'trust' in ns and ns['trust']:
