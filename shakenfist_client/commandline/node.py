@@ -67,7 +67,7 @@ def node_show(ctx, node=None):
     else:
         print('metadata,key,value')
         for key in metadata:
-            print('metadata,{},{}'.format(key, metadata[key]))
+            print(f'metadata,{key},{metadata[key]}')
 
 
 def _roles_to_string(n):

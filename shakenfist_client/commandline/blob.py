@@ -145,7 +145,7 @@ def _blob_show(ctx, b):
     else:
         print('metadata,key,value')
         for key in metadata:
-            print('metadata,{},{}'.format(key, metadata[key]))
+            print(f'metadata,{key},{metadata[key]}')
 
     print()
     for t in b.get('transcodes'):
