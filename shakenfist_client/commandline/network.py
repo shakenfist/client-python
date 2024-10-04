@@ -6,6 +6,7 @@ from prettytable import PrettyTable
 import sys
 
 
+from shakenfist_client.apiclient import IncapableException
 from shakenfist_client import util
 
 
@@ -68,6 +69,7 @@ def _show_network(ctx, n):
     print(format_string % ('netblock', n['netblock']))
     print(format_string % ('provide dhcp', n['provide_dhcp']))
     print(format_string % ('provide nat', n['provide_nat']))
+    print(format_string % ('provide DNS', n.get('provide_dns', False)))
     print(format_string % ('floating gateway', n['floating_gateway']))
     print(format_string % ('namespace', n['namespace']))
     print(format_string % ('state', n['state']))
@@ -93,25 +95,42 @@ def network_show(ctx, network_ref=None):
 
 
 @network.command(name='create',
-                 help=('Create a network.\n\n'
-                       'NAME:             The name of the network\n'
-                       'NETBLOCK:         The IP address block to use, as a CIDR\n'
-                       '                  range -- for example 192.168.200.1/24\n'
-                       '--dhcp/--no-dhcp: Should this network have DHCP?\n'
-                       '--nat/--no-nat:   Should this network be able to access'
-                       '                  the Internet via NAT?\n'
-                       '\n'
-                       '--namespace:     If you are an admin, you can create this object in a\n'
-                       '                 different namespace.\n'))
+                 help="""
+    Create a network.
+
+\b
+    NAME:             The name of the network
+    NETBLOCK:         The IP address block to use, as a CIDR range -- for
+                      example 192.168.200.1/24
+    --dhcp/--no-dhcp: Should this network have DHCP?
+    --nat/--no-nat:   Should this network be able to access the Internet via
+                      NAT?
+    --dns/--no-dns:   Should this network provide DNS entries for instances on
+                      the virtual network?
+
+\b
+    --namespace:      If you are an admin, you can create this object in a
+                      different namespace.""")
 @click.argument('name', type=click.STRING)
 @click.argument('netblock', type=click.STRING)
 @click.option('--dhcp/--no-dhcp', default=True)
 @click.option('--nat/--no-nat', default=True)
+@click.option('--dns/--no-dns', default=False)
 @click.option('--namespace', type=click.STRING)
 @click.pass_context
-def network_create(ctx, netblock=None, name=None, dhcp=None, nat=None, namespace=None):
-    _show_network(ctx, ctx.obj['CLIENT'].allocate_network(
-        netblock, dhcp, nat, name, namespace))
+def network_create(ctx, netblock=None, name=None, dhcp=None, nat=None, dns=None,
+                   namespace=None):
+    try:
+        _show_network(ctx, ctx.obj['CLIENT'].allocate_network(
+            netblock, dhcp, nat, name, namespace, provide_dns=dns))
+    except IncapableException as e:
+        if dns:
+            # You asked for DNS and we can't do that
+            raise e
+
+        # Otherwise, we can just go with the previous default of no DNS.
+        _show_network(ctx, ctx.obj['CLIENT'].allocate_network(
+            netblock, dhcp, nat, name, namespace))
 
 
 @network.command(name='delete-all', help='Delete ALL networks')
