@@ -155,6 +155,7 @@ def network(ctx, args):
         netblock = input.get('netblock')
         nat = input.get('nat', True)
         dhcp = input.get('dhcp', True)
+        dns = input.get('dns', False)
 
         try:
             n = client.get_network(
@@ -165,9 +166,20 @@ def network(ctx, args):
         if not n:
             # Network doesn't exist, so just make it
             _log('Network did not exist')
-            n = client.allocate_network(netblock, nat, dhcp, name,
-                                        namespace=input.get('namespace'))
-            return _result(True, False, n)
+            try:
+                n = client.allocate_network(netblock, nat, dhcp, name,
+                                            namespace=input.get('namespace'),
+                                            provide_dns=dns)
+                return _result(True, False, n)
+            except apiclient.IncapableException:
+                if dns:
+                    return _result(
+                        False, True, None,
+                        error_msg={'error': 'This cloud does not support DNS services'})
+
+                n = client.allocate_network(netblock, nat, dhcp, name,
+                                            namespace=input.get('namespace'))
+                return _result(True, False, n)
 
         # Check if the network has a changed specification
         dirty = False
@@ -187,6 +199,9 @@ def network(ctx, args):
             dirty = True
         if 'nat' in input and n['provide_nat'] != nat:
             _log('Network dirty, nat changed')
+            dirty = True
+        if 'dns' in input and n['provide_dns'] != dns:
+            _log('Network dirty, DNS changed')
             dirty = True
 
         if dirty:
@@ -218,9 +233,20 @@ def network(ctx, args):
                 _log('Deleted')
 
             _log('Creating network')
-            n = client.allocate_network(
-                netblock, nat, dhcp, name, namespace=input.get('namespace'))
-            return _result(True, False, n)
+            try:
+                n = client.allocate_network(netblock, nat, dhcp, name,
+                                            namespace=input.get('namespace'),
+                                            provide_dns=dns)
+                return _result(True, False, n)
+            except apiclient.IncapableException:
+                if dns:
+                    return _result(
+                        False, True, None,
+                        error_msg={'error': 'This cloud does not support DNS services'})
+
+                n = client.allocate_network(netblock, nat, dhcp, name,
+                                            namespace=input.get('namespace'))
+                return _result(True, False, n)
 
         # It already exists as we expect
         _log('Call was noop')
