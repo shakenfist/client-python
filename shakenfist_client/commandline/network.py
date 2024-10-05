@@ -6,8 +6,8 @@ import sys
 import click
 from prettytable import PrettyTable
 
-from shakenfist_client.apiclient import IncapableException
 from shakenfist_client import util
+from shakenfist_client.apiclient import IncapableException
 
 
 @click.group(help='Network commands')
