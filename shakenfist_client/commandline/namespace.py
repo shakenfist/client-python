@@ -213,9 +213,13 @@ def namespace_delete_metadata(ctx, namespace=None, key=None):
 
 
 @namespace.command(name='add-trust',
-                   help=('allow another namespace access to our resources.\n\n'
-                         'NAMESPACE:          The name of the namespace\n'
-                         'TRUSTED_NAMESPACE:  The name of the namespace to grant access to\n'))
+                   help="""
+Allow another namespace access to our resources.
+
+\b
+NAMESPACE:          The name of the namespace.
+TRUSTED_NAMESPACE:  The name of the namespace to grant access to.
+""")
 @click.argument('namespace', type=click.STRING, shell_complete=_get_namespaces)
 @click.argument('trusted_namespace', type=click.STRING, shell_complete=_get_namespaces)
 @click.pass_context
@@ -226,9 +230,13 @@ def namespace_add_trust(ctx, namespace=None, trusted_namespace=None):
 
 
 @namespace.command(name='remove-trust',
-                   help=('remove another namespace\'s access to this namespace.\n\n'
-                         'NAMESPACE:          The name of the namespace\n'
-                         'TRUSTED_NAMESPACE:  The name of the namespace to remove access from\n'))
+                   help="""
+Remove another namespace\'s access to this namespace.
+
+\b
+NAMESPACE:          The name of the namespace.
+TRUSTED_NAMESPACE:  The name of the namespace to remove access from.
+""")
 @click.argument('namespace', type=click.STRING, shell_complete=_get_namespaces)
 @click.argument('trusted_namespace', type=click.STRING, shell_complete=_get_namespaces)
 @click.pass_context
