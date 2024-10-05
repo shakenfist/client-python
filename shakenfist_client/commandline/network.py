@@ -1,10 +1,10 @@
-import click
 import datetime
 import ipaddress
 import json
-from prettytable import PrettyTable
 import sys
 
+import click
+from prettytable import PrettyTable
 
 from shakenfist_client.apiclient import IncapableException
 from shakenfist_client import util
@@ -84,7 +84,7 @@ def _show_network(ctx, n):
     else:
         print('metadata,key,value')
         for key in metadata:
-            print('metadata,{},{}'.format(key, metadata[key]))
+            print(f'metadata,{key},{metadata[key]}')
 
 
 @network.command(name='show', help='Show a network')

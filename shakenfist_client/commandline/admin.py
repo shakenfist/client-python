@@ -1,5 +1,6 @@
-import click
 import json
+
+import click
 from prettytable import PrettyTable
 
 
