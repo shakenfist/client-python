@@ -96,21 +96,22 @@ def network_show(ctx, network_ref=None):
 
 @network.command(name='create',
                  help="""
-    Create a network.
+Create a network.
 
 \b
-    NAME:             The name of the network
-    NETBLOCK:         The IP address block to use, as a CIDR range -- for
-                      example 192.168.200.1/24
-    --dhcp/--no-dhcp: Should this network have DHCP?
-    --nat/--no-nat:   Should this network be able to access the Internet via
-                      NAT?
-    --dns/--no-dns:   Should this network provide DNS entries for instances on
-                      the virtual network?
+NAME:             The name of the network
+NETBLOCK:         The IP address block to use, as a CIDR range -- for
+                  example 192.168.200.1/24
+--dhcp/--no-dhcp: Should this network have DHCP?
+--nat/--no-nat:   Should this network be able to access the Internet via
+                  NAT?
+--dns/--no-dns:   Should this network provide DNS entries for instances on
+                  the virtual network?
 
 \b
-    --namespace:      If you are an admin, you can create this object in a
-                      different namespace.""")
+--namespace:      If you are an admin, you can create this object in a
+                  different namespace.
+""")
 @click.argument('name', type=click.STRING)
 @click.argument('netblock', type=click.STRING)
 @click.option('--dhcp/--no-dhcp', default=True)

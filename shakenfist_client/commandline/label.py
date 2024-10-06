@@ -7,9 +7,14 @@ def label():
 
 
 @label.command(name='update',
-               help=('Update a label to use a new blob.\n\n'
-                     'LABEL:     The name of the label to update\n\n'
-                     'BLOB_UUID: The UUID of the blob to use.'))
+               help="""
+Update a label to use a new blob.
+
+\b
+
+LABEL:     The name of the label to update
+BLOB_UUID: The UUID of the blob to use.
+""")
 @click.argument('label', type=click.STRING)
 @click.argument('blob_uuid', type=click.STRING)
 @click.pass_context

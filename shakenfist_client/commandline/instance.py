@@ -310,7 +310,8 @@ def _parse_detailed_netspec(spec):
 # as guidance on how to use the video command line. We need to rethink how we're
 # doing this, as its getting pretty long.
 @instance.command(name='create',
-                  help=("""Create an instance.
+                  help=("""
+Create an instance.
 
 \b
 NAME:   The name of the instance.
@@ -318,7 +319,8 @@ CPUS:   The number of vCPUs for the instance.
 MEMORY: The amount of RAM for the instance in MB.
 
 You may specify more than one disk or network for an instance, with the
-order you specify them being significant."""))
+order you specify them being significant.
+"""))
 @click.argument('name', type=click.STRING)
 @click.argument('cpus', type=click.INT)
 @click.argument('memory', type=click.INT)
