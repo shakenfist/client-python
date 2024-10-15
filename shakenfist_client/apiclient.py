@@ -193,11 +193,13 @@ class Client:
 
         self.cached_auth = None
 
+        self.session = requests.Session()
+
         # Request capabilities information
         self._collect_capabilities()
 
     def _collect_capabilities(self):
-        r = requests.request('GET', self.base_url, allow_redirects=True)
+        r = self.session.request('GET', self.base_url, allow_redirects=True)
         self.root_html = r.text
 
     def check_capability(self, capability_string):
@@ -222,8 +224,18 @@ class Client:
                 data = json.dumps(data, indent=4, sort_keys=True)
 
         start_time = time.time()
-        r = requests.request(method, url, data=data, headers=h,
-                             allow_redirects=allow_redirects, stream=stream)
+        try:
+            r = self.session.request(method, url, data=data, headers=h,
+                                     allow_redirects=allow_redirects,
+                                     stream=stream)
+
+        except requests.exceptions.ConnectionError:
+            # Session was terminated gracelessly, rebuild it
+            self.session = requests.Session()
+            r = self.session.request(method, url, data=data, headers=h,
+                                     allow_redirects=allow_redirects,
+                                     stream=stream)
+
         end_time = time.time()
 
         LOG.debug('-------------------------------------------------------')
