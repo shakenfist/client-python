@@ -811,7 +811,7 @@ class Client:
 
         # If we do support limits, then we use them to do a series of smaller,
         # probably slightly slower, but more reliable reads.
-        limit = 512 * 1024 * 1024
+        limit = 256 * 1024 * 1024
         while True:
             r = self._request_url(
                 'GET',
