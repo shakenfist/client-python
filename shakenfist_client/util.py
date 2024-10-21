@@ -86,20 +86,18 @@ def get_networks(ctx, args, incomplete):
 
 def checksum_with_progress(client, source):
     st = os.stat(source)
-
-    sha512_hash = hashlib.sha512()
     with open(source, 'rb') as f:
-        with tqdm(total=st.st_size, unit='B', unit_scale=True,
-                  desc='Calculate checksum') as pbar:
-            d = f.read(4096)
-            while d:
-                sha512_hash.update(d)
-                pbar.update(len(d))
-                d = f.read(4096)
-                while d:
-                    sha512_hash.update(d)
-                    pbar.update(len(d))
-                    d = f.read(4096)
+        return checksum_with_progress_from_file_like_object(
+            client, f, st.st_size)
+
+
+def checksum_with_progress_from_file_like_object(client, source_file_object, size):
+    sha512_hash = hashlib.sha512()
+    with tqdm(total=size, unit='B', unit_scale=True,
+              desc='Calculate checksum') as pbar:
+        while d := source_file_object.read(4096):
+            sha512_hash.update(d)
+            pbar.update(len(d))
 
     print('Searching for a pre-existing blob with this hash...')
     return client.get_blob_by_sha512(sha512_hash.hexdigest())
@@ -107,56 +105,58 @@ def checksum_with_progress(client, source):
 
 def upload_artifact_with_progress(client, name, source, source_url,
                                   namespace=None, shared=False):
-    print('None found, uploading')
-    buffer_size = 4096
     st = os.stat(source)
+    with open(source, 'rb') as f:
+        return upload_artifact_with_progress_file_like_object(
+            client, name, f, st.st_size, source_url, namespace=namespace,
+            shared=shared)
 
+
+def upload_artifact_with_progress_file_like_object(
+        client, name, source_file_object, size, source_url, namespace=None,
+        shared=False):
     # We do not use send_upload_file because we want to hook in our own
     # progress bar.
+    buffer_size = 4096
     upload = client.create_upload()
     total = 0
     retries = 0
-    with tqdm(total=st.st_size, unit='B', unit_scale=True,
+    with tqdm(total=size, unit='B', unit_scale=True,
               desc='Uploading {} to {}'.format(upload['uuid'], upload['node'])) as pbar:
-        with open(source, 'rb') as f:
-            d = f.read(buffer_size)
-            while d:
-                start_time = time.time()
-                try:
-                    remote_total = client.send_upload(upload['uuid'], d)
-                    retries = 0
-                except apiclient.APIException as e:
-                    retries += 1
+        while d := source_file_object.read(buffer_size):
+            start_time = time.time()
+            try:
+                remote_total = client.send_upload(upload['uuid'], d)
+                retries = 0
+            except apiclient.APIException as e:
+                retries += 1
 
-                    if retries > 5:
-                        print('Repeated failures, aborting')
-                        raise e
+                if retries > 5:
+                    print('Repeated failures, aborting')
+                    raise e
 
-                    print('Upload error, retrying...')
-                    client.truncate_upload(upload['uuid'], total)
-                    f.seek(total)
-                    buffer_size = 4096
-                    d = f.read(buffer_size)
-                    continue
+                print('Upload error, retrying...')
+                client.truncate_upload(upload['uuid'], total)
+                source_file_object.seek(total)
+                buffer_size = 4096
+                continue
 
-                # We aim for each chunk to take three seconds to transfer. This is
-                # partially because of the API timeout on the other end, but also
-                # so that uploads don't appear to stall over very slow networks.
-                # However, the buffer size must also always be between 4kb and 4mb.
-                elapsed = time.time() - start_time
-                buffer_size = int(buffer_size * 3.0 / elapsed)
-                buffer_size = max(4 * 1024, buffer_size)
-                buffer_size = min(2 * 1024 * 1024, buffer_size)
+            # We aim for each chunk to take three seconds to transfer. This is
+            # partially because of the API timeout on the other end, but also
+            # so that uploads don't appear to stall over very slow networks.
+            # However, the buffer size must also always be between 4kb and 4mb.
+            elapsed = time.time() - start_time
+            buffer_size = int(buffer_size * 3.0 / elapsed)
+            buffer_size = max(4 * 1024, buffer_size)
+            buffer_size = min(2 * 1024 * 1024, buffer_size)
 
-                sent = len(d)
-                total += sent
-                pbar.update(sent)
+            sent = len(d)
+            total += sent
+            pbar.update(sent)
 
-                if total != remote_total:
-                    print('Remote side has %d, we have sent %d!' % (remote_total, total))
-                    sys.exit(1)
-
-                d = f.read(buffer_size)
+            if total != remote_total:
+                print('Remote side has %d, we have sent %d!' % (remote_total, total))
+                sys.exit(1)
 
     print('Creating artifact')
     artifact = client.upload_artifact(
