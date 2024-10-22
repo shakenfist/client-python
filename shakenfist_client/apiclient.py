@@ -925,9 +925,33 @@ class Client:
                 'The API server version you are talking to does not support '
                 'routing addresses.')
 
-        r = self._request_url(
+        self._request_url(
             'DELETE', '/networks/' + network_ref + '/route' + '/' + address)
-        return r.json()
+
+    def update_network_dns_entry(self, network_ref, name, value):
+        if not self.check_capability('extra-dns-entries'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'managing extra DNS entries.')
+
+        self._request_url(
+            'POST', '/networks/' + network_ref + '/dns',
+            data={
+                'name': name,
+                'value': value
+            })
+
+    def delete_network_dns_entry(self, network_ref, name):
+        if not self.check_capability('extra-dns-entries'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'managing extra DNS entries.')
+
+        self._request_url(
+            'DELETE', '/networks/' + network_ref + '/dns',
+            data={
+                'name': name
+            })
 
     def get_node(self, node):
         if not self.check_capability('node-get'):
