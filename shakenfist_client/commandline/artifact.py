@@ -63,6 +63,7 @@ def artifact_upload(ctx, name=None, source=None, source_url=None, not_shared=Tru
         blob = util.checksum_with_progress(ctx.obj['CLIENT'], source)
 
     if not blob:
+        print('None found, uploading')
         artifact = util.upload_artifact_with_progress(
             ctx.obj['CLIENT'], name, source, source_url,
             namespace=namespace, shared=(not not_shared))
