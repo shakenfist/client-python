@@ -1325,7 +1325,11 @@ class Client:
 
         if exit_code not in exit_codes:
             raise AgentCommandError(
-                f'unexpected exit code {exit_code} with stderr {stderr}')
+                'Unexpected command failure:\n'
+                f'command: {command}\n'
+                f'exit code: {exit_code}\n'
+                f'stdout: {data}\n'
+                f'stderr: {stderr}')
 
         return exit_code, data
 
