@@ -48,13 +48,17 @@ def artifact_cache(ctx, image_url=None, not_shared=True, namespace=None):
 @click.option('--not-shared/--shared', is_flag=True, default=True,
               help=('If you are an admin, you can pass --shared to share an '
                     'artifact with others.'))
+@click.option('--checksum/--no-checksum', is_flag=True, default=True,
+              help='Generate a checksum and reuse an existing blob if one exists.')
 @click.option('--namespace', type=click.STRING,
               help=('If you are an admin, you can create this object in a '
                     'different namespace.'))
 @click.pass_context
 def artifact_upload(ctx, name=None, source=None, source_url=None, not_shared=True,
-                    namespace=None):
-    if not ctx.obj['CLIENT'].check_capability('blob-search-by-hash'):
+                    namespace=None, checksum=True):
+    if not checksum:
+        blob = None
+    elif not ctx.obj['CLIENT'].check_capability('blob-search-by-hash'):
         blob = None
     else:
         # We can cheat here -- if we already have a blob in the cluster with the
@@ -63,7 +67,7 @@ def artifact_upload(ctx, name=None, source=None, source_url=None, not_shared=Tru
         blob = util.checksum_with_progress(ctx.obj['CLIENT'], source)
 
     if not blob:
-        print('None found, uploading')
+        print('Uploading new blob')
         artifact = util.upload_artifact_with_progress(
             ctx.obj['CLIENT'], name, source, source_url,
             namespace=namespace, shared=(not not_shared))
