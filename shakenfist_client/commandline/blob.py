@@ -1,3 +1,4 @@
+import datetime
 import json
 import sys
 from collections import defaultdict
@@ -171,6 +172,35 @@ def blob_show(ctx, uuid=None):
         return
 
     _blob_show(ctx, blob)
+
+
+@blob.command(name='events', help='Display events for a blob')
+@click.argument('blob_uuid', type=click.STRING)
+@click.option('-t', '--type', help='The event type to return')
+@click.option('-l', '--limit', help='The maximum number of events to return')
+@click.pass_context
+def blob_events(ctx, blob_uuid=None, type=None, limit=None):
+    events = ctx.obj['CLIENT'].get_blob_events(
+        blob_uuid, event_type=type, limit=limit)
+    if ctx.obj['OUTPUT'] == 'pretty':
+        x = PrettyTable()
+        x.field_names = ['timestamp', 'node', 'duration', 'message', 'extra']
+        for e in events:
+            e['timestamp'] = datetime.datetime.fromtimestamp(e['timestamp'])
+            x.add_row([e['timestamp'], e['fqdn'], e['duration'], e['message'],
+                       e.get('extra', '')])
+        print(x)
+
+    elif ctx.obj['OUTPUT'] == 'simple':
+        print('timestamp,node,duration,message,extra')
+        for e in events:
+            e['timestamp'] = datetime.datetime.fromtimestamp(e['timestamp'])
+            print('%s,%s,%s,%s,%s'
+                  % (e['timestamp'], e['fqdn'], e['duration'], e['message'],
+                     e.get('extra', '')))
+
+    elif ctx.obj['OUTPUT'] == 'json':
+        print(json.dumps(events, indent=4, sort_keys=True))
 
 
 @blob.command(name='sha512', help='Find a blob with a matching checksum.')

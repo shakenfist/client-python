@@ -445,6 +445,13 @@ class Client:
     def get_artifact_events(self, artifact_ref, event_type=None, limit=None):
         return self._get_events('artifacts', artifact_ref, event_type, limit)
 
+    def get_blob_events(self, blob_uuid, event_type=None, limit=None):
+        if not self.check_capability('blob-events'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'lookup of events for a blob.')
+        return self._get_events('blobs', blob_uuid, event_type, limit)
+
     def get_instance_events(self, instance_ref, event_type=None, limit=None):
         return self._get_events('instances', instance_ref, event_type, limit)
 
@@ -1201,7 +1208,7 @@ class Client:
 
     # The following methods are convenience wrappers around methods above.
     def await_instance_create(self, instance_uuid, timeout=600):
-        # Wait up to 5 minutes for the instance to be created. On a slow
+        # Wait up to 10 minutes for the instance to be created. On a slow
         # morning it can take over 2 minutes to download a Ubuntu image.
         start_time = time.time()
         final = False
