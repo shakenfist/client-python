@@ -12,7 +12,7 @@ on:
 
 jobs:
   ansible-modules:
-    runs-on: self-hosted
+    runs-on: [self-hosted, vm]
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}
       cancel-in-progress: true

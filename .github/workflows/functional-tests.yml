@@ -15,7 +15,7 @@ on:
 
 jobs:
   lint:
-    runs-on: self-hosted
+    runs-on: [self-hosted, vm]
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-lint
       cancel-in-progress: true
@@ -35,7 +35,7 @@ jobs:
   # I don't want to waste a lot of CI resources on them.
   requirements-check:
     needs: lint
-    runs-on: self-hosted
+    runs-on: [self-hosted, vm]
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-requirements
       cancel-in-progress: true
@@ -55,7 +55,7 @@ jobs:
 
   build38:
     needs: lint
-    runs-on: self-hosted
+    runs-on: [self-hosted, vm]
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-build38
       cancel-in-progress: true
@@ -110,7 +110,7 @@ jobs:
             concurrency: 5
           },
         ]
-    runs-on: self-hosted
+    runs-on: [self-hosted, vm]
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-${{ matrix.os.job_name }}
       cancel-in-progress: true
@@ -317,7 +317,7 @@ jobs:
 
   ansible-modules:
     needs: requirements-check
-    runs-on: self-hosted
+    runs-on: [self-hosted, vm]
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-ansiblemodules
       cancel-in-progress: true
