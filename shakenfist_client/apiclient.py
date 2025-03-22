@@ -1237,7 +1237,7 @@ class Client:
         if inst['state'].endswith('-error'):
             raise InstanceWillNeverBeReady('instance in error state')
 
-        if 'sf-agent' not in inst['side_channels']:
+        if 'sf-agent2' not in inst['side_channels']:
             raise InstanceWillNeverBeReady(
                 'instance does not have agent side channel')
 
