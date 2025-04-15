@@ -348,44 +348,56 @@ jobs:
           path: /srv/github/artifacts/bundle.zip
 
   ansible-modules:
-    needs: requirements-check
     runs-on: [self-hosted, vm]
     concurrency:
-      group: ${{ github.workflow }}-${{ github.ref }}-ansiblemodules
+      group: ${{ github.workflow }}-${{ github.ref }}
       cancel-in-progress: true
 
+    # NOTE(mikal): git repos are checked out to /srv/github/_work/{repo}/{repo}
+    # which is available as GITHUB_WORKSPACE. You can find other environment
+    # variables at https://docs.github.com/en/actions/learn-github-actions/environment-variables
+
     steps:
-      - name: Set environment variables
-        run: |
-          echo "SF_HEAD_SHA=${{ github.event.pull_request.head.sha }}" >> $GITHUB_ENV
-          echo "SF_PRIMARY_REPO=$( echo ${{ github.repository }} | cut -f 2 -d '/' )" >> $GITHUB_ENV
-          echo "SHAKENFIST_NAMESPACE=$(hostname)" >> $GITHUB_ENV
-
-      - name: Checkout shakenfist
-        uses: actions/checkout@v4
-        with:
-          path: client-python
-          fetch-depth: 0
-
-      - name: Determine if there is any dependency between the repositories
-        run: |
-          python3 ${GITHUB_WORKSPACE}/client-python/tools/clone_with_depends.py
+      - name: Setup test environment
+        uses: shakenfist/actions/setup-test-environment@main
 
       - name: Build infrastructure
         run: |
-          cd ${GITHUB_WORKSPACE}/shakenfist
+          cd ${GITHUB_WORKSPACE}/actions
           ansible-playbook -i /home/debian/ansible-hosts \
               --extra-vars "identifier=${SHAKENFIST_NAMESPACE} source_path=${GITHUB_WORKSPACE} \
               base_image=sf://label/ci-images/debian-11 base_image_user=debian" \
-              deploy/ansible/ci-topology-slim-primary.yml
+              ansible/ci-topology-slim-primary.yml
+
+      - name: Log environmental configuration
+        run: |
+          echo "## ci-environment.sh"
+          cat ${GITHUB_WORKSPACE}/ci-environment.sh
+          echo
+          echo "## Environment variables"
+          echo "SF_HEAD_SHA = ${SF_HEAD_SHA}"
+          echo "SHAKENFIST_NAMESPACE = ${SHAKENFIST_NAMESPACE}"
+          echo "UPLOAD_TARGET = ${UPLOAD_TARGET}"
 
       - name: Copy CI tools to primary
         run: |
           . ${GITHUB_WORKSPACE}/ci-environment.sh
-          cd ${GITHUB_WORKSPACE}/shakenfist
+          cd ${GITHUB_WORKSPACE}/actions
           scp -i /srv/github/id_ci -o StrictHostKeyChecking=no \
               -o UserKnownHostsFile=/dev/null -rp tools \
-              debian@$primary:.
+              debian@${primary}:.
+
+          echo ""
+          echo "Copied tools:"
+          ssh -i /srv/github/id_ci -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              debian@${primary} "ls tools"
+
+      - name: Log github actions buffering status
+        run: |
+          . ${GITHUB_WORKSPACE}/ci-environment.sh
+          cd ${GITHUB_WORKSPACE}/actions
+          tools/run_remote ${primary} python3 tools/buffer.py
 
       - name: Run getsf installer on primary
         run: |
@@ -427,16 +439,16 @@ jobs:
         run: |
           . ${GITHUB_WORKSPACE}/ci-environment.sh
           ssh -i /srv/github/id_ci -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              debian@${primary} \
+              debian@$primary \
+              '. /etc/sf/sfrc; sf-client artifact upload ubuntu-1804 /srv/ci/ubuntu:18.04 --shared'
+          ssh -i /srv/github/id_ci -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              debian@$primary \
               '. /etc/sf/sfrc; sf-client artifact upload ubuntu-2004 /srv/ci/ubuntu:20.04 --shared'
           ssh -i /srv/github/id_ci -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              debian@${primary} \
+              debian@$primary \
               '. /etc/sf/sfrc; sf-client artifact upload debian-11 /srv/ci/debian:11 --shared'
           ssh -i /srv/github/id_ci -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              debian@${primary} \
-              '. /etc/sf/sfrc; sf-client artifact upload debian-12 /srv/ci/debian:12 --shared'
-          ssh -i /srv/github/id_ci -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              debian@${primary} \
+              debian@$primary \
               '. /etc/sf/sfrc; sf-client artifact upload cirros /srv/ci/cirros --shared'
 
       - name: Run ansible module tests
@@ -454,22 +466,33 @@ jobs:
         if: always()
         run: |
           . ${GITHUB_WORKSPACE}/ci-environment.sh
-          cd ${GITHUB_WORKSPACE}/shakenfist
-          tools/run_remote ${primary} "sudo bash tools/ci_log_checks.sh develop ansible-modules"
+          cd ${GITHUB_WORKSPACE}/actions
+          tools/run_remote ${primary} "sudo bash tools/ci_log_checks.sh develop ansible-module-tests"
 
-      - name: Check process CPU usage
+      # On Ubuntu 22.04 the cleaner is rated a CPU hog because of etcd cleanup
+      # cost. That's not really something we can control, so just ignore the CPU
+      # usage of that process instead.
+      - name: Check SF process CPU usage
         if: always()
         run: |
           . ${GITHUB_WORKSPACE}/ci-environment.sh
           ssh -i /srv/github/id_ci -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              debian@$primary '. /etc/sf/sfrc; sf-client node cpuhogs'
+              debian@${primary} '. /etc/sf/sfrc; sf-client node cpuhogs -t 1.25 --ignore sf_cleaner'
+
+      - name: Check for reasonable data rates
+        timeout-minutes: 5
+        if: always()
+        run: |
+          . ${GITHUB_WORKSPACE}/ci-environment.sh
+          cd ${GITHUB_WORKSPACE}/actions
+          tools/run_remote ${primary} "sudo bash tools/ci_event_checks.sh develop"
 
       - name: Fetch and tweak inventory
         if: always()
         run: |
           . ${GITHUB_WORKSPACE}/ci-environment.sh
           scp -i /srv/github/id_ci -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              debian@$primary:/etc/sf/inventory.yaml /srv/github/
+              debian@${primary}:/etc/sf/inventory.yaml /srv/github/
           sed -i 's|/root/.ssh|/home/debian/.ssh|g' /srv/github/inventory.yaml
 
           echo "====="
@@ -480,20 +503,29 @@ jobs:
         run: |
           set -x
 
+          # Fetch unit test tracing. Sometimes this isn't present if we failed
+          # super early in the CI job.
+          . ${GITHUB_WORKSPACE}/ci-environment.sh
+          mkdir -p /srv/github/bundle/
+          scp -i /srv/github/id_ci -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null -rp \
+              debian@${primary}:/srv/ci/traces \
+              /srv/github/bundle/ || true
+
           # We need the ssh key in the place ansible expects it to be, which isn't
           # true on the CI worker node.
           cp /srv/github/id_ci /home/debian/.ssh/id_rsa
           cp /srv/github/id_ci.pub /home/debian/.ssh/id_rsa.pub
-          chown -R debian.debian /home/debian/.ssh
 
           ansible-playbook -i /srv/github/inventory.yaml \
-              --extra-vars "base_image_user=debian ansible_ssh_common_args='-o StrictHostKeyChecking=no'" \
-              ${GITHUB_WORKSPACE}/shakenfist/deploy/ansible/ci-gather-logs.yml
+              --extra-vars "base_image_user=debian \
+              ansible_ssh_common_args='-o StrictHostKeyChecking=no'" \
+              ${GITHUB_WORKSPACE}/actions/ansible/ci-gather-logs.yml
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: bundle-ansible-modules.zip
+          name: bundle.zip
           retention-days: 90
           if-no-files-found: error
           path: /srv/github/artifacts/bundle.zip
