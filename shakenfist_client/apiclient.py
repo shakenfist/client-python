@@ -1287,12 +1287,14 @@ class Client:
 
         if op['state'] != 'complete':
             i = self.get_instance(instance_uuid)
+            cd = self.get_console_data(instance_uuid)
             raise AgentAwaitTimeout(
                 f'Agent execute operation {op["uuid"]} on instance {i["uuid"]} '
                 'did not complete within specified timeout\n'
                 f'    Timeout: {timeout}\n'
                 f'    Operation state: {op["state"]}\n'
-                f'    Agent state: {i["agent_state"]}')
+                f'    Agent state: {i["agent_state"]}\n\n'
+                f'    Console data: {cd}')
 
         # Wait for the operation to have results.
         while time.time() - start_time < timeout:
