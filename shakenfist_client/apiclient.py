@@ -1422,6 +1422,14 @@ class Client:
         if d[0]['addr_info'][0]['local'] != netdesc['ipv4']:
             raise AgentCommandError('wrong address assigned to interface')
 
+    def get_cluster_operation(self, op_type, op_uuid):
+        if not self.check_capability('get-cluster-operations'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'fetching a cluster operation.')
+        r = self._request_url('GET', f'/clusteroperations/{op_type}/{op_uuid}')
+        return r.json()
+
 
 def get_user_agent():
     sf_version = VersionInfo('shakenfist_client').version_string()
