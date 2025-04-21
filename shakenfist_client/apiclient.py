@@ -796,6 +796,16 @@ class Client:
         r = self._request_url('GET', '/blobs/' + blob_uuid)
         return r.json()
 
+    def get_blob_hash(self, blob_uuid, algorithm):
+        if not self.check_capability('blob-single-checksum'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'fetching the hash of a blob.')
+
+        r = self._request_url(
+            'GET', f'/blobs/{blob_uuid}/checksum/{algorithm}')
+        return r.json()
+
     def get_blob_by_sha512(self, sha512):
         r = self._request_url('GET', '/blob_checksums/sha512/' + sha512)
         return r.json()
