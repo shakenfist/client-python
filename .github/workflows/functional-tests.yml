@@ -450,8 +450,13 @@ jobs:
           . ${GITHUB_WORKSPACE}/ci-environment.sh
           scp -rp -i /srv/github/id_ci -o StrictHostKeyChecking=no \
               -o UserKnownHostsFile=/dev/null \
-              $source_path/shakenfist \
-              debian@$primary:shakenfist
+              ${GITHUB_WORKSPACE}/shakenfist \
+              debian@${primary}:shakenfist
+          scp -rp -i /srv/github/id_ci -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              ${GITHUB_WORKSPACE}/client-python \
+              debian@${primary}:client-python
+
           ssh -i /srv/github/id_ci -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
               debian@$primary "cd shakenfist/deploy; . /etc/sf/sfrc; bash ansiblemoduletests.sh"
 
