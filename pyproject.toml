@@ -1,0 +1,55 @@
+[build-system]
+requires = [
+    "setuptools>=61.0",
+    "setuptools_scm[simple]>=6.2",
+    "wheel",
+    "build",
+    "twine"
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shakenfist_client"
+dynamic = ["version"]
+
+description = "The command line client for Shaken Fist"
+readme = "README.md"
+requires-python = ">=3.7"
+dependencies = [
+    "click >= 8.0.0",           # bsd
+    "prettytable",              # bsd
+    "requests>=2.31.0",         # apache2
+    "requests_toolbelt>=1.0.0", # apache2
+    "chardet>=5.0.0",           # lgpl -- required by requests with this version pin
+    "urllib3>=1.26.14",         # mit -- required by requests with this version pin
+    "tqdm",                     # mit / mozilla
+    "shakenfist-utilities",     # apache2
+    "pbr",                      # apache2
+    "pyyaml",                   # mit
+]
+
+[project.urls]
+"Homepage" = "https://shakenfist.com"
+"Bug Tracker" = "https://github.com/shakenfist/shakenfist/issues"
+
+[project.scripts]
+sf-client = "shakenfist_client.main:cli"
+
+[tool.setuptools.package-data]
+shakenfist_client = [
+    "shakenfist_client/ansible/sf_*"
+]
+
+[tool.setuptools_scm]
+git_describe_command = "git describe --dirty --tags --match v* --first-parent"
+write_to = "shakenfist_client/_version.py"
+
+[project.optional-dependencies]
+test = [
+    "coverage",            # apache2
+    "testtools",           # mit
+    "mock",                # bsd
+    "stestr",              # apache2
+    "tox",                 # mit
+    "flake8",              # mit
+]
