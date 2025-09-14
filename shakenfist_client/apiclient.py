@@ -6,7 +6,7 @@ import os
 import time
 
 import requests
-from pbr.version import VersionInfo
+from pbr.packaging import get_version
 
 
 LOG = logging.getLogger(__name__)
@@ -1442,5 +1442,5 @@ class Client:
 
 
 def get_user_agent():
-    sf_version = VersionInfo('shakenfist_client').version_string()
+    sf_version = get_version('shakenfist_client')
     return 'Mozilla/5.0 (Ubuntu; Linux x86_64) Shaken Fist/%s' % sf_version

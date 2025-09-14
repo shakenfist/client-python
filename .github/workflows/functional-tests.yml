@@ -14,7 +14,7 @@ on:
       - mkdocs.yml
 
 jobs:
-  lint:
+  sanity_checks:
     runs-on: [self-hosted, vm]
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-lint
@@ -26,53 +26,36 @@ jobs:
         with:
           fetch-depth: 2
 
-      - name: Lint with flake8
+      - name: Upgrade base test tools
+        timeout-minutes: 5
         run: |
-          /usr/bin/tox -eflake8
+          python3 -mvenv /tmp/venv-test
+          . /tmp/venv-test/bin/activate
+          pip3 install uv
+          uv pip install tox tox-uv
 
-  # NOTE(mikal): we need this one early because renovate creates a lot of PRs
-  # where the proposed combination of dependencies doesn't actually install and
-  # I don't want to waste a lot of CI resources on them.
-  requirements-check:
-    needs: lint
-    runs-on: [self-hosted, vm]
-    concurrency:
-      group: ${{ github.workflow }}-${{ github.ref }}-requirements
-      cancel-in-progress: true
-
-    steps:
-      - name: Checkout client-python
-        uses: actions/checkout@v4
-        with:
-          path: client-python
-          fetch-depth: 0
+      - name: Lint with flake8
+        timeout-minutes: 5
+        run: |
+          . /tmp/venv-test/bin/activate
+          tox -eflake8
 
       - name: Attempt to install requirements
+        timeout-minutes: 5
         run: |
-          cd ${GITHUB_WORKSPACE}
-          python3 -mvenv venv
-          venv/bin/pip3 install -r client-python/requirements.txt
-
-  build38:
-    needs: lint
-    runs-on: [self-hosted, vm]
-    concurrency:
-      group: ${{ github.workflow }}-${{ github.ref }}-build38
-      cancel-in-progress: true
-
-    steps:
-      - name: Checkout code with two commits
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
+          python3 -mvenv /tmp/venv-reqs
+          . /tmp/venv-reqs/bin/activate
+          pip3 install uv
+          uv pip install -r pyproject.toml
 
       - name: Run python3 unit tests
         run: |
-          /usr/bin/tox -epy3
+          . /tmp/venv-test/bin/activate
+          tox -epy3
 
   functional_matrix:
     name: "${{ matrix.os.description }}"
-    needs: requirements-check
+    needs: sanity_checks
     strategy:
       fail-fast: false
       matrix:
