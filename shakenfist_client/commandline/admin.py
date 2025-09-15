@@ -50,7 +50,8 @@ admin.add_command(lock)
 def ansible_module_path(ctx):
     with importlib.resources.path('shakenfist_client', 'sf_instance') as data_path:
         package_root = os.path.dirname(os.path.dirname(data_path))
-        print(package_root)
+        ansible_path = os.path.join(package_root, 'shakenfist_client', 'ansible')
+        print(ansible_path)
 
 
 admin.add_command(ansible_module_path)
