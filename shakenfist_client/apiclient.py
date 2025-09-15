@@ -6,7 +6,6 @@ import os
 import time
 
 import requests
-from pbr.packaging import get_version
 
 
 LOG = logging.getLogger(__name__)
@@ -1441,6 +1440,19 @@ class Client:
         return r.json()
 
 
+VERSION_CACHE = None
+
+
 def get_user_agent():
-    sf_version = get_version('shakenfist_client')
-    return 'Mozilla/5.0 (Ubuntu; Linux x86_64) Shaken Fist/%s' % sf_version
+    global VERSION_CACHE
+
+    if not VERSION_CACHE:
+        try:
+            from shakenfist_client import _version
+            sf_version = VERSION_CACHE = _version.version
+        except ImportError as e:
+            sf_version = VERSION_CACHE = 'unreleased development version'
+    else:
+        sf_version = VERSION_CACHE
+
+    return f'Mozilla/5.0 (Ubuntu; Linux x86_64) Shaken Fist/{sf_version}'
