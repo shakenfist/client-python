@@ -1,8 +1,9 @@
 #!/bin/bash -e
 
-# Release a specified version of Shaken Fist
+# Updated to be pyproject.toml and the new python build system compatible.
+pip install -U build twine pkginfo
 
-echo "--- Determine verison number ---"
+echo "--- Determine version number ---"
 PREVIOUS=`git tag | egrep "^v" | sort -n | tail -1 | sed 's/^v//'`
 
 echo
@@ -12,14 +13,12 @@ read VERSION
 echo
 echo "--- Setup ---"
 set -x
-pip install --upgrade readme-renderer
-pip install --upgrade twine
 rm -rf build dist *.egg-info
 git pull || true
 set +x
 
 echo
-echo "--- Setup ---"
+echo "--- Version tagging ---"
 echo "Do you want to apply a git tag for this release (yes to tag)?"
 read TAG
 set -x
@@ -30,7 +29,7 @@ then
   git push origin "v$VERSION"
 fi
 
-python3 setup.py sdist bdist_wheel
+python3 -m build --wheel
 twine check dist/*
 set +x
 
