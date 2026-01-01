@@ -25,6 +25,7 @@ dependencies = [
     "tqdm",                     # mit / mozilla
     "shakenfist-utilities",     # apache2
     "pyyaml",                   # mit
+    "importlib-metadata; python_version < '3.9'",  # apache2
 ]
 
 [project.urls]

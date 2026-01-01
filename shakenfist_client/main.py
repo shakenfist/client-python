@@ -4,7 +4,10 @@ import logging
 import sys
 
 import click
-from pkg_resources import iter_entry_points
+try:
+    from importlib.metadata import entry_points
+except ImportError:
+    from importlib_metadata import entry_points
 from shakenfist_utilities import logs
 
 from shakenfist_client import apiclient
@@ -135,5 +138,13 @@ cli.add_command(version)
 
 
 # Load plugins
-for ep in iter_entry_points(group='shakenfist_client.plugin', name=None):
+eps = entry_points()
+# Python 3.10+
+if hasattr(eps, 'select'):
+    plugin_eps = eps.select(group='shakenfist_client.plugin')
+# Python 3.9 and earlier
+else:
+    plugin_eps = eps.get('shakenfist_client.plugin', [])
+
+for ep in plugin_eps:
     ep.load()(cli)
