@@ -1451,7 +1451,7 @@ def get_user_agent():
         try:
             from shakenfist_client import _version
             sf_version = VERSION_CACHE = _version.version
-        except ImportError as e:
+        except ImportError:
             sf_version = VERSION_CACHE = 'unreleased development version'
     else:
         sf_version = VERSION_CACHE
