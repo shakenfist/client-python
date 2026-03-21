@@ -208,7 +208,7 @@ jobs:
           setup="${setup} sf-client artifact upload"
           ssh -i /srv/github/id_ci -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
               ${{ matrix.os.base_image_user }}@${UPLOAD_TARGET} \
-              "${setup} debian-11 /srv/ci/debian:11 --shared --no-checksum"
+              "${setup} debian-12 /srv/ci/debian:12 --shared --no-checksum"
 
       - name: Make the traces directory
         run: |
@@ -444,18 +444,15 @@ jobs:
       - name: Import cached images
         run: |
           . ${GITHUB_WORKSPACE}/ci-environment.sh
-          ssh -i /srv/github/id_ci -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+
+          setup="export PATH=$PATH:/srv/shakenfist/venv/bin;"
+          setup="${setup} . /etc/sf/sfrc;"
+          setup="${setup} export SHAKENFIST_API_URL=http://localhost:13000;"
+          setup="${setup} /srv/shakenfist/venv/bin/sf-client artifact upload"
+          ssh -i /srv/github/id_ci -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
               debian@$primary \
-              '. /etc/sf/sfrc; sf-client artifact upload ubuntu-1804 /srv/ci/ubuntu:18.04 --shared'
-          ssh -i /srv/github/id_ci -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              debian@$primary \
-              '. /etc/sf/sfrc; sf-client artifact upload ubuntu-2004 /srv/ci/ubuntu:20.04 --shared'
-          ssh -i /srv/github/id_ci -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              debian@$primary \
-              '. /etc/sf/sfrc; sf-client artifact upload debian-11 /srv/ci/debian:11 --shared'
-          ssh -i /srv/github/id_ci -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              debian@$primary \
-              '. /etc/sf/sfrc; sf-client artifact upload cirros /srv/ci/cirros --shared'
+              "${setup} debian-12 /srv/ci/debian:12 --shared --no-checksum"
 
       - name: Run ansible module tests
         timeout-minutes: 120
