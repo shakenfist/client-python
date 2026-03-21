@@ -58,8 +58,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          body="Sorry @${{ github.event.comment.user.login }},"
+          body="${body} only repository collaborators with"
+          body="${body} write access can request a re-review."
           gh pr comment ${{ github.event.issue.number }} \
-            --body "Sorry @${{ github.event.comment.user.login }}, only repository collaborators with write access can request a re-review."
+            --body "${body}"
 
       - name: Checkout code
         if: steps.check_permission.outputs.authorized == 'true'

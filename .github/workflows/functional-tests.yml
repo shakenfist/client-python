@@ -50,7 +50,7 @@ jobs:
 
     steps:
       - name: Checkout code with two commits
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 2
 
@@ -343,7 +343,7 @@ jobs:
               ansible_ssh_common_args='-o StrictHostKeyChecking=no'" \
               ${GITHUB_WORKSPACE}/actions/ansible/ci-gather-logs.yml
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: bundle-functional-cluster-${{ matrix.os.job_name }}
@@ -531,7 +531,7 @@ jobs:
               ansible_ssh_common_args='-o StrictHostKeyChecking=no'" \
               ${GITHUB_WORKSPACE}/actions/ansible/ci-gather-logs.yml
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: bundle.zip

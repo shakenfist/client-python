@@ -53,18 +53,16 @@ jobs:
 
       - name: Install the github command line
         run: |
-          sudo apt update
-          sudo apt install -y curl
-          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
-          sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
-          sudo apt update
-          sudo apt install -y gh
+          bash ${GITHUB_WORKSPACE}/client-python/tools/install-gh-cli.sh
 
       - name: Install all our dependencies in a venv
         run: |
-          sudo DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=-1 -o Dpkg::Options::="--force-confold" -y \
-            install git python3-cffi python3-dev python3-grpcio python3-pip python3-venv python3-wheel
+          sudo DEBIAN_FRONTEND=noninteractive \
+            apt-get -o DPkg::Lock::Timeout=-1 \
+            -o Dpkg::Options::="--force-confold" -y \
+            install git python3-cffi python3-dev \
+            python3-grpcio python3-pip python3-venv \
+            python3-wheel
           cd ${GITHUB_WORKSPACE}/client-python
           python3 -m venv --system-site-packages ${RUNNER_TEMP}/venv
           . ${RUNNER_TEMP}/venv/bin/activate
@@ -80,33 +78,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.DEPENDENCIES_TOKEN }}
         run: |
           cd ${GITHUB_WORKSPACE}/client-python
-          datestamp=$(date "+%Y%m%d")
-          git checkout -b pin-dependencies-${datestamp}
-          for depver in $(${RUNNER_TEMP}/venv/bin/pip freeze --local); do
-            dep=$(echo ${depver} | sed 's/==.*//')
-            if [ $(egrep -ic "${dep}==" pyproject.toml) -lt 1 ]; then
-              sed -i "s/    # END_OF_INDIRECT_DEPS/    \"${depver}\",\n    # END_OF_INDIRECT_DEPS/" pyproject.toml
-            fi
-          done
-          # Did we find something new?
-          if [ $(git diff | wc -l) -gt 0 ]; then
-            echo "New dependencies detected..."
-            echo
-            git diff
-            git config --global user.name "shakenfist-bot"
-            git config --global user.email "bot@shakenfist.com"
-            git commit -a -m "Update pinned dependencies."
-            git push -f origin pin-dependencies-${datestamp}
-            echo
-            gh label create dependencies --color 0075ca \
-                --description "Pull requests that update a dependency file" \
-                2>/dev/null || true
-            gh pr create \
-                --assignee mikalstill \
-                --reviewer mikalstill \
-                --title "Update pinned dependencies." \
-                --body "New indirect dependencies were detected." \
-                --label dependencies
-            echo
-            echo "Pull request created."
-          fi
+          bash tools/pin-indirect-dependencies.sh \
+            "${RUNNER_TEMP}/venv/bin/pip" \
+            "${GITHUB_WORKSPACE}/client-python"
