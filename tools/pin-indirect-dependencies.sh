@@ -40,6 +40,9 @@ if [ "$(git diff | wc -l)" -gt 0 ]; then
     git config --global user.name "shakenfist-bot"
     git config --global user.email "bot@shakenfist.com"
     git commit -a -m "Update pinned dependencies."
+    # Use gh CLI to configure git credentials so push uses
+    # GITHUB_TOKEN (set to DEPENDENCIES_TOKEN by the workflow)
+    gh auth setup-git
     git push -f origin "pin-dependencies-${datestamp}"
     echo
     gh label create dependencies --color 0075ca \
