@@ -97,6 +97,10 @@ jobs:
         run: |
           TAG_NAME="${GITHUB_REF#refs/tags/}"
           echo "Signing tag: ${TAG_NAME}"
+          # Replace the unsigned tag with a Sigstore-signed one.
+          # Force-push is intentional: the original tag triggered
+          # this workflow but must be replaced with the signed
+          # version.
           git tag -d "${TAG_NAME}" || true
           git tag -s "${TAG_NAME}" -m "Release ${TAG_NAME}" "${GITHUB_SHA}"
           git push origin "${TAG_NAME}" --force

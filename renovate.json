@@ -10,7 +10,7 @@
   ],
   "packageRules": [
     {
-      "description": "Automatically merge minor and patch-level updates",
+      "description": "Group minor and patch-level updates",
       "matchUpdateTypes": [
         "minor",
         "patch",

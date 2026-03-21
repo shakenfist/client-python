@@ -25,7 +25,7 @@ git checkout -b "pin-dependencies-${datestamp}"
 
 for depver in $("${PIP_PATH}" freeze --local); do
     dep="${depver%%==*}"
-    if [ "$(grep -ic "${dep}==" pyproject.toml)" -lt 1 ]; then
+    if [ "$(grep -c "\"${dep}==" pyproject.toml)" -lt 1 ]; then
         sed -i \
             "s/    # END_OF_INDIRECT_DEPS/    \"${depver}\",\n    # END_OF_INDIRECT_DEPS/" \
             pyproject.toml
