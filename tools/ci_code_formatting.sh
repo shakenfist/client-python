@@ -10,29 +10,33 @@ git checkout -b formatting-automations
 
 # We only want to change five files at a time
 changed=0
-for file in $( find . -type f -name "*.py" | egrep -v "(_pb2.py|pb2_grpc.py|.github)"); do
+# shellcheck disable=SC2046
+for file in $( find . -type f -name "*.py" \
+    | grep -Ev "(_pb2.py|pb2_grpc.py|.github)"); do
     # pyupgrade
-    out=$( ${RUNNER_TEMP}/venv/bin/pyupgrade --py${1}-plus \
-        --exit-zero-even-if-changed ${file} 2>&1 || true )
-    rewrites=$( echo ${out} | grep -c "Rewriting" || true )
-    if [ ${rewrites} -gt 0 ]; then
+    out=$( "${RUNNER_TEMP}/venv/bin/pyupgrade" \
+        "--py${1}-plus" \
+        --exit-zero-even-if-changed "${file}" 2>&1 || true )
+    rewrites=$( echo "${out}" | grep -c "Rewriting" || true )
+    if [ "${rewrites}" -gt 0 ]; then
         echo "${file} was modified"
     fi
-    changed=$(( ${changed} + $rewrites ))
+    changed=$(( changed + rewrites ))
 
     if [ ${changed} -gt 4 ]; then
         break
     fi
 
     # reorder imports
-    out=$( ${RUNNER_TEMP}/venv/bin/reorder-python-imports --py${1}-plus \
+    out=$( "${RUNNER_TEMP}/venv/bin/reorder-python-imports" \
+        "--py${1}-plus" \
         --application-directories=.:shakenfist \
-        --exit-zero-even-if-changed ${file} 2>&1 || true )
-    rewrites=$( echo ${out} | grep -c "Reordering" || true )
-    if [ ${rewrites} -gt 0 ]; then
+        --exit-zero-even-if-changed "${file}" 2>&1 || true )
+    rewrites=$( echo "${out}" | grep -c "Reordering" || true )
+    if [ "${rewrites}" -gt 0 ]; then
         echo "${file} was modified"
     fi
-    changed=$(( ${changed} + $rewrites ))
+    changed=$(( changed + rewrites ))
 
     if [ ${changed} -gt 4 ]; then
         break
@@ -40,7 +44,7 @@ for file in $( find . -type f -name "*.py" | egrep -v "(_pb2.py|pb2_grpc.py|.git
 done
 
 # Did we find something new?
-if [ $(git diff | wc -l) -gt 0 ]; then
+if [ "$(git diff | wc -l)" -gt 0 ]; then
 echo "Code change detected..."
 echo
 git diff
