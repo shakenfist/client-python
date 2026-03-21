@@ -34,6 +34,8 @@ if test "x$1" = "x-HEAD" ; then
     fi
 
     echo "Running flake8 on ${filtered_files}"
+    # shellcheck disable=SC2086 -- filtered_files is intentionally unquoted
+    # because it contains multiple space-separated file paths
     diff -u --from-file /dev/null ${filtered_files} | $FLAKE_COMMAND ${filtered_files}
 else
     echo "Running flake8 on all files"
