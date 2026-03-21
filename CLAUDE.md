@@ -110,8 +110,6 @@ configuration steps.
   formatting.
 - **CodeQL** (`codeql-analysis.yml`): Security scanning.
 - **Renovate** (`renovate.yml`): Automated dependency updates.
-- **Pin indirect deps** (`pin-indirect-dependencies.yml`): Tracks
-  transitive dependencies in `[project.optional-dependencies] pinned`.
 - **Export repo config** (`export-repo-config.yml`): Daily export of
   GitHub repository settings.
 
