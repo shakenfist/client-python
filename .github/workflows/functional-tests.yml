@@ -89,9 +89,9 @@ jobs:
       matrix:
         os: [
           {
-            description: 'debian 11 single machine',
-            job_name: 'debian-11-localhost',
-            base_image: 'sf://label/ci-images/debian-11',
+            description: 'debian 12 single machine',
+            job_name: 'debian-12-localhost',
+            base_image: 'sf://label/ci-images/debian-12',
             base_image_user: 'debian',
             topology: 'localhost',
             stestr_config: 'cluster-ci.conf',
@@ -370,7 +370,7 @@ jobs:
           cd ${GITHUB_WORKSPACE}/actions
           ansible-playbook -i /home/debian/ansible-hosts \
               --extra-vars "identifier=${SHAKENFIST_NAMESPACE} source_path=${GITHUB_WORKSPACE} \
-              base_image=sf://label/ci-images/debian-11 base_image_user=debian" \
+              base_image=sf://label/ci-images/debian-12 base_image_user=debian" \
               ansible/ci-topology-slim-primary.yml
 
       - name: Log environmental configuration
