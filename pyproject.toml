@@ -53,3 +53,6 @@ test = [
     "tox",                 # mit
     "flake8",              # mit
 ]
+pinned = [
+    # END_OF_INDIRECT_DEPS
+]
