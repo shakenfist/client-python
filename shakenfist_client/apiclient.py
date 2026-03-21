@@ -839,6 +839,7 @@ class Client:
                 fetched += len(chunk)
                 yield chunk
 
+            offset += fetched
             if fetched < limit:
                 return
 
