@@ -24,7 +24,7 @@ datestamp=$(date "+%Y%m%d")
 git checkout -b "pin-dependencies-${datestamp}"
 
 for depver in $("${PIP_PATH}" freeze --local); do
-    dep=$(echo "${depver}" | sed 's/==.*//')
+    dep="${depver%%==*}"
     if [ "$(grep -ic "${dep}==" pyproject.toml)" -lt 1 ]; then
         sed -i \
             "s/    # END_OF_INDIRECT_DEPS/    \"${depver}\",\n    # END_OF_INDIRECT_DEPS/" \
