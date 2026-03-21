@@ -50,6 +50,7 @@ jobs:
         with:
           path: client-python
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Install the github command line
         run: |
