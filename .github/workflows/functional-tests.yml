@@ -4,6 +4,10 @@ name: Functional tests
 # which is available as GITHUB_WORKSPACE. You can find other environment
 # variables at https://docs.github.com/en/actions/learn-github-actions/environment-variables
 
+permissions:
+  contents: read
+  pull-requests: write
+
 on:
   pull_request:
     branches:
@@ -12,8 +16,32 @@ on:
     paths-ignore:
       - 'docs/**'
       - mkdocs.yml
+  workflow_dispatch:
 
 jobs:
+  check-bot-commit:
+    name: "Check bot commit"
+    if: github.event_name == 'pull_request'
+    runs-on: [self-hosted, static]
+    outputs:
+      is_bot: ${{ steps.check.outputs.is_bot }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Check if last commit was from bot
+        id: check
+        run: |
+          LAST_AUTHOR_EMAIL=$(git log -1 --format='%ae')
+          echo "Last commit author: $LAST_AUTHOR_EMAIL"
+          if [ "$LAST_AUTHOR_EMAIL" = "bot@shakenfist.com" ]; then
+            echo "is_bot=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_bot=false" >> $GITHUB_OUTPUT
+          fi
+
   sanity_checks:
     runs-on: [self-hosted, vm]
     concurrency:
@@ -510,3 +538,28 @@ jobs:
           retention-days: 90
           if-no-files-found: error
           path: /srv/github/artifacts/bundle.zip
+
+  automated_reviewer:
+    name: "Automated reviewer"
+    permissions:
+      contents: read
+      pull-requests: write
+    runs-on: [self-hosted, claude-code]
+    needs: [sanity_checks, check-bot-commit]
+    if: |
+      github.event_name == 'pull_request' &&
+      needs.check-bot-commit.outputs.is_bot != 'true'
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-reviewer
+      cancel-in-progress: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Run automated reviewer
+        uses: shakenfist/actions/review-pr-with-claude@main
+        with:
+          pr-number: ${{ github.event.pull_request.number }}
