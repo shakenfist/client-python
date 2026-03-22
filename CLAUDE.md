@@ -94,3 +94,29 @@ stestr run
 ### Building
 
 The package uses `setuptools_scm` for version management from git tags.
+
+### Releasing
+
+Releases are automated via `.github/workflows/release.yml`. Push a
+`v*` tag to trigger the workflow. See `RELEASE-SETUP.md` for one-time
+configuration steps.
+
+### CI/CD
+
+- **Functional tests** (`functional-tests.yml`): Linting, unit tests,
+  and functional tests against live clusters. Includes automated PR
+  review via Claude Code.
+- **Code formatting** (`code-formatting.yml`): Daily automated
+  formatting.
+- **CodeQL** (`codeql-analysis.yml`): Security scanning.
+- **Renovate** (`renovate.yml`): Automated dependency updates.
+- **Export repo config** (`export-repo-config.yml`): Daily export of
+  GitHub repository settings.
+
+### Pre-commit
+
+The project uses pre-commit with actionlint and shellcheck hooks.
+Install with:
+```bash
+pre-commit install
+```

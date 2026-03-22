@@ -4,6 +4,10 @@ name: Functional tests
 # which is available as GITHUB_WORKSPACE. You can find other environment
 # variables at https://docs.github.com/en/actions/learn-github-actions/environment-variables
 
+permissions:
+  contents: read
+  pull-requests: write
+
 on:
   pull_request:
     branches:
@@ -12,8 +16,32 @@ on:
     paths-ignore:
       - 'docs/**'
       - mkdocs.yml
+  workflow_dispatch:
 
 jobs:
+  check-bot-commit:
+    name: "Check bot commit"
+    if: github.event_name == 'pull_request'
+    runs-on: [self-hosted, static]
+    outputs:
+      is_bot: ${{ steps.check.outputs.is_bot }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Check if last commit was from bot
+        id: check
+        run: |
+          LAST_AUTHOR_EMAIL=$(git log -1 --format='%ae')
+          echo "Last commit author: $LAST_AUTHOR_EMAIL"
+          if [ "$LAST_AUTHOR_EMAIL" = "bot@shakenfist.com" ]; then
+            echo "is_bot=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_bot=false" >> $GITHUB_OUTPUT
+          fi
+
   sanity_checks:
     runs-on: [self-hosted, vm]
     concurrency:
@@ -22,7 +50,7 @@ jobs:
 
     steps:
       - name: Checkout code with two commits
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 2
 
@@ -61,9 +89,9 @@ jobs:
       matrix:
         os: [
           {
-            description: 'debian 11 single machine',
-            job_name: 'debian-11-localhost',
-            base_image: 'sf://label/ci-images/debian-11',
+            description: 'debian 12 single machine',
+            job_name: 'debian-12-localhost',
+            base_image: 'sf://label/ci-images/debian-12',
             base_image_user: 'debian',
             topology: 'localhost',
             stestr_config: 'cluster-ci.conf',
@@ -180,7 +208,7 @@ jobs:
           setup="${setup} sf-client artifact upload"
           ssh -i /srv/github/id_ci -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
               ${{ matrix.os.base_image_user }}@${UPLOAD_TARGET} \
-              "${setup} debian-11 /srv/ci/debian:11 --shared --no-checksum"
+              "${setup} debian-12 /srv/ci/debian:12 --shared --no-checksum"
 
       - name: Make the traces directory
         run: |
@@ -201,22 +229,24 @@ jobs:
               ${GITHUB_WORKSPACE}/client-python \
               ${{ matrix.os.base_image_user }}@${primary}:client-python
 
-          script="cd shakenfist/deploy/;"
+          script="cd shakenfist/;"
           script="${script} . /etc/sf/sfrc;"
 
           script="${script} python3 -mvenv /tmp/functests;"
-          script="${script} /tmp/functests/bin/pip3 install -U -r ../requirements.txt -r ../test-requirements.txt;"
+          script="${script} . /tmp/functests/bin/activate;"
+          script="${script} pip3 install -U uv;"
+          script="${script} uv pip install -U -r pyproject.toml --all-extras;"
           script="${script} echo -e '\n\nvenv pip after packages:\n';"
-          script="${script} /tmp/functests/bin/pip3 list;"
+          script="${script} pip3 list;"
           script="${script} echo -e '\n---\n';"
 
           script="${script} echo -e '\n\nInstall client-python:\n';"
           script="${script} cd ~/client-python;"
-          script="${script} /tmp/functests/bin/pip3 install -e .;"
+          script="${script} pip3 install .;"
 
-          script="${script} cd ~/shakenfist/deploy/;"
+          script="${script} cd ~/shakenfist/shakenfist/deploy/;"
           script="${script} set -e;"
-          script="${script} /tmp/functests/bin/stestr run --config ${{ matrix.os.stestr_config }} --concurrency=${{ matrix.os.concurrency}};"
+          script="${script} stestr run --config ${{ matrix.os.stestr_config }} --concurrency=${{ matrix.os.concurrency}};"
 
           ssh -i /srv/github/id_ci -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
               ${{ matrix.os.base_image_user }}@${primary} "${script}"
@@ -227,7 +257,7 @@ jobs:
 
           ssh -i /srv/github/id_ci -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
               ${{ matrix.os.base_image_user }}@${primary} \
-              "cd shakenfist/deploy; stestr slowest || true"
+              "cd shakenfist/shakenfist/deploy; stestr slowest || true"
 
       - name: List failing tests
         if: failure()
@@ -239,7 +269,7 @@ jobs:
           touch ${GITHUB_WORKSPACE}/failed
           ssh -i /srv/github/id_ci -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
               ${{ matrix.os.base_image_user }}@${primary} \
-              "cd shakenfist/deploy; stestr failing || true" > ${GITHUB_WORKSPACE}/failed
+              "cd shakenfist/shakenfist/deploy; stestr failing || true" > ${GITHUB_WORKSPACE}/failed
           echo
 
           failed=$(cat ${GITHUB_WORKSPACE}/failed | egrep "^FAIL: " | \
@@ -315,7 +345,7 @@ jobs:
               ansible_ssh_common_args='-o StrictHostKeyChecking=no'" \
               ${GITHUB_WORKSPACE}/actions/ansible/ci-gather-logs.yml
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: bundle-functional-cluster-${{ matrix.os.job_name }}
@@ -342,7 +372,7 @@ jobs:
           cd ${GITHUB_WORKSPACE}/actions
           ansible-playbook -i /home/debian/ansible-hosts \
               --extra-vars "identifier=${SHAKENFIST_NAMESPACE} source_path=${GITHUB_WORKSPACE} \
-              base_image=sf://label/ci-images/debian-11 base_image_user=debian" \
+              base_image=sf://label/ci-images/debian-12 base_image_user=debian" \
               ansible/ci-topology-slim-primary.yml
 
       - name: Log environmental configuration
@@ -414,18 +444,15 @@ jobs:
       - name: Import cached images
         run: |
           . ${GITHUB_WORKSPACE}/ci-environment.sh
-          ssh -i /srv/github/id_ci -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+
+          setup="export PATH=$PATH:/srv/shakenfist/venv/bin;"
+          setup="${setup} . /etc/sf/sfrc;"
+          setup="${setup} export SHAKENFIST_API_URL=http://localhost:13000;"
+          setup="${setup} /srv/shakenfist/venv/bin/sf-client artifact upload"
+          ssh -i /srv/github/id_ci -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
               debian@$primary \
-              '. /etc/sf/sfrc; sf-client artifact upload ubuntu-1804 /srv/ci/ubuntu:18.04 --shared'
-          ssh -i /srv/github/id_ci -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              debian@$primary \
-              '. /etc/sf/sfrc; sf-client artifact upload ubuntu-2004 /srv/ci/ubuntu:20.04 --shared'
-          ssh -i /srv/github/id_ci -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              debian@$primary \
-              '. /etc/sf/sfrc; sf-client artifact upload debian-11 /srv/ci/debian:11 --shared'
-          ssh -i /srv/github/id_ci -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              debian@$primary \
-              '. /etc/sf/sfrc; sf-client artifact upload cirros /srv/ci/cirros --shared'
+              "${setup} debian-12 /srv/ci/debian:12 --shared --no-checksum"
 
       - name: Run ansible module tests
         timeout-minutes: 120
@@ -441,7 +468,7 @@ jobs:
               debian@${primary}:client-python
 
           ssh -i /srv/github/id_ci -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              debian@$primary "cd shakenfist/deploy; . /etc/sf/sfrc; bash ansiblemoduletests.sh"
+              debian@$primary "cd shakenfist/shakenfist/deploy; . /etc/sf/sfrc; bash ansiblemoduletests.sh"
 
       - name: Check logs
         if: always()
@@ -503,10 +530,35 @@ jobs:
               ansible_ssh_common_args='-o StrictHostKeyChecking=no'" \
               ${GITHUB_WORKSPACE}/actions/ansible/ci-gather-logs.yml
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: bundle.zip
           retention-days: 90
           if-no-files-found: error
           path: /srv/github/artifacts/bundle.zip
+
+  automated_reviewer:
+    name: "Automated reviewer"
+    permissions:
+      contents: read
+      pull-requests: write
+    runs-on: [self-hosted, claude-code]
+    needs: [sanity_checks, check-bot-commit]
+    if: |
+      github.event_name == 'pull_request' &&
+      needs.check-bot-commit.outputs.is_bot != 'true'
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-reviewer
+      cancel-in-progress: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Run automated reviewer
+        uses: shakenfist/actions/review-pr-with-claude@main
+        with:
+          pr-number: ${{ github.event.pull_request.number }}
