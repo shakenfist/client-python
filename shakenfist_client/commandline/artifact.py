@@ -116,6 +116,9 @@ def artifact_download(ctx, artifact_ref=None, destination=None):
                         bytes_in_attempt += received
                         total += received
 
+                        if total >= size:
+                            break
+
                     done = True
 
                 except urllib3.exceptions.NewConnectionError as e:
