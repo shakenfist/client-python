@@ -10,7 +10,17 @@
   ],
   "packageRules": [
     {
-      "description": "Group minor and patch-level updates",
+      "description": "Group grpc packages together with widen strategy",
+      "matchPackagePatterns": [
+        "^grpcio",
+        "^googleapis-common-protos",
+        "^protobuf"
+      ],
+      "groupName": "grpc packages",
+      "rangeStrategy": "widen"
+    },
+    {
+      "description": "Automatically merge minor and patch-level updates",
       "matchUpdateTypes": [
         "minor",
         "patch",
