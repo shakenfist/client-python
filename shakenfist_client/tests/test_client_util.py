@@ -56,3 +56,16 @@ class SanitizeTerminalBytesTestCase(testtools.TestCase):
         self.assertEqual(
             b'ab',
             util.sanitize_terminal_bytes(b'a\x7fb'))
+
+    def test_empty_input(self):
+        self.assertEqual(b'', util.sanitize_terminal_bytes(b''))
+
+    def test_large_input_completes(self):
+        # Smoke test for ReDoS resistance. The patterns use disjoint
+        # character classes and bounded `[^\x07\x1b]*` / `[^\x1b]*` runs,
+        # so backtracking is linear; verify a 1 MB worst-case-shaped input
+        # finishes and produces the expected output.
+        chunk = b'\x1b[' + b'0;' * 50 + b'm' + b'a'
+        payload = chunk * 10000
+        self.assertGreater(len(payload), 1_000_000)
+        self.assertEqual(b'a' * 10000, util.sanitize_terminal_bytes(payload))
