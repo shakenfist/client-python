@@ -623,7 +623,12 @@ def instance_unpause(ctx, instance_ref=None):
 @click.argument('length', type=click.INT, default=10240)
 @click.pass_context
 def instance_consoledata(ctx, instance_ref=None, length=None):
-    print(ctx.obj['CLIENT'].get_console_data(instance_ref, length=length))
+    data = ctx.obj['CLIENT'].get_console_data(
+        instance_ref, length=length, decode=None)
+    if sys.stdout.isatty():
+        data = util.sanitize_terminal_bytes(data)
+    sys.stdout.buffer.write(data)
+    sys.stdout.flush()
 
 
 @instance.command(name='consoledelete', help='Clear the console log for this instance')

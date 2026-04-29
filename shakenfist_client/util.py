@@ -1,11 +1,39 @@
 import hashlib
 import os
+import re
 import sys
 import time
 
 from tqdm import tqdm
 
 from shakenfist_client import apiclient
+
+
+# Strips terminal escape sequences (CSI, OSC, DCS, SOS, PM, APC, single-char
+# Fe sequences) and C0/C1 control bytes other than \t \n \r. Used when
+# rendering attacker-controlled bytes (e.g. VM console output) to a TTY,
+# where untrusted escape sequences could rewrite the user's display, set
+# the window title, or trigger paste-buffer manipulation.
+_ANSI_ESCAPE_RE = re.compile(
+    rb'\x1b(?:'
+    rb'\[[0-?]*[ -/]*[@-~]'        # CSI
+    rb'|\][^\x07\x1b]*(?:\x07|\x1b\\)'  # OSC, terminated by BEL or ST
+    rb'|[PX^_][^\x1b]*\x1b\\'      # DCS, SOS, PM, APC, terminated by ST
+    rb'|[ -/]*[0-~]'               # nF (intermediate*+final), Fp/Fe/Fs single
+    rb')')
+
+_C0_C1_STRIP_RE = re.compile(rb'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]')
+
+
+def sanitize_terminal_bytes(data):
+    """Remove escape sequences and unsafe control bytes from `data`.
+
+    Accepts and returns bytes. Tabs, newlines, and carriage returns are
+    preserved.
+    """
+    data = _ANSI_ESCAPE_RE.sub(b'', data)
+    data = _C0_C1_STRIP_RE.sub(b'', data)
+    return data
 
 
 def filter_dict(d, allowed_keys):
