@@ -348,6 +348,37 @@ class ApiClientTestCase(testtools.TestCase):
         self.mock_request.assert_called_with(
             'GET', '/admin/locks')
 
+    def test_get_console_data_returns_bytes_when_decode_none(self):
+        # 1000 raw bytes including a 3-byte UTF-8 ellipsis. Decoding as text
+        # would yield 998 characters; with decode=None we want the raw bytes.
+        raw = b'a' * 997 + '…'.encode('utf-8')
+        self.assertEqual(1000, len(raw))
+        self.mock_request.return_value = mock.Mock(content=raw)
+
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        out = client.get_console_data('uuid', length=1000, decode=None)
+
+        self.assertEqual(raw, out)
+        self.assertEqual(1000, len(out))
+        self.mock_request.assert_called_with(
+            'GET', '/instances/uuid/consoledata',
+            data={'length': 1000}, response_body_is_binary=True)
+
+    def test_get_console_data_decodes_with_replacement(self):
+        # Invalid byte 0x80 in the middle should not raise; the decoder is
+        # asked to replace it.
+        raw = b'hello\x80world'
+        self.mock_request.return_value = mock.Mock(content=raw)
+
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        out = client.get_console_data('uuid', length=100)
+
+        self.assertIsInstance(out, str)
+        self.assertIn('hello', out)
+        self.assertIn('world', out)
+
 
 class GetNodesMock():
     def json(self):

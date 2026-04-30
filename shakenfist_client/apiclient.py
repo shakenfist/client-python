@@ -1014,15 +1014,11 @@ class Client:
             d = {'length': length}
         else:
             d = {}
-        r = self._request_url('GET', url, data=d)
+        r = self._request_url('GET', url, data=d, response_body_is_binary=True)
 
-        out = r.text
-        if decode:
-            try:
-                out = out.decode(decode)
-            except Exception:
-                pass
-        return out
+        if decode is None:
+            return r.content
+        return r.content.decode(decode, errors='replace')
 
     def delete_console_data(self, instance_ref):
         url = '/instances/' + instance_ref + '/consoledata'
