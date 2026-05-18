@@ -298,32 +298,232 @@ class ApiClientTestCase(testtools.TestCase):
             'GET', '/networks/notreallyauuid', data=None)
 
     def test_delete_network(self):
+        # Phase 7 contract: the server returns a 202 + op handle, and
+        # the client transparently polls the op to terminal.
+        handle = {'op_type': 'net_op', 'op_uuid': 'op-uuid'}
+        final_view = {
+            'operation_type': 'net_op',
+            'uuid': 'op-uuid',
+            'state': 'complete',
+            'tasks': ['network_delete'],
+        }
+        self.mock_request.side_effect = [
+            mock.Mock(**{'json.return_value': handle}),
+            mock.Mock(**{'json.return_value': final_view}),
+        ]
+
         client = apiclient.Client(suppress_configuration_lookup=True,
                                   base_url='http://localhost:13000')
-        client.delete_network('notreallyauuid')
+        # Manually set the capability marker that get_cluster_operation
+        # checks for; we mock the request path so it doesn't matter what
+        # the server actually advertises.
+        client.root_html = 'get-cluster-operations network-delete-async'
+        result = client.delete_network('notreallyauuid')
 
+        self.assertEqual(final_view, result)
+        self.assertEqual(2, self.mock_request.call_count)
+        self.mock_request.assert_any_call(
+            'DELETE', '/networks/notreallyauuid', data=None)
+        self.mock_request.assert_any_call(
+            'GET', '/clusteroperations/net_op/op-uuid')
+
+    def test_delete_network_no_wait(self):
+        # wait=False returns the op handle untouched.
+        handle = {'op_type': 'net_op', 'op_uuid': 'op-uuid'}
+        self.mock_request.return_value = mock.Mock(
+            **{'json.return_value': handle})
+
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = 'network-delete-async'
+        result = client.delete_network('notreallyauuid', wait=False)
+
+        self.assertEqual(handle, result)
         self.mock_request.assert_called_with(
             'DELETE', '/networks/notreallyauuid', data=None)
 
-    def test_delete_all_networks(self):
+    def test_delete_network_failure_raises(self):
+        # An op that reaches the error state surfaces as
+        # ClusterOperationFailed carrying the final view.
+        handle = {'op_type': 'net_op', 'op_uuid': 'op-uuid'}
+        error_view = {
+            'operation_type': 'net_op',
+            'uuid': 'op-uuid',
+            'state': 'error',
+            'tasks': ['network_delete'],
+        }
+        self.mock_request.side_effect = [
+            mock.Mock(**{'json.return_value': handle}),
+            mock.Mock(**{'json.return_value': error_view}),
+        ]
+
         client = apiclient.Client(suppress_configuration_lookup=True,
                                   base_url='http://localhost:13000')
-        client.delete_all_networks(None)
+        client.root_html = 'get-cluster-operations network-delete-async'
+        exc = self.assertRaises(
+            apiclient.ClusterOperationFailed,
+            client.delete_network, 'notreallyauuid')
+        self.assertEqual('net_op', exc.op_type)
+        self.assertEqual('op-uuid', exc.op_uuid)
+        self.assertEqual(error_view, exc.op_view)
 
+    def test_delete_all_networks(self):
+        # Phase 7 contract: 202 returns a list of {network_uuid, op_type,
+        # op_uuid}; the client polls each op to terminal and attaches the
+        # final view under ``op_view``.
+        handles = [
+            {'network_uuid': 'net-a', 'op_type': 'net_op',
+             'op_uuid': 'op-a'},
+        ]
+        final_view = {
+            'operation_type': 'net_op', 'uuid': 'op-a',
+            'state': 'complete', 'tasks': ['network_delete']}
+        self.mock_request.side_effect = [
+            mock.Mock(**{'json.return_value': handles}),
+            mock.Mock(**{'json.return_value': final_view}),
+        ]
+
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = 'get-cluster-operations network-delete-async'
+        result = client.delete_all_networks(None)
+
+        self.assertEqual(
+            [{'network_uuid': 'net-a', 'op_type': 'net_op',
+              'op_uuid': 'op-a', 'op_view': final_view}],
+            result)
+        self.mock_request.assert_any_call(
+            'DELETE', '/networks',
+            data={'confirm': True, 'namespace': None, 'clean_wait': False})
+        self.mock_request.assert_any_call(
+            'GET', '/clusteroperations/net_op/op-a')
+
+    def test_delete_all_networks_no_wait(self):
+        handles = [
+            {'network_uuid': 'net-a', 'op_type': 'net_op',
+             'op_uuid': 'op-a'},
+            {'network_uuid': 'net-b', 'op_type': 'net_op',
+             'op_uuid': 'op-b'},
+        ]
+        self.mock_request.return_value = mock.Mock(
+            **{'json.return_value': handles})
+
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = 'network-delete-async'
+        result = client.delete_all_networks(None, wait=False)
+
+        self.assertEqual(handles, result)
         self.mock_request.assert_called_with(
             'DELETE', '/networks',
             data={'confirm': True, 'namespace': None, 'clean_wait': False})
 
     def test_delete_all_networks_namespace(self):
+        handles = [
+            {'network_uuid': 'net-a', 'op_type': 'net_op',
+             'op_uuid': 'op-a'},
+        ]
+        self.mock_request.return_value = mock.Mock(
+            **{'json.return_value': handles})
+
         client = apiclient.Client(suppress_configuration_lookup=True,
                                   base_url='http://localhost:13000')
-        client.delete_all_networks('bobspace')
+        client.root_html = 'network-delete-async'
+        client.delete_all_networks('bobspace', wait=False)
 
         self.mock_request.assert_called_with(
             'DELETE', '/networks',
             data={'confirm': True,
                   'namespace': 'bobspace',
                   'clean_wait': False})
+
+    def test_delete_network_pre_phase7_server(self):
+        # Pre-phase-7 servers do not advertise ``network-delete-async``
+        # and return a 200 with the network's external view. The client
+        # must passthrough that body without trying to poll.
+        legacy_view = {
+            'uuid': 'notreallyauuid', 'state': 'deleted', 'name': 'n'}
+        self.mock_request.return_value = mock.Mock(
+            **{'json.return_value': legacy_view})
+
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = ''  # No capabilities advertised.
+        result = client.delete_network('notreallyauuid')
+
+        self.assertEqual(legacy_view, result)
+        # Only the DELETE round-trip; no GET for the op handle.
+        self.assertEqual(1, self.mock_request.call_count)
+
+    def test_delete_all_networks_pre_phase7_server(self):
+        legacy_list = [
+            {'uuid': 'net-a', 'state': 'deleted', 'name': 'a'},
+        ]
+        self.mock_request.return_value = mock.Mock(
+            **{'json.return_value': legacy_list})
+
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = ''
+        result = client.delete_all_networks(None)
+
+        self.assertEqual(legacy_list, result)
+        self.assertEqual(1, self.mock_request.call_count)
+
+    def test_get_cluster_operation_chain_capability_gated(self):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = ''
+        self.assertRaises(
+            apiclient.IncapableException,
+            client.get_cluster_operation_chain, 'op-1')
+
+    def test_list_cluster_operations_for_target_capability_gated(self):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = ''
+        self.assertRaises(
+            apiclient.IncapableException,
+            client.list_cluster_operations_for_target, 'network', 'net-uuid')
+
+    def test_get_cluster_operation_chain(self):
+        chain = [
+            {'operation_type': 'net_op', 'uuid': 'op-1',
+             'state': 'complete', 'tasks': ['network_delete']},
+            {'operation_type': 'net_op', 'uuid': 'op-2',
+             'state': 'complete', 'tasks': ['network_deploy']},
+        ]
+        self.mock_request.return_value = mock.Mock(
+            **{'json.return_value': chain})
+
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = 'cluster-operation-chain'
+        result = client.get_cluster_operation_chain('op-1')
+
+        self.assertEqual(chain, result)
+        self.mock_request.assert_called_with(
+            'GET', '/clusteroperations/op-1/chain')
+
+    def test_list_cluster_operations_for_target(self):
+        ops = [
+            {'operation_type': 'net_op', 'uuid': 'op-1',
+             'state': 'complete', 'tasks': ['network_delete']},
+        ]
+        self.mock_request.return_value = mock.Mock(
+            **{'json.return_value': ops})
+
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = 'cluster-operations-by-target'
+        result = client.list_cluster_operations_for_target(
+            'network', 'net-uuid')
+
+        self.assertEqual(ops, result)
+        self.mock_request.assert_called_with(
+            'GET', '/clusteroperations',
+            data={'target_object_type': 'network',
+                  'target_uuid': 'net-uuid'})
 
     def test_allocate_network(self):
         client = apiclient.Client(suppress_configuration_lookup=True,

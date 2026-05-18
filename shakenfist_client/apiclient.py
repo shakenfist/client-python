@@ -91,6 +91,31 @@ class AgentCommandError(Exception):
     ...
 
 
+class ClusterOperationFailed(Exception):
+    """Raised when a polled cluster operation ends in a terminal failure.
+
+    Carries the op handle and the operation's final external_view so
+    callers can inspect ``state``, ``tasks``, and any error payload the
+    server attached to the op record.
+    """
+
+    def __init__(self, message, op_type, op_uuid, op_view=None):
+        super().__init__(message)
+        self.op_type = op_type
+        self.op_uuid = op_uuid
+        self.op_view = op_view or {}
+
+
+class ClusterOperationTimeout(Exception):
+    """Raised when polling a cluster operation exceeds the timeout."""
+
+    def __init__(self, message, op_type, op_uuid, op_view=None):
+        super().__init__(message)
+        self.op_type = op_type
+        self.op_uuid = op_uuid
+        self.op_view = op_view or {}
+
+
 STATUS_CODES_TO_ERRORS = {
     400: RequestMalformedException,
     401: UnauthenticatedException,
@@ -278,7 +303,7 @@ class Client:
             raise STATUS_CODES_TO_ERRORS[r.status_code](
                 'API request failed', method, url, r.status_code, r.text)
 
-        acceptable = [200]
+        acceptable = [200, 202]
         if not allow_redirects:
             acceptable.append(301)
         if r.status_code not in acceptable:
@@ -863,7 +888,23 @@ class Client:
         r = self._request_url('GET', '/networks/' + network_ref, data=data)
         return r.json()
 
-    def delete_network(self, network_ref, namespace=None):
+    def delete_network(self, network_ref, namespace=None, wait=True):
+        """Delete a network.
+
+        Phase 7 of the network facade flipped this endpoint to a
+        202+poll contract: the server enqueues the delete work and
+        returns ``{'op_type': 'net_op', 'op_uuid': '<uuid>'}`` with
+        HTTP 202.
+
+        By default (``wait=True``) this method transparently polls
+        the returned cluster operation until it reaches a terminal
+        state, raising :class:`ClusterOperationFailed` if the op ended
+        in ``error`` / ``abort``. The op's final ``external_view``
+        dict is returned on success.
+
+        Pass ``wait=False`` to receive the raw op handle (the
+        ``{'op_type', 'op_uuid'}`` dict) without polling.
+        """
         # Why pass a namespace when you're passing an exact UUID? The idea here
         # is that it provides a consistent interface, but also a safety check
         # against overly zealous loops deleting things.
@@ -871,15 +912,58 @@ class Client:
         if namespace:
             data = {'namespace': namespace}
         r = self._request_url('DELETE', '/networks/' + network_ref, data=data)
-        return r.json()
+        # A pre-phase-7 server returns 200 with the network's external
+        # view; a phase-7+ server advertises ``network-delete-async`` and
+        # returns 202 with a {op_type, op_uuid} handle. Pick the path
+        # from the advertised capability so we never try to poll a
+        # response that doesn't carry an op handle.
+        if not self.check_capability('network-delete-async'):
+            return r.json()
+        handle = r.json()
+        if not wait:
+            return handle
+        return self._poll_cluster_operation(handle['op_type'], handle['op_uuid'])
 
-    def delete_all_networks(self, namespace, clean_wait=False):
+    def delete_all_networks(self, namespace, clean_wait=False, wait=True):
+        """Delete every network in a namespace.
+
+        Phase 7 of the network facade flipped this endpoint to a
+        202+poll contract: the server enqueues one delete op per
+        network and returns a list of
+        ``{'network_uuid', 'op_type', 'op_uuid'}`` entries with HTTP
+        202.
+
+        By default (``wait=True``) this method polls each returned op
+        sequentially until terminal, raising
+        :class:`ClusterOperationFailed` on the first failure. The
+        return value mirrors the input list but each entry gains an
+        ``op_view`` key with the op's final ``external_view`` dict.
+
+        Pass ``wait=False`` to receive the raw list of handles
+        without polling.
+        """
         r = self._request_url('DELETE', '/networks',
                               data={'confirm': True,
                                     'namespace': namespace,
                                     'clean_wait': clean_wait,
                                     })
-        return r.json()
+        # Same capability gate as ``delete_network``: pre-phase-7
+        # servers return the old shape, phase-7+ servers advertise
+        # ``network-delete-async`` and return the op-handle list.
+        if not self.check_capability('network-delete-async'):
+            return r.json()
+        handles = r.json()
+        if not wait:
+            return handles
+
+        results = []
+        for handle in handles:
+            view = self._poll_cluster_operation(
+                handle['op_type'], handle['op_uuid'])
+            entry = dict(handle)
+            entry['op_view'] = view
+            results.append(entry)
+        return results
 
     def allocate_network(self, netblock, provide_dhcp, provide_nat, name,
                          namespace=None, provide_dns=False):
@@ -1434,6 +1518,92 @@ class Client:
                 'The API server version you are talking to does not support '
                 'fetching a cluster operation.')
         r = self._request_url('GET', f'/clusteroperations/{op_type}/{op_uuid}')
+        return r.json()
+
+    # Terminal cluster operation states. ``complete`` is success; the
+    # other three are failure modes that surface as
+    # ClusterOperationFailed when ``_poll_cluster_operation`` runs.
+    _CLUSTER_OP_TERMINAL_STATES = {
+        'complete', 'abort', 'error', 'deleted'}
+    _CLUSTER_OP_SUCCESS_STATE = 'complete'
+
+    def _poll_cluster_operation(self, op_type, op_uuid, timeout=None,
+                                interval=1):
+        """Poll a cluster operation until it reaches a terminal state.
+
+        Returns the operation's final ``external_view`` dict on
+        success. Raises :class:`ClusterOperationFailed` if the op
+        reaches ``error`` / ``abort`` / ``deleted``, or
+        :class:`ClusterOperationTimeout` if the timeout elapses
+        first.
+
+        ``timeout`` defaults to the client's async deadline
+        (governed by ``async_strategy``); pass a positive number of
+        seconds to override.
+        """
+        if timeout is None:
+            timeout = _calculate_async_deadline(self.async_strategy)
+        if timeout < 0:
+            # ASYNC_CONTINUE means "don't block" -- short-circuit by
+            # returning the current view without waiting.
+            return self.get_cluster_operation(op_type, op_uuid)
+
+        deadline = time.time() + timeout
+        view = None
+        while True:
+            view = self.get_cluster_operation(op_type, op_uuid)
+            state = view.get('state')
+            if state in self._CLUSTER_OP_TERMINAL_STATES:
+                if state == self._CLUSTER_OP_SUCCESS_STATE:
+                    return view
+                raise ClusterOperationFailed(
+                    f'cluster operation {op_uuid} ended in state {state!r}',
+                    op_type, op_uuid, op_view=view)
+
+            if time.time() > deadline:
+                raise ClusterOperationTimeout(
+                    f'cluster operation {op_uuid} did not reach a terminal '
+                    f'state within {timeout} seconds (last state: {state!r})',
+                    op_type, op_uuid, op_view=view)
+
+            time.sleep(interval)
+
+    def get_cluster_operation_chain(self, op_uuid):
+        """Return the transitive depends_on closure for a cluster op.
+
+        Calls ``GET /clusteroperations/<op_uuid>/chain`` (added in
+        phase 7 of the network facade). Returns a list of op summary
+        dicts (each carrying ``operation_type``, ``uuid``, ``state``
+        and ``tasks``), newest-first by ``created_at``.
+
+        The server raises 404 on an unknown ``op_uuid`` (surfaced as
+        :class:`ResourceNotFoundException`).
+        """
+        if not self.check_capability('cluster-operation-chain'):
+            raise IncapableException(
+                'The API server version you are talking to does not '
+                'support cluster-operation chain discovery.')
+        r = self._request_url(
+            'GET', f'/clusteroperations/{op_uuid}/chain')
+        return r.json()
+
+    def list_cluster_operations_for_target(self, target_object_type,
+                                           target_uuid):
+        """List cluster operations targeting a given object.
+
+        Calls ``GET /clusteroperations?target_object_type=<type>
+        &target_uuid=<uuid>`` (added in phase 7 of the network
+        facade). Returns a list of op summary dicts scoped to the
+        caller's namespace.
+        """
+        if not self.check_capability('cluster-operations-by-target'):
+            raise IncapableException(
+                'The API server version you are talking to does not '
+                'support listing cluster operations by target.')
+        r = self._request_url(
+            'GET', '/clusteroperations',
+            data={'target_object_type': target_object_type,
+                  'target_uuid': target_uuid})
         return r.json()
 
 
