@@ -1296,6 +1296,14 @@ class Client:
         r = self._request_url('GET', '/admin/cacert')
         return r.text
 
+    def get_cluster_resources(self):
+        if not self.check_capability('cluster-resources'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'reporting cluster resources.')
+        r = self._request_url('GET', '/admin/resources')
+        return r.json()
+
     # The following methods are convenience wrappers around methods above.
     def await_instance_create(self, instance_uuid, timeout=600):
         # Wait up to 10 minutes for the instance to be created. On a slow
