@@ -32,20 +32,20 @@ jobs:
           echo "SHAKENFIST_NAMESPACE=$(hostname)" >> $GITHUB_ENV
 
       - name: Checkout client-python
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           path: client-python
           fetch-depth: 0
 
       - name: Checkout shakenfist
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: shakenfist/shakenfist
           path: shakenfist
           fetch-depth: 0
 
       - name: Checkout the actions repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: shakenfist/actions
           path: actions
