@@ -35,11 +35,6 @@ dependencies = [
 [project.scripts]
 sf-client = "shakenfist_client.main:cli"
 
-[tool.setuptools.package-data]
-shakenfist_client = [
-    "shakenfist_client/ansible/sf_*"
-]
-
 [tool.setuptools_scm]
 git_describe_command = "git describe --dirty --tags --match v* --first-parent"
 write_to = "shakenfist_client/_version.py"
