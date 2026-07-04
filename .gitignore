@@ -128,3 +128,4 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+shakenfist_client/_version.py

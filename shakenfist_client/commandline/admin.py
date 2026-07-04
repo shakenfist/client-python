@@ -1,6 +1,4 @@
-import importlib.resources
 import json
-import os
 
 import click
 from prettytable import PrettyTable
@@ -41,17 +39,3 @@ def lock_list(ctx):
 
 lock.add_command(lock_list)
 admin.add_command(lock)
-
-
-@admin.command(
-    name='ansible_module_path',
-    help='Returns the path ansible modules were installed to')
-@click.pass_context
-def ansible_module_path(ctx):
-    with importlib.resources.path('shakenfist_client', 'sf_instance') as data_path:
-        package_root = os.path.dirname(os.path.dirname(data_path))
-        ansible_path = os.path.join(package_root, 'shakenfist_client', 'ansible')
-        print(ansible_path)
-
-
-admin.add_command(ansible_module_path)
