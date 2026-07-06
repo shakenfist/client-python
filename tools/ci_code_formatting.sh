@@ -30,7 +30,7 @@ for file in $( find . -type f -name "*.py" \
     # reorder imports
     out=$( "${RUNNER_TEMP}/venv/bin/reorder-python-imports" \
         "--py${1}-plus" \
-        --application-directories=.:shakenfist \
+        --application-directories=. \
         --exit-zero-even-if-changed "${file}" 2>&1 || true )
     rewrites=$( echo "${out}" | grep -c "Reordering" || true )
     if [ "${rewrites}" -gt 0 ]; then
