@@ -52,10 +52,12 @@ def node_show(ctx, node=None):
                            % (n['lastseen'], time.time() - n['lastseen'])))
     print(format_string % ('version', n['version']))
     print(format_string % ('release', n['release']))
-    print(format_string % ('etcd master', n['is_etcd_master']))
+    # is_database_node arrives with servers from v0.8; .get() keeps older
+    # servers working. The etcd master and event log roles were vestigial
+    # (always false) and are no longer shown.
+    print(format_string % ('database node', n.get('is_database_node', False)))
     print(format_string % ('hypervisor', n['is_hypervisor']))
     print(format_string % ('network node', n['is_network_node']))
-    print(format_string % ('event log node', n['is_eventlog_node']))
     print(format_string % ('cluster maintainer', n['is_cluster_maintainer']))
 
     print()
@@ -72,8 +74,8 @@ def node_show(ctx, node=None):
 
 def _roles_to_string(n):
     roles = []
-    for role, symbol in [('is_etcd_master', 'D'), ('is_hypervisor', 'H'),
-                         ('is_network_node', 'N'), ('is_eventlog_node', 'E'),
+    for role, symbol in [('is_database_node', 'D'), ('is_hypervisor', 'H'),
+                         ('is_network_node', 'N'),
                          ('is_cluster_maintainer', 'M')]:
         if n.get(role, False):
             roles.append(symbol)
@@ -88,8 +90,8 @@ def node_list(ctx):
     nodes = list(ctx.obj['CLIENT'].get_nodes())
 
     if ctx.obj['OUTPUT'] == 'pretty':
-        print('Roles: D = etcd master; H = hypervisor; N = network node;')
-        print('       E = eventlog node, M = cluster maintenance node')
+        print('Roles: D = database node; H = hypervisor; N = network node;')
+        print('       M = cluster maintenance node')
         print()
 
         x = PrettyTable()
