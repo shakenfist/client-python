@@ -615,3 +615,49 @@ class ApiClientGetNodesTestCase(testtools.TestCase):
 
         mock_request.assert_called_with(
             'GET', '/nodes')
+
+
+class ApiClientConfigurationLookupTestCase(testtools.TestCase):
+    def setUp(self):
+        super().setUp()
+
+        self.capabilities = mock.patch(
+            'shakenfist_client.apiclient.Client._collect_capabilities')
+        self.capabilities = self.capabilities.start()
+        self.addCleanup(self.capabilities.stop)
+
+        # Ensure the config files on the test machine are not consulted
+        self.exists = mock.patch(
+            'shakenfist_client.apiclient.os.path.exists', return_value=False)
+        self.mock_exists = self.exists.start()
+        self.addCleanup(self.exists.stop)
+
+    @mock.patch.dict('os.environ', {
+        'SHAKENFIST_API_URL': 'http://sf.example.com/api',
+        'SHAKENFIST_NAMESPACE': 'testspace',
+        'SHAKENFIST_KEY': 'testkey',
+    })
+    def test_environment_variables(self):
+        client = apiclient.Client()
+
+        self.assertEqual('http://sf.example.com/api', client.base_url)
+        self.assertEqual('testspace', client.namespace)
+        self.assertEqual('testkey', client.key)
+
+    @mock.patch.dict('os.environ', {
+        'SHAKENFIST_API_URL': 'http://sf.example.com/api',
+        'SHAKENFIST_NAMESPACE': 'testspace',
+        'SHAKENFIST_KEY': 'testkey',
+    })
+    def test_arguments_beat_environment_variables(self):
+        client = apiclient.Client(
+            base_url='http://elsewhere.example.com/api',
+            namespace='otherspace', key='otherkey')
+
+        self.assertEqual('http://elsewhere.example.com/api', client.base_url)
+        self.assertEqual('otherspace', client.namespace)
+        self.assertEqual('otherkey', client.key)
+
+    @mock.patch.dict('os.environ', {}, clear=True)
+    def test_unconfigured(self):
+        self.assertRaises(apiclient.UnconfiguredException, apiclient.Client)
