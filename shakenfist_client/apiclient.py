@@ -169,8 +169,21 @@ class Client:
 
         if not suppress_configuration_lookup:
             # Where do we find authentication details? First off, we try command line
-            # flags; then environment variables (thanks for doing this for free click);
-            # ~/.shakenfist (which is a JSON file); and finally /etc/sf/shakenfist.json.
+            # flags; then environment variables; ~/.shakenfist (which is a JSON file);
+            # and finally /etc/sf/shakenfist.json. click reads the environment
+            # variables for free in the CLI, but we must also do it here so that
+            # other library callers (the ansible collection for example) behave the
+            # same way as the CLI.
+            if not base_url:
+                LOG.debug('Testing environment variables')
+                base_url = os.environ.get('SHAKENFIST_API_URL')
+                if base_url:
+                    LOG.debug('Loading configuration from environment variables')
+                    if not namespace:
+                        namespace = os.environ.get('SHAKENFIST_NAMESPACE')
+                    if not key:
+                        key = os.environ.get('SHAKENFIST_KEY')
+
             if not base_url:
                 LOG.debug('Testing for ~/.shakenfist')
                 user_conf = os.path.expanduser('~/.shakenfist')
