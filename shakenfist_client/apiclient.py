@@ -161,6 +161,9 @@ class Client:
             LOG = logger
 
         self.most_recent_request_id = None
+        # Passed as the requests timeout on every HTTP call (connect and
+        # read). Without it a server that accepts the socket but never
+        # responds would block the caller forever.
         self.sync_request_timeout = sync_request_timeout
 
         LOG.debug('Client initially configured with apiurl of %s for namespace %s '
@@ -236,7 +239,8 @@ class Client:
         self._collect_capabilities()
 
     def _collect_capabilities(self):
-        r = self.session.request('GET', self.base_url, allow_redirects=True)
+        r = self.session.request('GET', self.base_url, allow_redirects=True,
+                                 timeout=self.sync_request_timeout)
         self.root_html = r.text
 
     def check_capability(self, capability_string):
@@ -264,14 +268,16 @@ class Client:
         try:
             r = self.session.request(method, url, data=data, headers=h,
                                      allow_redirects=allow_redirects,
-                                     stream=stream)
+                                     stream=stream,
+                                     timeout=self.sync_request_timeout)
 
         except requests.exceptions.ConnectionError:
             # Session was terminated gracelessly, rebuild it
             self.session = requests.Session()
             r = self.session.request(method, url, data=data, headers=h,
                                      allow_redirects=allow_redirects,
-                                     stream=stream)
+                                     stream=stream,
+                                     timeout=self.sync_request_timeout)
 
         end_time = time.time()
 
@@ -332,7 +338,8 @@ class Client:
                                  {'namespace': self.namespace,
                                   'key': self.key}),
                              headers={'Content-Type': 'application/json',
-                                      'User-Agent': get_user_agent()})
+                                      'User-Agent': get_user_agent()},
+                             timeout=self.sync_request_timeout)
         if r.status_code != 200:
             raise UnauthenticatedException('API unauthenticated', 'POST', auth_url,
                                            r.status_code, r.text)
