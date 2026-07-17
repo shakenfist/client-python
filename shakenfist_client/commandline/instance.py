@@ -370,13 +370,19 @@ order you specify them being significant.
               help='Add key=value pair to instance metadata eg. affinity=\'{"fastdisk":10}\'')
 @click.option('-s', '--side-channel', type=click.STRING, multiple=True,
               help=('A named side channel which will appear inside the guest as a '
-                    'virtio-serial port.'))
+                    'virtio-serial port or vsock device. If not specified, the '
+                    'server applies its default set (currently sf-agent and '
+                    'sf-agent2, which the in-guest agent requires).'))
+@click.option('--no-side-channels', is_flag=True, default=False,
+              help=('Create the instance with no side channels at all. This '
+                    'disables the in-guest agent.'))
 @click.pass_context
 def instance_create(ctx, name=None, cpus=None, memory=None, network=None, floated=None,
                     networkspec=None, disk=None, diskspec=None, sshkey=None, sshkeydata=None,
                     userdata=None, encodeduserdata=None, placement=None, videospec=None,
                     namespace=None, bios=True, force=False, configdrive=None,
-                    no_secure_boot=True, nvram_template=None, metadata=None, side_channel=None):
+                    no_secure_boot=True, nvram_template=None, metadata=None, side_channel=None,
+                    no_side_channels=False):
     if memory < 128 and not force:
         print('Specified memory size is %dMB. This is very small.' % memory)
         print('Use the --force flag if this is deliberate')
@@ -480,6 +486,23 @@ def instance_create(ctx, name=None, cpus=None, memory=None, network=None, floate
             return
         metadata_def[key] = val
 
+    # click's multiple=True options default to an empty tuple, but the API
+    # distinguishes between None ("apply the server's default side channels,
+    # currently sf-agent and sf-agent2") and an empty list ("no side channels
+    # at all, disabling the in-guest agent"). Sending the empty tuple through
+    # as-is silently disabled the agent on every instance created without an
+    # explicit --side-channel flag, so map "unspecified" to None and require
+    # --no-side-channels for the explicit empty case.
+    if no_side_channels:
+        if side_channel:
+            print('You cannot specify both --side-channel and --no-side-channels')
+            return
+        side_channels = []
+    elif side_channel:
+        side_channels = list(side_channel)
+    else:
+        side_channels = None
+
     kwargs = {
         'force_placement': placement,
         'namespace': namespace,
@@ -489,7 +512,7 @@ def instance_create(ctx, name=None, cpus=None, memory=None, network=None, floate
         'secure_boot': secure_boot,
         'nvram_template': nvram_template,
         'metadata': metadata_def,
-        'side_channels': side_channel
+        'side_channels': side_channels
     }
 
     _show_instance(ctx, ctx.obj['CLIENT'].create_instance(
