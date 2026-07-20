@@ -565,6 +565,62 @@ class ApiClientTestCase(testtools.TestCase):
             'GET', '/instances/uuid/consoledata',
             data={'length': 1000}, response_body_is_binary=True)
 
+    def test_get_vdi_console_proxy(self):
+        proxy = {'url': 'https://kerbside.example.com/sf-console.vv?t=xyz',
+                 'expires_at': '2026-07-20T00:00:00Z'}
+        self.mock_request.return_value = mock.Mock(
+            **{'json.return_value': proxy})
+
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        result = client.get_vdi_console_proxy('notreallyauuid')
+
+        self.assertEqual(proxy, result)
+        self.mock_request.assert_called_with(
+            'GET', '/instances/notreallyauuid/vdiconsoleproxy')
+
+    def test_get_vdi_token_public_keys(self):
+        keys = {'keys': [{'kid': 'key-1', 'pem': 'fake-pem'}]}
+        self.mock_request.return_value = mock.Mock(
+            **{'json.return_value': keys})
+
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        result = client.get_vdi_token_public_keys()
+
+        self.assertEqual(keys, result)
+        self.mock_request.assert_called_with(
+            'GET', '/admin/vditokenpubkey')
+
+    @mock.patch('shakenfist_client.apiclient.requests.get')
+    def test_get_vdi_console_proxy_file(self, mock_get):
+        proxy_url = 'https://kerbside.example.com/sf-console.vv?t=xyz'
+        proxy = {'url': proxy_url, 'expires_at': '2026-07-20T00:00:00Z'}
+        self.mock_request.return_value = mock.Mock(
+            **{'json.return_value': proxy})
+        mock_get.return_value = mock.Mock(text='[virt-viewer]\nfake=1\n')
+
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        result = client.get_vdi_console_proxy_file('notreallyauuid')
+
+        self.assertEqual('[virt-viewer]\nfake=1\n', result)
+
+        # The .vv fetch must be a plain requests.get() carrying no SF
+        # bearer token -- not routed through _request_url.
+        mock_get.assert_called_once_with(
+            proxy_url, timeout=client.sync_request_timeout)
+        mock_get.return_value.raise_for_status.assert_called_once_with()
+        self.assertNotIn(
+            mock.call('GET', '/sf-console.vv', data=mock.ANY),
+            self.mock_request.mock_calls)
+        # Only the vdiconsoleproxy round-trip went through _request_url.
+        self.mock_request.assert_called_once_with(
+            'GET', '/instances/notreallyauuid/vdiconsoleproxy')
+        for call_args in mock_get.call_args_list:
+            args, kwargs = call_args
+            self.assertNotIn('headers', kwargs)
+
     def test_get_console_data_decodes_with_replacement(self):
         # Invalid byte 0x80 in the middle should not raise; the decoder is
         # asked to replace it.

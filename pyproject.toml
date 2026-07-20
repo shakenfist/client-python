@@ -48,3 +48,6 @@ test = [
     "tox",                 # mit
     "flake8",              # mit
 ]
+vdi = [
+    "ryll ; sys_platform == 'linux'",   # apache2
+]

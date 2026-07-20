@@ -1,4 +1,6 @@
 import io
+import os
+import tempfile
 from unittest import mock
 
 import testtools
@@ -144,3 +146,257 @@ class CreateSideChannelsTestCase(testtools.TestCase):
             ['-s', 'sf-agent2', '--no-side-channels'])
         client.create_instance.assert_not_called()
         self.assertIn('cannot specify both', result.output)
+
+
+class VdiConsoleCommandTestCase(testtools.TestCase):
+    """Tests for ``sf-client instance vdiconsole``.
+
+    The command chooses between the Kerbside proxy path and the direct
+    path (from ``check_capability``/``--direct``) and between the ``ryll``
+    and ``remote-viewer`` executables (from ``shutil.which``/``--viewer``).
+    We mock ``shutil.which``, ``subprocess.run``, ``tempfile.mkstemp`` and
+    the client methods so no real viewer is launched and no real file is
+    needed.
+    """
+
+    def _which(self, present):
+        """Return a fake ``shutil.which`` resolving names in ``present``.
+
+        ``present`` maps a viewer name to its absolute path; anything else
+        resolves to ``None`` (not on PATH).
+        """
+        def which(name):
+            return present.get(name)
+        return which
+
+    def _mkstemp(self):
+        """Return a real ``tempfile.mkstemp`` result so the write/unlink in
+        the temp-file branches operate on an actual (throwaway) file, while
+        recording the name so tests can assert on it."""
+        handle, name = self._real_mkstemp()
+        self._temp_names.append(name)
+        self.addCleanup(
+            lambda: os.path.exists(name) and os.unlink(name))
+        return handle, name
+
+    def _invoke(self, client, args, which_present, verbose=False):
+        self._temp_names = []
+        self._real_mkstemp = tempfile.mkstemp
+        run = mock.Mock(return_value=mock.Mock(returncode=0))
+        mkstemp = mock.Mock(side_effect=self._mkstemp)
+        with mock.patch.object(
+                instance_cmd.shutil, 'which',
+                side_effect=self._which(which_present)) as which, \
+            mock.patch.object(
+                instance_cmd.subprocess, 'run', run), \
+            mock.patch.object(
+                instance_cmd.tempfile, 'mkstemp', mkstemp):
+            runner = CliRunner()
+            result = runner.invoke(
+                instance_cmd.instance,
+                ['vdiconsole'] + args,
+                obj={'CLIENT': client, 'VERBOSE': verbose},
+                catch_exceptions=False)
+        return result, run, mkstemp, which
+
+    def _client(self, proxy_cap=True, helper_cap=True):
+        client = mock.Mock()
+
+        def check_capability(cap):
+            if cap == 'vdi-console-proxy':
+                return proxy_cap
+            if cap == 'vdi-console-helper':
+                return helper_cap
+            return False
+        client.check_capability.side_effect = check_capability
+        client.get_vdi_console_proxy.return_value = {
+            'url': 'https://kerbside.example/sf-console.vv?token=jwt',
+            'expires_at': 1234,
+        }
+        client.get_vdi_console_proxy_file.return_value = '[proxy vv]'
+        client.get_vdi_console_helper.return_value = '[direct vv]'
+        return client
+
+    def test_proxy_ryll_uses_url_and_no_tempfile(self):
+        # Matrix cell: proxy + ryll. ryll does the token exchange itself,
+        # so we pass --url and never mint/fetch or write the .vv.
+        client = self._client(proxy_cap=True)
+        result, run, mkstemp, which = self._invoke(
+            client, ['inst-ref'], {'ryll': '/usr/bin/ryll'})
+
+        self.assertEqual(0, result.exit_code, result.output)
+        run.assert_called_once_with(
+            ['/usr/bin/ryll', '--url',
+             'https://kerbside.example/sf-console.vv?token=jwt'])
+        mkstemp.assert_not_called()
+        client.get_vdi_console_proxy.assert_called_once_with('inst-ref')
+        client.get_vdi_console_proxy_file.assert_not_called()
+        client.get_vdi_console_helper.assert_not_called()
+
+    def test_proxy_remote_viewer_writes_tempfile(self):
+        # Matrix cell: proxy + remote-viewer (ryll absent). We fetch the
+        # .vv via the proxy-file convenience, write it to a temp file, and
+        # launch remote-viewer against the file.
+        client = self._client(proxy_cap=True)
+        result, run, mkstemp, which = self._invoke(
+            client, ['inst-ref'], {'remote-viewer': '/usr/bin/remote-viewer'})
+
+        self.assertEqual(0, result.exit_code, result.output)
+        mkstemp.assert_called_once()
+        temp_name = self._temp_names[0]
+        run.assert_called_once_with(['/usr/bin/remote-viewer', temp_name])
+        client.get_vdi_console_proxy_file.assert_called_once_with('inst-ref')
+        client.get_vdi_console_proxy.assert_not_called()
+        client.get_vdi_console_helper.assert_not_called()
+        # Temp file cleaned up.
+        self.assertFalse(os.path.exists(temp_name))
+
+    def test_direct_flag_forces_direct_path(self):
+        # Matrix cell: --direct forces the direct-to-hypervisor helper even
+        # though the proxy capability is present.
+        client = self._client(proxy_cap=True, helper_cap=True)
+        result, run, mkstemp, which = self._invoke(
+            client, ['--direct', 'inst-ref'], {'ryll': '/usr/bin/ryll'})
+
+        self.assertEqual(0, result.exit_code, result.output)
+        mkstemp.assert_called_once()
+        temp_name = self._temp_names[0]
+        run.assert_called_once_with(['/usr/bin/ryll', '--file', temp_name])
+        client.get_vdi_console_helper.assert_called_once_with('inst-ref')
+        client.get_vdi_console_proxy.assert_not_called()
+        client.get_vdi_console_proxy_file.assert_not_called()
+        self.assertFalse(os.path.exists(temp_name))
+
+    def test_direct_when_server_lacks_proxy_capability(self):
+        # Matrix cell: no --direct, but the server does not advertise the
+        # proxy, so we fall back to the direct helper path.
+        client = self._client(proxy_cap=False, helper_cap=True)
+        result, run, mkstemp, which = self._invoke(
+            client, ['inst-ref'], {'ryll': '/usr/bin/ryll'})
+
+        self.assertEqual(0, result.exit_code, result.output)
+        mkstemp.assert_called_once()
+        temp_name = self._temp_names[0]
+        run.assert_called_once_with(['/usr/bin/ryll', '--file', temp_name])
+        client.get_vdi_console_helper.assert_called_once_with('inst-ref')
+        client.get_vdi_console_proxy.assert_not_called()
+        client.get_vdi_console_proxy_file.assert_not_called()
+
+    def test_viewer_override_is_honoured(self):
+        # --viewer forces remote-viewer even when ryll is on PATH.
+        client = self._client(proxy_cap=True)
+        result, run, mkstemp, which = self._invoke(
+            client, ['--viewer', 'remote-viewer', 'inst-ref'],
+            {'ryll': '/usr/bin/ryll',
+             'remote-viewer': '/usr/bin/remote-viewer'})
+
+        self.assertEqual(0, result.exit_code, result.output)
+        temp_name = self._temp_names[0]
+        run.assert_called_once_with(['/usr/bin/remote-viewer', temp_name])
+        client.get_vdi_console_proxy_file.assert_called_once_with('inst-ref')
+
+    def test_viewer_not_found_exits_nonzero(self):
+        # Neither ryll nor remote-viewer resolve on PATH.
+        client = self._client(proxy_cap=True)
+        result, run, mkstemp, which = self._invoke(
+            client, ['inst-ref'], {})
+
+        self.assertEqual(1, result.exit_code)
+        self.assertIn('not found on PATH', result.output)
+        run.assert_not_called()
+        mkstemp.assert_not_called()
+
+    def test_explicit_viewer_not_found_exits_nonzero(self):
+        # An explicit --viewer that does not resolve also errors out.
+        client = self._client(proxy_cap=True)
+        result, run, mkstemp, which = self._invoke(
+            client, ['--viewer', 'nope', 'inst-ref'],
+            {'ryll': '/usr/bin/ryll'})
+
+        self.assertEqual(1, result.exit_code)
+        self.assertIn("Viewer 'nope' not found", result.output)
+        run.assert_not_called()
+
+    def test_ryll_gets_no_debug_when_verbose(self):
+        # Verbose must not add --debug to a ryll launch (not ryll's flag).
+        client = self._client(proxy_cap=False, helper_cap=True)
+        result, run, mkstemp, which = self._invoke(
+            client, ['inst-ref'], {'ryll': '/usr/bin/ryll'}, verbose=True)
+
+        self.assertEqual(0, result.exit_code, result.output)
+        temp_name = self._temp_names[0]
+        run.assert_called_once_with(['/usr/bin/ryll', '--file', temp_name])
+        self.assertNotIn('--debug', run.call_args.args[0])
+
+    def test_remote_viewer_gets_debug_when_verbose(self):
+        # Verbose adds --debug for remote-viewer, before the temp file.
+        client = self._client(proxy_cap=False, helper_cap=True)
+        result, run, mkstemp, which = self._invoke(
+            client, ['inst-ref'],
+            {'remote-viewer': '/usr/bin/remote-viewer'}, verbose=True)
+
+        self.assertEqual(0, result.exit_code, result.output)
+        temp_name = self._temp_names[0]
+        run.assert_called_once_with(
+            ['/usr/bin/remote-viewer', '--debug', temp_name])
+
+
+class VdiConsoleFileCommandTestCase(testtools.TestCase):
+    """Tests for ``sf-client instance vdiconsolefile`` (decision 5)."""
+
+    def _invoke(self, client, args):
+        runner = CliRunner()
+        result = runner.invoke(
+            instance_cmd.instance,
+            ['vdiconsolefile'] + args,
+            obj={'CLIENT': client, 'VERBOSE': False},
+            catch_exceptions=False)
+        return result
+
+    def _client(self, proxy_cap=True, helper_cap=True):
+        client = mock.Mock()
+
+        def check_capability(cap):
+            if cap == 'vdi-console-proxy':
+                return proxy_cap
+            if cap == 'vdi-console-helper':
+                return helper_cap
+            return False
+        client.check_capability.side_effect = check_capability
+        client.get_vdi_console_proxy_file.return_value = '[proxy vv]'
+        client.get_vdi_console_helper.return_value = '[direct vv]'
+        return client
+
+    def test_proxy_path_prints_proxy_file(self):
+        client = self._client(proxy_cap=True)
+        result = self._invoke(client, ['inst-ref'])
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn('[proxy vv]', result.output)
+        client.get_vdi_console_proxy_file.assert_called_once_with('inst-ref')
+        client.get_vdi_console_helper.assert_not_called()
+
+    def test_direct_flag_prints_helper(self):
+        client = self._client(proxy_cap=True, helper_cap=True)
+        result = self._invoke(client, ['--direct', 'inst-ref'])
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn('[direct vv]', result.output)
+        client.get_vdi_console_helper.assert_called_once_with('inst-ref')
+        client.get_vdi_console_proxy_file.assert_not_called()
+
+    def test_no_proxy_capability_prints_helper(self):
+        client = self._client(proxy_cap=False, helper_cap=True)
+        result = self._invoke(client, ['inst-ref'])
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn('[direct vv]', result.output)
+        client.get_vdi_console_helper.assert_called_once_with('inst-ref')
+        client.get_vdi_console_proxy_file.assert_not_called()
+
+    def test_no_capabilities_exits_nonzero(self):
+        client = self._client(proxy_cap=False, helper_cap=False)
+        result = self._invoke(client, ['inst-ref'])
+
+        self.assertEqual(1, result.exit_code)
+        self.assertIn('does not implement VDI console helpers', result.output)
