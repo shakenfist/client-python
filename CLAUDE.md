@@ -61,6 +61,29 @@ or backport packages where necessary.
 
 ## Recent Changes
 
+### Seamless Kerbside VDI Console Launch (2026-07)
+
+Added `instance vdiconsole` / `instance vdiconsolefile` support for
+Kerbside-proxied VDI consoles, alongside the pre-existing
+direct-to-hypervisor path. When the server advertises the
+`vdi-console-proxy` capability, `apiclient.py` exchanges the instance
+reference for a proxy descriptor (`get_vdi_console_proxy`, `GET
+/instances/<ref>/vdiconsoleproxy`) whose URL embeds a short-lived,
+single-use JWT; `get_vdi_console_proxy_file` fetches the resulting
+`.vv` body with a plain, unauthenticated `requests.get()` since the
+token is already in the URL and must not also carry an SF bearer
+token. `get_vdi_token_public_keys` (`GET /admin/vditokenpubkey`)
+exposes the signing keys used to verify those tokens offline.
+
+The CLI's viewer-selection chain in `commandline/instance.py` prefers
+`ryll` (installed via the new `[vdi]` extra, `pip install -e
+".[vdi]"`) on `PATH`, falling back to `remote-viewer`. Proxied
+connections launched through `ryll` use `--url` directly so the token
+is never written to disk; every other combination writes a temporary
+`.vv` file that is deleted after the viewer exits. `--direct` forces
+the pre-existing direct-to-hypervisor path. See the README's "VDI
+console access" section for user-facing details.
+
 ### Plugin Loading Modernization (2026-01)
 
 Replaced deprecated `pkg_resources.iter_entry_points()` with

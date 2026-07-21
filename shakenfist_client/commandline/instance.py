@@ -743,7 +743,14 @@ def instance_vdiconsole(ctx, instance_ref=None, viewer=None, direct=False):
             os.unlink(temp_name)
 
 
-@instance.command(name='vdiconsolefile', help='Download a .vv file for the VDI console')
+@instance.command(name='vdiconsolefile',
+                  help='Download a .vv file for the VDI console.\n\n'
+                       'When the server advertises the Kerbside proxy, this '
+                       'downloads a .vv routed through the Kerbside proxy; '
+                       'otherwise it falls back to a direct-to-hypervisor '
+                       '.vv file. Use --direct to force the direct path. '
+                       'Unlike vdiconsole, this prints the file to stdout '
+                       'instead of launching a viewer.')
 @click.argument('instance_ref', type=click.STRING, shell_complete=_get_instances)
 @click.option('--direct', is_flag=True, default=False,
               help='Force the direct-to-hypervisor path, bypassing the '
