@@ -54,6 +54,15 @@ REST API:
   error handling
 - **Async operations**: Supports configurable strategies for
   waiting on asynchronous operations (instance creation, etc.)
+- **VDI console access**: `get_vdi_console_proxy` fetches a
+  Kerbside-proxied console descriptor (`GET
+  /instances/<ref>/vdiconsoleproxy`); `get_vdi_console_proxy_file`
+  fetches the resulting `.vv` file via a plain, unauthenticated
+  `requests.get()` since the capability travels as a JWT embedded in
+  the URL itself; `get_vdi_token_public_keys` fetches the signing
+  public keys (`GET /admin/vditokenpubkey`) used to verify those
+  tokens offline. `get_vdi_console_helper` remains the direct-to-
+  hypervisor fallback.
 
 ### CLI (`main.py`)
 
@@ -87,6 +96,10 @@ with `importlib.metadata`.
 - **Build system**: `setuptools` with `pyproject.toml`
 - **Versioning**: `setuptools_scm` derives version from git tags
 - **Distribution**: Published to PyPI as `shakenfist_client`
+- **Optional extras**: `[vdi]` pulls in
+  [ryll](https://github.com/shakenfist/ryll) on Linux, the preferred
+  VDI viewer for `instance vdiconsole` / `vdiconsolefile`; without it
+  the CLI falls back to `remote-viewer` if present on `PATH`
 
 ## CI/CD
 

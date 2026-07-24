@@ -1132,6 +1132,24 @@ class Client:
         r = self._request_url('GET', '/instances/' + instance_ref + '/vdiconsolehelper')
         return r.text
 
+    def get_vdi_console_proxy(self, instance_ref):
+        r = self._request_url(
+            'GET', '/instances/' + instance_ref + '/vdiconsoleproxy')
+        return r.json()
+
+    def get_vdi_console_proxy_file(self, instance_ref):
+        # The kerbside URL embeds its own capability (a JWT), so this is a
+        # plain requests.get() and must NOT go through _request_url --
+        # that would incorrectly attach the SF bearer token.
+        result = self.get_vdi_console_proxy(instance_ref)
+        r = requests.get(result['url'], timeout=self.sync_request_timeout)
+        r.raise_for_status()
+        return r.text
+
+    def get_vdi_token_public_keys(self):
+        r = self._request_url('GET', '/admin/vditokenpubkey')
+        return r.json()
+
     def get_screenshot(self, instance_ref):
         if not self.check_capability('instance-screenshot'):
             raise IncapableException(

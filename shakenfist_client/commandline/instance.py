@@ -2,6 +2,7 @@ import base64
 import datetime
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -661,46 +662,113 @@ def instance_consoledelete(ctx, instance_ref=None):
     ctx.obj['CLIENT'].delete_console_data(instance_ref)
 
 
-@instance.command(name='vdiconsole', help='Launch a VDI console for the instance')
+@instance.command(name='vdiconsole',
+                  help='Launch a VDI console for the instance.\n\n'
+                       'When the server advertises the Kerbside proxy, this '
+                       'seamlessly opens a session through it; otherwise it '
+                       'falls back to a direct-to-hypervisor connection. Use '
+                       '--direct to force the direct path.')
 @click.argument('instance_ref', type=click.STRING, shell_complete=_get_instances)
+@click.option('--viewer', type=click.STRING, default=None,
+              help='Override viewer auto-detection: ryll, remote-viewer, or '
+                   'a path.')
+@click.option('--direct', is_flag=True, default=False,
+              help='Force the direct-to-hypervisor path, bypassing the '
+                   'Kerbside proxy.')
 @click.pass_context
-def instance_vdiconsole(ctx, instance_ref=None):
-    if not ctx.obj['CLIENT'].check_capability('vdi-console-helper'):
+def instance_vdiconsole(ctx, instance_ref=None, viewer=None, direct=False):
+    client = ctx.obj['CLIENT']
+    use_proxy = (not direct) and client.check_capability('vdi-console-proxy')
+
+    # Resolve the viewer executable. Auto-detection prefers ryll (shipped by
+    # the [vdi] extra) and falls back to remote-viewer.
+    if viewer is None:
+        viewer = 'ryll' if shutil.which('ryll') else 'remote-viewer'
+    viewer_exe = shutil.which(viewer) or (
+        viewer if os.path.isabs(viewer) and os.access(viewer, os.X_OK)
+        else None)
+    if viewer_exe is None:
         sys.stderr.write(
-            'Unfortunately this server does not implement VDI console helpers.\n')
+            "Viewer '%s' not found on PATH. Install ryll "
+            '(pip install shakenfist-client[vdi]) or remote-viewer, or pass '
+            '--viewer.\n' % viewer)
         sys.exit(1)
+    is_ryll = os.path.basename(viewer_exe) == 'ryll'
 
-    debug = ''
-    if ctx.obj['VERBOSE']:
-        debug = '--debug'
+    if use_proxy and is_ryll:
+        # ryll performs the token exchange itself; the JWT never touches disk.
+        proxy = client.get_vdi_console_proxy(instance_ref)
+        p = subprocess.run([viewer_exe, '--url', proxy['url']])
+        if ctx.obj['VERBOSE']:
+            print('%s process exited with %d return code'
+                  % (viewer, p.returncode))
+        return
 
-    # We don't use NamedTemporaryFile as a context manager as the .vv file
-    # will also attempt to clean up the file.
+    # Every other path fetches a .vv to a temp file and launches the viewer
+    # against it. We don't use NamedTemporaryFile as a context manager as the
+    # .vv file will also attempt to clean up the file.
+    if use_proxy:
+        vv = client.get_vdi_console_proxy_file(instance_ref)
+    else:
+        # Direct-to-hypervisor path (requires the vdi-console-helper
+        # capability).
+        if not client.check_capability('vdi-console-helper'):
+            sys.stderr.write(
+                'Unfortunately this server does not implement VDI console '
+                'helpers.\n')
+            sys.exit(1)
+        vv = client.get_vdi_console_helper(instance_ref)
+
     (temp_handle, temp_name) = tempfile.mkstemp()
     os.close(temp_handle)
     try:
         with open(temp_name, 'w') as f:
-            f.write(ctx.obj['CLIENT'].get_vdi_console_helper(instance_ref))
+            f.write(vv)
 
-        p = subprocess.run(f'remote-viewer {debug} {temp_name}', shell=True)
+        if is_ryll:
+            args = [viewer_exe, '--file', temp_name]
+        else:
+            args = [viewer_exe]
+            # --debug is remote-viewer's flag; ryll does not accept it.
+            if ctx.obj['VERBOSE']:
+                args.append('--debug')
+            args.append(temp_name)
+
+        p = subprocess.run(args)
         if ctx.obj['VERBOSE']:
-            print('Remote viewer process exited with %d return code'
-                  % p.returncode)
+            print('%s process exited with %d return code'
+                  % (viewer, p.returncode))
     finally:
         if os.path.exists(temp_name):
             os.unlink(temp_name)
 
 
-@instance.command(name='vdiconsolefile', help='Download a .vv file for the VDI console')
+@instance.command(name='vdiconsolefile',
+                  help='Download a .vv file for the VDI console.\n\n'
+                       'When the server advertises the Kerbside proxy, this '
+                       'downloads a .vv routed through the Kerbside proxy; '
+                       'otherwise it falls back to a direct-to-hypervisor '
+                       '.vv file. Use --direct to force the direct path. '
+                       'Unlike vdiconsole, this prints the file to stdout '
+                       'instead of launching a viewer.')
 @click.argument('instance_ref', type=click.STRING, shell_complete=_get_instances)
+@click.option('--direct', is_flag=True, default=False,
+              help='Force the direct-to-hypervisor path, bypassing the '
+                   'Kerbside proxy.')
 @click.pass_context
-def instance_vdiconsolefile(ctx, instance_ref=None):
-    if not ctx.obj['CLIENT'].check_capability('vdi-console-helper'):
+def instance_vdiconsolefile(ctx, instance_ref=None, direct=False):
+    client = ctx.obj['CLIENT']
+
+    if (not direct) and client.check_capability('vdi-console-proxy'):
+        print(client.get_vdi_console_proxy_file(instance_ref))
+        return
+
+    if not client.check_capability('vdi-console-helper'):
         sys.stderr.write(
             'Unfortunately this server does not implement VDI console helpers.\n')
         sys.exit(1)
 
-    print(ctx.obj['CLIENT'].get_vdi_console_helper(instance_ref))
+    print(client.get_vdi_console_helper(instance_ref))
 
 
 @instance.command(name='snapshot', help='Snapshot instance')

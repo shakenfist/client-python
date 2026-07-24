@@ -12,6 +12,9 @@ cloud platform.
 # Install with test dependencies
 pip install -e ".[test]"
 
+# Install with VDI console support (ryll viewer)
+pip install -e ".[vdi]"
+
 # Run unit tests
 stestr run
 
@@ -33,6 +36,21 @@ tox
 | `shakenfist_client/tests/` | Unit tests |
 | `tools/flake8wrap.sh` | Flake8 wrapper for CI |
 | `pyproject.toml` | Package metadata and dependencies |
+
+## VDI Console Access
+
+`shakenfist_client/commandline/instance.py` hosts the `vdiconsole` and
+`vdiconsolefile` commands, including the proxy-vs-direct launch logic
+and the viewer-selection chain (prefers `ryll` on `PATH`, then falls
+back to `remote-viewer`; proxy connections via `ryll` launch with
+`--url` and never write the token to disk, all other combinations
+write a temporary `.vv` file). `shakenfist_client/apiclient.py` has the
+matching `Client` methods: `get_vdi_console_proxy` (`GET
+/instances/<ref>/vdiconsoleproxy`), `get_vdi_console_proxy_file`
+(fetches the `.vv` body from the URL returned above via a plain
+`requests.get()` -- it must NOT attach an SF bearer token, since the
+capability is already embedded as a JWT in the URL), and
+`get_vdi_token_public_keys` (`GET /admin/vditokenpubkey`).
 
 ## Code Conventions
 
