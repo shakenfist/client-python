@@ -48,6 +48,46 @@ class ApiClientTestCase(testtools.TestCase):
         self.mock_request.assert_called_with(
             'GET', '/instances/notreallyauuid/interfaces')
 
+    def test_await_instance_create_created(self):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        with mock.patch.object(client, 'get_instance',
+                               return_value={'state': 'created'}):
+            client.await_instance_create('notreallyauuid')
+
+    def test_await_instance_create_error_state(self):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        with mock.patch.object(client, 'get_instance',
+                               return_value={'state': 'error'}):
+            self.assertRaises(
+                apiclient.InstanceWillNeverBeReady,
+                client.await_instance_create, 'notreallyauuid')
+
+    def test_await_instance_create_transitional_error_state(self):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        with mock.patch.object(client, 'get_instance',
+                               return_value={'state': 'creating-error'}):
+            self.assertRaises(
+                apiclient.InstanceWillNeverBeReady,
+                client.await_instance_create, 'notreallyauuid')
+
+    def test_instance_await_sanity_check_error_states(self):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        for state in ['error', 'creating-error']:
+            self.assertRaises(
+                apiclient.InstanceWillNeverBeReady,
+                client._instance_await_sanity_check,
+                {'state': state, 'side_channels': ['sf-agent2']})
+
+    def test_instance_await_sanity_check_healthy(self):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client._instance_await_sanity_check(
+            {'state': 'created', 'side_channels': ['sf-agent2']})
+
     def test_create_instance(self):
         client = apiclient.Client(suppress_configuration_lookup=True,
                                   base_url='http://localhost:13000')

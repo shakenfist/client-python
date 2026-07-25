@@ -138,6 +138,13 @@ def _calculate_async_deadline(strategy):
     raise UnknownAsyncStrategy('Async strategy %s is unknown' % strategy)
 
 
+def _is_error_state(state):
+    # Instances error to transitional states like 'creating-error' before
+    # settling in the terminal 'error' state. Both mean the instance will
+    # never be ready.
+    return state == 'error' or state.endswith('-error')
+
+
 def _correct_blob_indexes(d):
     # JSON requires dictionary keys to be strings. Reverse that for the blobs
     # element here to reduce confusion.
@@ -1350,12 +1357,12 @@ class Client:
         final = False
         while time.time() - start_time < timeout:
             i = self.get_instance(instance_uuid)
-            if i['state'] in ['created', 'error']:
+            if i['state'] == 'created' or _is_error_state(i['state']):
                 final = True
                 break
             time.sleep(5)
 
-        if i['state'].endswith('-error'):
+        if _is_error_state(i['state']):
             raise InstanceWillNeverBeReady(
                 'failed to start (marked as error state, %s)' % i)
 
@@ -1370,7 +1377,7 @@ class Client:
         if inst['state'] == 'deleted':
             raise InstanceWillNeverBeReady('instance deleted')
 
-        if inst['state'].endswith('-error'):
+        if _is_error_state(inst['state']):
             raise InstanceWillNeverBeReady('instance in error state')
 
         if 'sf-agent2' not in inst['side_channels']:
