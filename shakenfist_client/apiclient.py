@@ -353,7 +353,8 @@ class Client:
         return 'Bearer %s' % r.json()['access_token']
 
     def _request_url(self, method, url, data=None, request_body_is_binary=False,
-                     response_body_is_binary=False, stream=False):
+                     response_body_is_binary=False, stream=False,
+                     deadline=None):
         # NOTE(mikal): if we are not authenticated, probe the base_url looking
         # for redirections. If we are redirected, rewrite our base_url to the
         # redirection target.
@@ -365,7 +366,13 @@ class Client:
                 self.base_url = probe.headers['Location']
             self.cached_auth = self._authenticate()
 
-        deadline = time.time() + _calculate_async_deadline(self.async_strategy)
+        # A caller with a budget of its own passes a deadline, so the
+        # dependency retry below cannot outlast it. Without one this falls
+        # back to the async strategy's deadline, which for ASYNC_BLOCK is an
+        # hour -- spent inside a single call, invisible to anything above.
+        if deadline is None:
+            deadline = time.time() + _calculate_async_deadline(
+                self.async_strategy)
         while True:
             try:
                 try:
@@ -561,7 +568,20 @@ class Client:
     def create_instance(self, name, cpus, memory, network, disk, sshkey, userdata,
                         namespace=None, force_placement=None, video=None, uefi=False,
                         configdrive=None, nvram_template=None, secure_boot=False,
-                        metadata=None, side_channels=None):
+                        metadata=None, side_channels=None, timeout=None):
+        """Create an instance, optionally waiting for it to be created.
+
+        ``timeout`` bounds the whole call -- the dependency retries on the
+        POST as well as the wait for the instance to leave its transitional
+        states. Pass 0 to return as soon as the POST is accepted, which is
+        what a caller that is about to call
+        :meth:`await_instance_create` wants: otherwise the create and the
+        await are two independent budgets on the same condition, run back
+        to back.
+
+        The default of None keeps the historical behaviour, where the wait
+        is bounded by the client's async strategy.
+        """
         body = {
             # Values all instances care about
             'name': name,
@@ -594,16 +614,28 @@ class Client:
             clean_disks.append(d)
         body['disk'] = clean_disks
 
-        r = self._request_url('POST', '/instances', data=body)
+        if timeout is None:
+            deadline = time.time() + _calculate_async_deadline(
+                self.async_strategy)
+        else:
+            deadline = time.time() + timeout
+
+        r = self._request_url('POST', '/instances', data=body,
+                              deadline=deadline)
         i = r.json()
 
-        deadline = time.time() + _calculate_async_deadline(self.async_strategy)
         while True:
             if i['state'] not in ['initial', 'creating']:
                 return i
 
             LOG.debug('Waiting for instance to be created')
             if time.time() > deadline:
+                # NOTE: this returns an instance still in a transitional
+                # state rather than raising, and callers cannot tell that
+                # apart from success. Changing it would break every caller
+                # that treats a transitional instance as normal, so instead
+                # give callers a way to make the wait short -- see the
+                # timeout argument.
                 LOG.debug('Deadline exceeded waiting for instance to be created')
                 return i
 
@@ -1351,16 +1383,30 @@ class Client:
 
     # The following methods are convenience wrappers around methods above.
     def await_instance_create(self, instance_uuid, timeout=600):
-        # Wait up to 10 minutes for the instance to be created. On a slow
-        # morning it can take over 2 minutes to download a Ubuntu image.
+        """Wait for an instance to reach a terminal state.
+
+        The default of ten minutes is generous because on a slow morning
+        it can take over two minutes just to download a Ubuntu image.
+
+        This is a budget for this call alone. A caller that created the
+        instance itself should pass timeout=0 to create_instance, or the
+        two waits run back to back on the same condition and the task
+        takes the sum of them while reporting only this one.
+        """
         start_time = time.time()
         final = False
-        while time.time() - start_time < timeout:
-            i = self.get_instance(instance_uuid)
+        # Checked at least once even for a non-positive timeout, so an
+        # already-created instance is reported as such rather than as a
+        # timeout, and i is never referenced unbound below.
+        i = self.get_instance(instance_uuid)
+        while True:
             if i['state'] == 'created' or _is_error_state(i['state']):
                 final = True
                 break
+            if time.time() - start_time >= timeout:
+                break
             time.sleep(5)
+            i = self.get_instance(instance_uuid)
 
         if _is_error_state(i['state']):
             raise InstanceWillNeverBeReady(
@@ -1368,7 +1414,8 @@ class Client:
 
         if not final:
             raise TimeoutException(
-                'not created within %d second timeout' % timeout)
+                'not created within %d second timeout (last state: %s)'
+                % (timeout, i['state']))
 
     def _instance_await_sanity_check(self, inst):
         if not inst:
