@@ -1,4 +1,5 @@
 import json
+import time
 from unittest import mock
 
 import testtools
@@ -97,6 +98,7 @@ class ApiClientTestCase(testtools.TestCase):
 
         self.mock_request.assert_called_with(
             'POST', '/instances',
+            deadline=mock.ANY,
             data={
                 'name': 'foo',
                 'cpus': 1,
@@ -125,6 +127,7 @@ class ApiClientTestCase(testtools.TestCase):
 
         self.mock_request.assert_called_with(
             'POST', '/instances',
+            deadline=mock.ANY,
             data={
                 'name': 'foo',
                 'cpus': 1,
@@ -757,3 +760,168 @@ class ApiClientConfigurationLookupTestCase(testtools.TestCase):
     @mock.patch.dict('os.environ', {}, clear=True)
     def test_unconfigured(self):
         self.assertRaises(apiclient.UnconfiguredException, apiclient.Client)
+
+
+class InstanceCreateBudgetTestCase(testtools.TestCase):
+    """The create and the await must not be two budgets on one condition.
+
+    shakenfist/kerbside#355: sf_instance built a client in ASYNC_BLOCK
+    mode, so create_instance waited an hour for the instance to leave
+    'creating' and then returned it still transitional, and only then did
+    await_instance_create start its own 600 second clock. The task took
+    the sum, 4200 seconds, and reported the 600.
+    """
+
+    def setUp(self):
+        super().setUp()
+
+        self.request_url = mock.patch(
+            'shakenfist_client.apiclient.Client._request_url')
+        self.mock_request = self.request_url.start()
+        self.addCleanup(self.request_url.stop)
+
+        self.capabilities = mock.patch(
+            'shakenfist_client.apiclient.Client._collect_capabilities')
+        self.capabilities = self.capabilities.start()
+        self.addCleanup(self.capabilities.stop)
+
+        self.sleep = mock.patch('time.sleep')
+        self.mock_sleep = self.sleep.start()
+        self.addCleanup(self.sleep.stop)
+
+    def _client(self):
+        return apiclient.Client(suppress_configuration_lookup=True,
+                                base_url='http://localhost:13000')
+
+    def _creating(self):
+        self.mock_request.return_value.json.return_value = {
+            'uuid': 'notreallyauuid', 'state': 'creating'}
+
+    def test_zero_timeout_does_not_wait_for_creation(self):
+        # What a caller about to await should get: the POST is made, the
+        # transitional instance comes straight back, and nothing polls.
+        self._creating()
+        client = self._client()
+        with mock.patch.object(client, 'get_instance') as get_instance:
+            i = client.create_instance(
+                'foo', 1, 2048, ['netuuid1'], ['8@cirros'], 'sshkey', None,
+                timeout=0)
+
+        self.assertEqual('creating', i['state'])
+        get_instance.assert_not_called()
+
+    def test_the_post_is_bounded_by_the_same_deadline(self):
+        # The dependency retry inside _request_url is the other hour-long
+        # blocking region, so the caller's budget has to reach it too.
+        self._creating()
+        client = self._client()
+        client.create_instance(
+            'foo', 1, 2048, ['netuuid1'], ['8@cirros'], 'sshkey', None,
+            timeout=0)
+
+        _args, kwargs = self.mock_request.call_args
+        self.assertLessEqual(kwargs['deadline'], time.time())
+
+    def test_a_default_create_still_waits(self):
+        # Callers that do not await themselves rely on this, so the
+        # historical behaviour has to survive.
+        self._creating()
+        client = self._client()
+        with mock.patch.object(client, 'get_instance') as get_instance:
+            get_instance.return_value = {
+                'uuid': 'notreallyauuid', 'state': 'created'}
+            i = client.create_instance(
+                'foo', 1, 2048, ['netuuid1'], ['8@cirros'], 'sshkey', None)
+
+        self.assertEqual('created', i['state'])
+        get_instance.assert_called_once_with('notreallyauuid')
+
+    def test_await_checks_once_before_giving_up(self):
+        # With timeout=0 the old loop body never ran, so the error path
+        # referenced an unbound name. An instance that is already created
+        # is also not a timeout.
+        client = self._client()
+        with mock.patch.object(client, 'get_instance') as get_instance:
+            get_instance.return_value = {
+                'uuid': 'notreallyauuid', 'state': 'created'}
+            client.await_instance_create('notreallyauuid', timeout=0)
+
+        get_instance.assert_called_once_with('notreallyauuid')
+
+    def test_await_timeout_names_the_last_state(self):
+        # "not created within 600 second timeout" alone does not say
+        # whether the instance was still creating or never scheduled.
+        client = self._client()
+        with mock.patch.object(client, 'get_instance') as get_instance:
+            get_instance.return_value = {
+                'uuid': 'notreallyauuid', 'state': 'creating'}
+            e = self.assertRaises(
+                apiclient.TimeoutException,
+                client.await_instance_create, 'notreallyauuid', timeout=0)
+
+        self.assertIn('creating', str(e))
+
+    def test_await_reports_an_error_state_rather_than_a_timeout(self):
+        client = self._client()
+        with mock.patch.object(client, 'get_instance') as get_instance:
+            get_instance.return_value = {
+                'uuid': 'notreallyauuid', 'state': 'creating-error'}
+            self.assertRaises(
+                apiclient.InstanceWillNeverBeReady,
+                client.await_instance_create, 'notreallyauuid', timeout=0)
+
+
+class RequestDeadlineTestCase(testtools.TestCase):
+    """A caller deadline bounds the dependency retry loop."""
+
+    def setUp(self):
+        super().setUp()
+
+        self.actual = mock.patch(
+            'shakenfist_client.apiclient.Client._actual_request_url')
+        self.mock_actual = self.actual.start()
+        self.addCleanup(self.actual.stop)
+
+        self.capabilities = mock.patch(
+            'shakenfist_client.apiclient.Client._collect_capabilities')
+        self.capabilities = self.capabilities.start()
+        self.addCleanup(self.capabilities.stop)
+
+        self.sleep = mock.patch('time.sleep')
+        self.mock_sleep = self.sleep.start()
+        self.addCleanup(self.sleep.stop)
+
+    def _client(self):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000',
+                                  async_strategy=apiclient.ASYNC_BLOCK)
+        client.cached_auth = 'Bearer notreallyatoken'
+        return client
+
+    def test_an_expired_deadline_does_not_retry(self):
+        # Without a caller deadline this loop runs for an hour on
+        # ASYNC_BLOCK, inside one call, invisible to the caller's budget.
+        self.mock_actual.side_effect = apiclient.DependenciesNotReadyException(
+            'not ready', 'POST', '/instances', 406, 'nope')
+
+        client = self._client()
+        self.assertRaises(
+            apiclient.DependenciesNotReadyException,
+            client._request_url, 'POST', '/instances',
+            deadline=time.time() - 1)
+
+        self.assertEqual(1, self.mock_actual.call_count)
+        self.mock_sleep.assert_not_called()
+
+    def test_a_live_deadline_still_retries(self):
+        self.mock_actual.side_effect = [
+            apiclient.DependenciesNotReadyException(
+                'not ready', 'POST', '/instances', 406, 'nope'),
+            'success']
+
+        client = self._client()
+        r = client._request_url('POST', '/instances',
+                                deadline=time.time() + 60)
+
+        self.assertEqual('success', r)
+        self.assertEqual(2, self.mock_actual.call_count)
