@@ -23,7 +23,17 @@ from shakenfist_client.commandline import network
 from shakenfist_client.commandline import node
 
 
+# setup_console() raises the root logger's level to INFO, but attaches its
+# handler to this module's logger only. Records from every other module --
+# ours and our dependencies' alike -- therefore propagate up to a root
+# logger with no handler on it and are dropped, so sf-client would print
+# its own INFO lines and nothing else. basicConfig() gives root a handler.
+# Once root has one, our own records reach both it and the handler
+# setup_console() installed and are printed twice, which is what turning
+# off propagation prevents.
 LOG = logs.setup_console(__name__)
+logging.basicConfig(level=logging.INFO)
+logging.getLogger(__name__).propagate = False
 CLIENT = None
 
 
@@ -100,6 +110,15 @@ def cli(ctx, output, verbose, namespace, key, apiurl, async_strategy):
     ctx.obj['VERBOSE'] = verbose
 
     if verbose:
+        # Root and its handlers as well as LOG. LOG's own records go
+        # straight to the handler setup_console() installed, so raising
+        # its level alone would make sf-client's lines verbose and leave
+        # every other module -- including requests and urllib3, where the
+        # answer to "why did that call fail" usually is -- filtered at
+        # INFO by a root logger nobody moved.
+        logging.root.setLevel(logging.DEBUG)
+        for handler in logging.root.handlers:
+            handler.setLevel(logging.DEBUG)
         LOG.setLevel(logging.DEBUG)
         LOG.debug('Set log level to DEBUG')
     else:
