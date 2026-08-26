@@ -81,8 +81,8 @@ The CLI's viewer-selection chain in `commandline/instance.py` prefers
 connections launched through `ryll` use `--url` directly so the token
 is never written to disk; every other combination writes a temporary
 `.vv` file that is deleted after the viewer exits. `--direct` forces
-the pre-existing direct-to-hypervisor path. See the README's "VDI
-console access" section for user-facing details.
+the pre-existing direct-to-hypervisor path. See
+`docs/vdi-console.md` for user-facing details.
 
 ### Plugin Loading Modernization (2026-01)
 
