@@ -50,23 +50,39 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# The scan runs from the top of the tree (below), so a relative
-# --gitleaks path would resolve against a different directory by the
-# time it is used than the one it was checked in. Absolutise it here,
-# while the caller's working directory is still the one they typed it
-# against. A path whose directory does not exist is left alone, so the
-# check below reports it rather than the cd failing first.
-case "$GITLEAKS" in
-    */*)
-        gitleaks_dir=$(dirname "$GITLEAKS")
-        if [ -d "$gitleaks_dir" ]; then
-            GITLEAKS="$(cd "$gitleaks_dir" && pwd)/$(basename "$GITLEAKS")"
-        fi
-        ;;
-esac
-
-if ! command -v "$GITLEAKS" >/dev/null 2>&1 && [ ! -x "$GITLEAKS" ]; then
+# Resolve gitleaks once, here, while the caller's working directory is
+# still the one they typed the argument against. The scan runs from the
+# top of the tree (below), so anything still relative at that point
+# resolves somewhere the caller did not mean -- which is a "command not
+# found" halfway through a security scan that reported it had found the
+# binary. Three forms have to land in the same place: a bare name on
+# PATH, a path with a slash in it, and a bare name that happens to be an
+# executable in the caller's directory.
+resolved=$(command -v "$GITLEAKS" 2>/dev/null || true)
+if [ -z "$resolved" ] && [ -x "$GITLEAKS" ]; then
+    resolved="$GITLEAKS"
+fi
+if [ -z "$resolved" ]; then
     echo "gitleaks not found. Install it, or pass --gitleaks PATH."
+    exit 1
+fi
+case "$resolved" in
+    /*) ;;
+    *) resolved="$(cd "$(dirname "$resolved")" && pwd)/$(basename "$resolved")" ;;
+esac
+GITLEAKS="$resolved"
+
+# The positive control plants an SSH private key, so ssh-keygen is as
+# much a dependency of this script as gitleaks is. Debian's gitleaks
+# package does not pull openssh-client in, and a minimal image may not
+# carry it, in which case set -e would abort on a bare "command not
+# found" -- skipping every "do not trust a clean scan" message below,
+# which is the one outcome this script is written to prevent.
+if ! command -v ssh-keygen >/dev/null 2>&1; then
+    echo "ssh-keygen not found, so the positive control cannot plant its"
+    echo "second credential. Install openssh-client."
+    echo
+    echo "Do not trust a clean scan until this passes."
     exit 1
 fi
 

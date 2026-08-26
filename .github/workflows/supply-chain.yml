@@ -68,8 +68,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      # openssh-client for the positive control's ssh-keygen, which
+      # the gitleaks package does not pull in.
       - name: Install gitleaks
-        run: sudo apt-get update && sudo apt-get install -y gitleaks
+        run: sudo apt-get update && sudo apt-get install -y gitleaks openssh-client
 
       - name: Scan history for credentials
         run: tools/gitleaks-scan.sh
