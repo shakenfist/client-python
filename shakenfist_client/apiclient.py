@@ -1270,8 +1270,9 @@ class Client:
         return r.json()
 
     def update_namespace_key(self, namespace, key_name, key):
-        r = self._request_url('PUT', '/auth/namespaces/' + namespace + '/keys',
-                              data={'key_name': key_name, 'key': key})
+        r = self._request_url(
+            'PUT', '/auth/namespaces/' + namespace + '/keys/' + key_name,
+            data={'key': key})
         return r.json()
 
     def delete_namespace_key(self, namespace, key_name):
