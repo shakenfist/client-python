@@ -3,6 +3,7 @@ import errno
 import json
 import logging
 import os
+import re
 import time
 
 import requests
@@ -10,6 +11,28 @@ import requests
 
 LOG = logging.getLogger(__name__)
 LOG.setLevel(logging.INFO)
+
+
+# A JWT in compact serialisation: three dot separated base64url
+# segments, the first of which always begins "eyJ" because a JWT header
+# is the base64url encoding of a JSON object and so always starts '{"'.
+# Anchoring on that rather than on "three dotted runs of base64url" is
+# what keeps hostnames like host.example.internal out of the match.
+JWT_RE = re.compile(r'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*')
+
+
+def redact_tokens(text):
+    """Replace any JWT in text with a placeholder.
+
+    A Kerbside VDI console URL carries its own capability as a
+    short-lived, single-use JWT, so the URL is a credential and
+    anything that renders it is a way for that credential to escape.
+    This module redacts the two it creates itself -- the exceptions
+    raised out of get_vdi_console_proxy_file() -- and sf-client
+    installs it as a logging filter for the ones libraries create,
+    such as urllib3 printing the request target of every connection.
+    """
+    return JWT_RE.sub('*****', text)
 
 
 # Async strategies
@@ -1181,9 +1204,27 @@ class Client:
         # plain requests.get() and must NOT go through _request_url --
         # that would incorrectly attach the SF bearer token.
         result = self.get_vdi_console_proxy(instance_ref)
-        r = requests.get(result['url'], timeout=self.sync_request_timeout)
-        r.raise_for_status()
-        return r.text
+        try:
+            r = requests.get(result['url'], timeout=self.sync_request_timeout)
+            r.raise_for_status()
+            return r.text
+
+        except requests.exceptions.RequestException as e:
+            # requests builds its messages out of the URL it was handed,
+            # so every one of them carries the live token: HTTPError's
+            # "for url: ...", the connection errors' "Max retries
+            # exceeded with url: ...". Only some of those are caught in
+            # main.py, and an uncaught one is rendered by the interpreter
+            # as a traceback, which no logging filter ever sees. Redact
+            # here, where we know the URL is a credential, rather than
+            # depending on where the exception happens to land.
+            #
+            # type(e) keeps the class so an existing caller's except
+            # clause still matches; every requests exception takes its
+            # message positionally. "from None" is what stops the
+            # interpreter printing the original, unredacted exception as
+            # the context of this one.
+            raise type(e)(redact_tokens(str(e))) from None
 
     def get_vdi_token_public_keys(self):
         r = self._request_url('GET', '/admin/vditokenpubkey')

@@ -129,6 +129,18 @@ class ConfigureLoggingTestCase(LoggingStateTestCase):
                         logging.getLogger(main.__name__).handlers):
             self.assertIn(main.REDACT_TOKENS, handler.filters)
 
+    def test_root_level_is_set_even_when_a_handler_exists(self):
+        # basicConfig() puts its setLevel() inside "if root has no
+        # handlers", so a handler attached before us -- by a plugin, or
+        # by a dependency calling basicConfig itself -- would otherwise
+        # leave root at whatever level it was given.
+        logging.root.handlers = [logging.NullHandler()]
+        logging.root.setLevel(logging.WARNING)
+
+        main.configure_logging()
+
+        self.assertEqual(logging.INFO, logging.root.level)
+
     def test_configuring_twice_does_not_stack_filters(self):
         logging.root.handlers = []
 

@@ -1,7 +1,6 @@
 # Copyright 2020 Michael Still
 import json
 import logging
-import re
 import sys
 
 import click
@@ -28,14 +27,6 @@ LOG = logs.setup_console(__name__)
 CLIENT = None
 
 
-# A JWT in compact serialisation: three dot separated base64url segments,
-# the first of which always begins "eyJ" because a JWT header is the
-# base64url encoding of a JSON object and so always starts '{"'.
-# Anchoring on that rather than on "three dotted runs of base64url" is
-# what keeps hostnames like host.example.internal out of the match.
-JWT_RE = re.compile(r'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*')
-
-
 class RedactTokensFilter(logging.Filter):
     """Replace JWTs in log records with a placeholder.
 
@@ -44,18 +35,23 @@ class RedactTokensFilter(logging.Filter):
     URL without knowing it is a credential: apiclient's _request_url()
     logs the body of the /vdiconsoleproxy response, and urllib3 logs the
     request target of every connection it makes. Redacting on the way
-    out of the logging system covers both, and covers whatever prints a
-    token next, in a way that patching each call site does not.
+    out of the logging system covers both, in a way that patching each
+    call site does not.
 
     This is the same choice _request_url() already makes by hand for the
     Authorization header, generalised. It applies to sf-client's own
     output only; a library caller configures their own handlers and
     makes their own decision.
+
+    It covers logging, and only logging. A credential can leave by
+    other routes -- an exception message rendered as a traceback is the
+    one that bit us -- so apiclient redacts those where it raises them
+    rather than relying on this.
     """
 
     def filter(self, record):
         message = record.getMessage()
-        redacted = JWT_RE.sub('*****', message)
+        redacted = apiclient.redact_tokens(message)
         if redacted != message:
             # args are already interpolated into the redacted message, so
             # they must be dropped or getMessage() would try again.
@@ -92,10 +88,21 @@ def configure_logging():
     logging for the whole process, which is sf-client's business when it
     is the program being run and nobody else's when a plugin, a test or
     an embedding program merely imports this module.
+
+    The redaction filter reaches the handlers that exist when this runs,
+    which for a console script is all of them. A handler attached later
+    -- by a plugin, or by a library configuring itself lazily -- is not
+    covered, which is why apiclient redacts the tokens it raises in
+    exceptions itself rather than leaving it to logging.
     """
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s %(levelname)s: %(name)s: %(message)s')
+    # basicConfig() puts its setLevel() inside "if root has no handlers",
+    # so if anything imported before us already gave root one, the level
+    # above is silently discarded. Set it ourselves; by the time cli()
+    # runs, sf-client is the program and the root level is its call.
+    logging.root.setLevel(logging.INFO)
     logging.getLogger(__name__).propagate = False
 
     for handler in (logging.root.handlers +
