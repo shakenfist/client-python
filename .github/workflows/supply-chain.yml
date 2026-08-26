@@ -1,27 +1,44 @@
-# Repository secret scanning.
+# Checks on the content of the repository itself: credentials in the
+# history, and smuggled instructions in the agent context.
 #
-# Runs on every pull request to develop and on pushes to develop, plus a
-# weekly cron to catch drift in the rule set.
+# Runs on every pull request to develop or a release branch and on
+# pushes to either, plus a weekly cron to catch drift in the rule sets.
+# Release branches are included because a backport raised straight
+# against v*-releases would otherwise never be scanned at all -- not on
+# the pull request, not on the push, and not by the cron, which only
+# ever sees develop.
 #
 # Deliberately NOT gated on a docs path filter, unlike functional-tests.
-# Every other lane can skip a documentation-only change; this one cannot,
-# because a credential pasted into a code sample is a credential. The one
-# real key secret this fleet's scanning has ever found was published in a
-# user guide.
+# Every other lane can skip a documentation-only change; these two
+# cannot, because a credential pasted into a code sample is a
+# credential. The one real key secret this fleet's scanning has ever
+# found was published in a user guide, and a document is exactly where
+# an instruction aimed at an agent would be hidden. That reasoning is
+# why the agent context lint lives here rather than in the sanity_checks
+# job of functional-tests, which carries `paths-ignore: docs/**`.
+#
+# audit-ok: no-path-filter -- the fleet audit exempts a workflow that is
+# nothing but secret scanning, and treats any other vm-runner job beside
+# it as an expensive lane that ought to be filtered. The agent context
+# lint is the same class of check as the scan next to it: it reads the
+# human-written text a path filter would skip, which is exactly where a
+# smuggled instruction would be put. It is also cheap -- a venv and a
+# pre-commit run, no cluster -- so running it on a documentation-only
+# change costs a fraction of what missing one would.
 #
 # gitleaks-action@v2 refuses to run on organization repositories without
 # a paid licence, so the upstream gitleaks binary is invoked directly,
 # which has no such restriction. gitleaks is only packaged from Debian 13
-# (trixie) onward -- bookworm has no package -- so this job runs on
-# debian-13.
+# (trixie) onward -- bookworm has no package -- so the gitleaks job
+# runs on debian-13.
 
 name: Supply chain
 
 on:
   pull_request:
-    branches: [develop]
+    branches: [develop, v*-releases]
   push:
-    branches: [develop]
+    branches: [develop, v*-releases]
   schedule:
     # Weekly at 09:00 UTC on Monday.
     - cron: '0 9 * * 1'
@@ -56,3 +73,32 @@ jobs:
 
       - name: Scan history for credentials
         run: tools/gitleaks-scan.sh
+
+  agent-context:
+    name: agent context
+    runs-on: [self-hosted, vm]
+    timeout-minutes: 15
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-agent-context
+      cancel-in-progress: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      # Lints the agent context by running the pre-commit hook rather
+      # than invoking skillsaw directly, so .pre-commit-config.yaml's
+      # rev is the only place the version is written down. skillsaw's
+      # rule set moves between releases, and renovate's pre-commit
+      # manager bumps the hook on its own, so a second pin here would
+      # drift without anyone choosing it. Running it in CI as well as
+      # in pre-commit is the point: a hook can be skipped with
+      # --no-verify, or by a clone that never ran `pre-commit install`.
+      - name: Lint agent context
+        timeout-minutes: 5
+        run: |
+          python3 -mvenv /tmp/venv-skillsaw
+          . /tmp/venv-skillsaw/bin/activate
+          pip3 install uv
+          uv pip install pre-commit
+          pre-commit run skillsaw --all-files
