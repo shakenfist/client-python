@@ -46,6 +46,6 @@ accepts `--direct` too.
 
 ## Documentation
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) -- project structure and key components
-- [AGENTS.md](AGENTS.md) -- guide for AI agents working on this codebase
-- [RELEASE-SETUP.md](RELEASE-SETUP.md) -- one-time release infrastructure setup
+- [ARCHITECTURE.md](https://github.com/shakenfist/client-python/blob/develop/ARCHITECTURE.md) -- project structure and key components
+- [AGENTS.md](https://github.com/shakenfist/client-python/blob/develop/AGENTS.md) -- guide for AI agents working on this codebase
+- [RELEASE-SETUP.md](https://github.com/shakenfist/client-python/blob/develop/RELEASE-SETUP.md) -- one-time release infrastructure setup
