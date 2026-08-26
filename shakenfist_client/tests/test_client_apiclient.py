@@ -275,6 +275,15 @@ class ApiClientTestCase(testtools.TestCase):
             'POST', '/auth/namespaces/testspace/keys',
             data={'key_name': 'testkeyname', 'key': 'secretkey'})
 
+    def test_update_namespace_key(self):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.update_namespace_key('testspace', 'testkeyname', 'secretkey')
+
+        self.mock_request.assert_called_with(
+            'PUT', '/auth/namespaces/testspace/keys/testkeyname',
+            data={'key': 'secretkey'})
+
     def test_delete_namespace_key(self):
         client = apiclient.Client(suppress_configuration_lookup=True,
                                   base_url='http://localhost:13000')
