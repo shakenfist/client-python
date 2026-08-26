@@ -36,7 +36,10 @@ shakenfist_client/
 │   └── sf_snapshot.py   # Snapshot module
 └── tests/
     ├── __init__.py
-    └── test_client_apiclient.py
+    ├── test_client_apiclient.py
+    ├── test_client_commandline_instance.py
+    ├── test_client_main.py
+    └── test_client_util.py
 ```
 
 ## Key Components
@@ -109,3 +112,8 @@ with `importlib.metadata`.
 - **Functional tests**: Matrix-based CI running against live Shaken
   Fist clusters via `functional-tests.yml`
 - **Linting**: flake8 via `tools/flake8wrap.sh`, max line length 120
+- **Supply chain**: `supply-chain.yml` runs gitleaks over the git
+  history (`tools/gitleaks-scan.sh`) and skillsaw over the agent
+  context. Both are deliberately ungated by path filters, because a
+  credential, or an instruction aimed at an agent, lands in a document
+  as readily as in code; the workflow's header says so at length

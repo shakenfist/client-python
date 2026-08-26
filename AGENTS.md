@@ -37,12 +37,13 @@ tox
 | `tools/flake8wrap.sh` | Flake8 wrapper for CI |
 | `tools/gitleaks-scan.sh` | Credential scan of the git history, with a positive control |
 | `docs/` | User facing documentation, indexed from README.md |
+| `docs/plans/index.md` | Register for phased plans; add a row when starting one |
 | `pyproject.toml` | Package metadata and dependencies |
 
 ## VDI Console Access
 
 What the commands do, and which combinations of path and viewer write
-the console token to disk, is in `docs/vdi-console.md`. Two things
+the console token to disk, is in `docs/vdi-console.md`. Three things
 about the code are not derivable from reading it:
 
 - `get_vdi_console_proxy_file` in `shakenfist_client/apiclient.py`
@@ -53,12 +54,16 @@ about the code are not derivable from reading it:
 - `get_vdi_token_public_keys` (`GET /admin/vditokenpubkey`) has no CLI
   caller. It exists for Kerbside's source driver, so "unused" is not a
   reason to remove it.
-- A proxy console URL is a credential, and more than one thing logs
-  it: `_request_url()` logs the response body it arrives in, and
-  urllib3 logs the request target it is used as. `main.py` redacts JWTs
-  at the logging handlers rather than at either call site, so a new log
-  line that happens to print one is covered by default. Do not remove
-  that filter to make a record easier to read.
+- A proxy console URL is a credential, and rendering it anywhere is
+  how that credential escapes. Two mechanisms cover the known routes,
+  and they are not interchangeable. `apiclient.redact_tokens()` is
+  applied where `get_vdi_console_proxy_file()` raises, because requests
+  builds its exception messages out of the URL and an uncaught one is
+  printed as a traceback that no logging filter ever sees. `main.py`
+  installs the same function as a logging filter, which covers what
+  libraries log -- `_request_url()`'s response bodies, urllib3's
+  request targets. A new way to render that URL needs one of the two
+  applied to it; neither is automatic.
 
 The launch logic and viewer-selection chain live in
 `shakenfist_client/commandline/instance.py`.
