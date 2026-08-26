@@ -50,6 +50,21 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+# The scan runs from the top of the tree (below), so a relative
+# --gitleaks path would resolve against a different directory by the
+# time it is used than the one it was checked in. Absolutise it here,
+# while the caller's working directory is still the one they typed it
+# against. A path whose directory does not exist is left alone, so the
+# check below reports it rather than the cd failing first.
+case "$GITLEAKS" in
+    */*)
+        gitleaks_dir=$(dirname "$GITLEAKS")
+        if [ -d "$gitleaks_dir" ]; then
+            GITLEAKS="$(cd "$gitleaks_dir" && pwd)/$(basename "$GITLEAKS")"
+        fi
+        ;;
+esac
+
 if ! command -v "$GITLEAKS" >/dev/null 2>&1 && [ ! -x "$GITLEAKS" ]; then
     echo "gitleaks not found. Install it, or pass --gitleaks PATH."
     exit 1
@@ -91,12 +106,30 @@ set +e
 control_status=$?
 set -e
 
-found=$(python3 -c "
+# The control ran under `set +e`, so it may have failed before writing a
+# report at all -- a renamed flag in a newer release, a missing rules
+# file, an OOM. Unguarded, `set -e` would then abort on the failed
+# command substitution and the last thing the reader saw would be a
+# Python traceback, rather than the message below which exists for
+# exactly this case. The traceback still prints, because knowing whether
+# the report was absent or malformed is worth having; it is the exit
+# that is taken over. The path goes via argv rather than being
+# interpolated into the source, so an odd TMPDIR cannot break the parse.
+if ! found=$(python3 - "$CONTROL/report.json" <<'PYTHON'
 import json
+import sys
 
-with open('$CONTROL/report.json') as f:
+with open(sys.argv[1]) as f:
     print(' '.join(sorted({x['RuleID'] for x in json.load(f)})), end='')
-")
+PYTHON
+); then
+    echo
+    echo "gitleaks' report could not be read (exit ${control_status}), so the"
+    echo "positive control cannot be evaluated."
+    echo
+    echo "Do not trust a clean scan until this passes."
+    exit 1
+fi
 
 for rule in github-pat private-key; do
     case " $found " in
