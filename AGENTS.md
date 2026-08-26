@@ -39,18 +39,21 @@ tox
 
 ## VDI Console Access
 
-`shakenfist_client/commandline/instance.py` hosts the `vdiconsole` and
-`vdiconsolefile` commands, including the proxy-vs-direct launch logic
-and the viewer-selection chain (prefers `ryll` on `PATH`, then falls
-back to `remote-viewer`; proxy connections via `ryll` launch with
-`--url` and never write the token to disk, all other combinations
-write a temporary `.vv` file). `shakenfist_client/apiclient.py` has the
-matching `Client` methods: `get_vdi_console_proxy` (`GET
-/instances/<ref>/vdiconsoleproxy`), `get_vdi_console_proxy_file`
-(fetches the `.vv` body from the URL returned above via a plain
-`requests.get()` -- it must NOT attach an SF bearer token, since the
-capability is already embedded as a JWT in the URL), and
-`get_vdi_token_public_keys` (`GET /admin/vditokenpubkey`).
+What the commands do, and which combinations of path and viewer write
+the console token to disk, is in `docs/vdi-console.md`. Two things
+about the code are not derivable from reading it:
+
+- `get_vdi_console_proxy_file` in `shakenfist_client/apiclient.py`
+  fetches the `.vv` body with a plain `requests.get()` and must NOT
+  attach an SF bearer token. The capability is already embedded as a
+  JWT in the URL, and sending the bearer token as well would put a
+  long-lived credential where a single-use one belongs.
+- `get_vdi_token_public_keys` (`GET /admin/vditokenpubkey`) has no CLI
+  caller. It exists for Kerbside's source driver, so "unused" is not a
+  reason to remove it.
+
+The launch logic and viewer-selection chain live in
+`shakenfist_client/commandline/instance.py`.
 
 ## Code Conventions
 

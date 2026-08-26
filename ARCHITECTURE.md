@@ -62,7 +62,8 @@ REST API:
   the URL itself; `get_vdi_token_public_keys` fetches the signing
   public keys (`GET /admin/vditokenpubkey`) used to verify those
   tokens offline. `get_vdi_console_helper` remains the direct-to-
-  hypervisor fallback.
+  hypervisor fallback. `docs/vdi-console.md` describes how the CLI
+  chooses between the two paths.
 
 ### CLI (`main.py`)
 
