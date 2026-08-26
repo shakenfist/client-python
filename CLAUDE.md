@@ -129,6 +129,9 @@ configuration steps.
 - **Functional tests** (`functional-tests.yml`): Linting, unit tests,
   and functional tests against live clusters. Includes automated PR
   review via Claude Code.
+- **Supply chain** (`supply-chain.yml`): gitleaks credential scanning of
+  the git history, and skillsaw linting of the agent context. Ungated by
+  path filters on purpose -- see the workflow's header.
 - **Code formatting** (`code-formatting.yml`): Daily automated
   formatting.
 - **CodeQL** (`codeql-analysis.yml`): Security scanning.
@@ -138,7 +141,8 @@ configuration steps.
 
 ### Pre-commit
 
-The project uses pre-commit with actionlint and shellcheck hooks.
+The project uses pre-commit with actionlint, shellcheck and skillsaw
+hooks.
 Install with:
 ```bash
 pre-commit install

@@ -33,6 +33,12 @@ from `~/.shakenfist`, or from `/etc/sf/shakenfist.json`.
 
 ## Documentation
 
+<!-- These links are absolute, and stay absolute. README.md is the
+     package's long description on PyPI, where a relative link resolves
+     against pypi.org and 404s. They point at develop because that is
+     where the documentation this release's README describes is
+     maintained. -->
+
 - [VDI console access](https://github.com/shakenfist/client-python/blob/develop/docs/vdi-console.md)
   -- graphical consoles, the Kerbside proxy and direct paths, and viewer
   selection

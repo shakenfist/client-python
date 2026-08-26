@@ -35,6 +35,8 @@ tox
 | `shakenfist_client/commandline/*.py` | CLI subcommands (Click-based) |
 | `shakenfist_client/tests/` | Unit tests |
 | `tools/flake8wrap.sh` | Flake8 wrapper for CI |
+| `tools/gitleaks-scan.sh` | Credential scan of the git history, with a positive control |
+| `docs/` | User facing documentation, indexed from README.md |
 | `pyproject.toml` | Package metadata and dependencies |
 
 ## VDI Console Access
