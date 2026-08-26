@@ -13,6 +13,17 @@ repos:
         types_or: [sh, bash, shell]
         args: ['-x']
 
+  # Lints the agent context -- AGENTS.md, CLAUDE.md, and anything else
+  # an agent is handed -- for malformed structure, smuggled
+  # instructions and secrets pasted in by accident. The daily
+  # consistency audit checks the same things, but up to twenty-four
+  # hours later; this catches them in the commit that introduces them.
+  # Renovate's pre-commit manager keeps the rev current.
+  - repo: https://github.com/stbenjam/skillsaw
+    rev: v0.18.0
+    hooks:
+      - id: skillsaw
+
   - repo: local
     hooks:
       - id: tox-flake8

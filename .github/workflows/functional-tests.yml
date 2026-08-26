@@ -45,6 +45,21 @@ jobs:
           . /tmp/venv-test/bin/activate
           tox -eflake8
 
+      # Lints the agent context by running the pre-commit hook rather
+      # than invoking skillsaw directly, so .pre-commit-config.yaml's
+      # rev is the only place the version is written down. skillsaw's
+      # rule set moves between releases, and renovate's pre-commit
+      # manager bumps the hook on its own, so a second pin here would
+      # drift without anyone choosing it. Running it in CI as well as
+      # in pre-commit is the point: a hook can be skipped with
+      # --no-verify, or by a clone that never ran `pre-commit install`.
+      - name: Lint agent context
+        timeout-minutes: 5
+        run: |
+          . /tmp/venv-test/bin/activate
+          uv pip install pre-commit
+          pre-commit run skillsaw --all-files
+
       - name: Attempt to install requirements
         timeout-minutes: 5
         run: |
