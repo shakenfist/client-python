@@ -1,0 +1,58 @@
+# Repository secret scanning.
+#
+# Runs on every pull request to develop and on pushes to develop, plus a
+# weekly cron to catch drift in the rule set.
+#
+# Deliberately NOT gated on a docs path filter, unlike functional-tests.
+# Every other lane can skip a documentation-only change; this one cannot,
+# because a credential pasted into a code sample is a credential. The one
+# real key secret this fleet's scanning has ever found was published in a
+# user guide.
+#
+# gitleaks-action@v2 refuses to run on organization repositories without
+# a paid licence, so the upstream gitleaks binary is invoked directly,
+# which has no such restriction. gitleaks is only packaged from Debian 13
+# (trixie) onward -- bookworm has no package -- so this job runs on
+# debian-13.
+
+name: Supply chain
+
+on:
+  pull_request:
+    branches: [develop]
+  push:
+    branches: [develop]
+  schedule:
+    # Weekly at 09:00 UTC on Monday.
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gitleaks:
+    name: gitleaks
+    runs-on: [self-hosted, vm, debian-13, s]
+    # The scan itself is a fraction of a second over four hundred
+    # commits. This is the backstop for the checkout and the install.
+    timeout-minutes: 15
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-gitleaks
+      cancel-in-progress: true
+
+    steps:
+      # fetch-depth: 0 is load bearing. A secret committed and then
+      # reverted is still in the history and still needs rotating, and
+      # tools/gitleaks-scan.sh refuses to run against a shallow clone
+      # rather than reporting a clean history it never looked at.
+      - name: Checkout code with full history
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        run: sudo apt-get update && sudo apt-get install -y gitleaks
+
+      - name: Scan history for credentials
+        run: tools/gitleaks-scan.sh
