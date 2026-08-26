@@ -23,18 +23,38 @@ from shakenfist_client.commandline import network
 from shakenfist_client.commandline import node
 
 
-# setup_console() raises the root logger's level to INFO, but attaches its
-# handler to this module's logger only. Records from every other module --
-# ours and our dependencies' alike -- therefore propagate up to a root
-# logger with no handler on it and are dropped, so sf-client would print
-# its own INFO lines and nothing else. basicConfig() gives root a handler.
-# Once root has one, our own records reach both it and the handler
-# setup_console() installed and are printed twice, which is what turning
-# off propagation prevents.
 LOG = logs.setup_console(__name__)
-logging.basicConfig(level=logging.INFO)
-logging.getLogger(__name__).propagate = False
 CLIENT = None
+
+
+def configure_logging():
+    """Give the root logger a handler.
+
+    setup_console() raises the root logger's level to INFO, but attaches
+    its handler to this module's logger only. Records from every other
+    module -- ours and our dependencies' alike -- therefore propagate up
+    to a root logger with no handler on it and are dropped, so sf-client
+    would print its own INFO lines and nothing else. basicConfig() gives
+    root a handler. Once root has one, our own records reach both it and
+    the handler setup_console() installed and are printed twice, which is
+    what turning off propagation prevents.
+
+    Root keeps basicConfig's stderr rather than the stdout that
+    ConsoleLoggingHandler print()s to, so that a urllib3 warning cannot
+    corrupt the output of `sf-client --json`. The format is matched by
+    hand so the two streams do not read as two different programs; the
+    logger name is kept on this one because a record from a dependency
+    is only useful once you know which dependency emitted it.
+
+    Called from cli() rather than run at import: this reconfigures
+    logging for the whole process, which is sf-client's business when it
+    is the program being run and nobody else's when a plugin, a test or
+    an embedding program merely imports this module.
+    """
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s %(levelname)s: %(name)s: %(message)s')
+    logging.getLogger(__name__).propagate = False
 
 
 class GroupCatchExceptions(click.Group):
@@ -104,6 +124,8 @@ def error_text(json_text):
               type=click.Choice(['continue', 'pause', 'block'], case_sensitive=False))
 @click.pass_context
 def cli(ctx, output, verbose, namespace, key, apiurl, async_strategy):
+    configure_logging()
+
     if not ctx.obj:
         ctx.obj = {}
     ctx.obj['OUTPUT'] = output
