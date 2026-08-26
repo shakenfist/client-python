@@ -53,6 +53,13 @@ credential is ever written to disk:
 
 Prefer `ryll` on the proxy path where you can, for that reason.
 
+The token is kept out of the terminal too. `--verbose` turns on debug
+logging for the HTTP stack, which prints the target of every request
+the client makes, and the proxy descriptor arrives in a response body
+that is logged in full at the same level. Both are redacted on the way
+out, so a `--verbose` transcript can be pasted into a bug report
+without handing over a live console session.
+
 ## Options
 
 - `--viewer <ryll|remote-viewer|PATH>` -- override viewer

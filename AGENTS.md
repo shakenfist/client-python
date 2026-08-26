@@ -51,6 +51,12 @@ about the code are not derivable from reading it:
 - `get_vdi_token_public_keys` (`GET /admin/vditokenpubkey`) has no CLI
   caller. It exists for Kerbside's source driver, so "unused" is not a
   reason to remove it.
+- A proxy console URL is a credential, and more than one thing logs
+  it: `_request_url()` logs the response body it arrives in, and
+  urllib3 logs the request target it is used as. `main.py` redacts JWTs
+  at the logging handlers rather than at either call site, so a new log
+  line that happens to print one is covered by default. Do not remove
+  that filter to make a record easier to read.
 
 The launch logic and viewer-selection chain live in
 `shakenfist_client/commandline/instance.py`.

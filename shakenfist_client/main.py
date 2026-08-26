@@ -1,6 +1,7 @@
 # Copyright 2020 Michael Still
 import json
 import logging
+import re
 import sys
 
 import click
@@ -27,8 +28,49 @@ LOG = logs.setup_console(__name__)
 CLIENT = None
 
 
+# A JWT in compact serialisation: three dot separated base64url segments,
+# the first of which always begins "eyJ" because a JWT header is the
+# base64url encoding of a JSON object and so always starts '{"'.
+# Anchoring on that rather than on "three dotted runs of base64url" is
+# what keeps hostnames like host.example.internal out of the match.
+JWT_RE = re.compile(r'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*')
+
+
+class RedactTokensFilter(logging.Filter):
+    """Replace JWTs in log records with a placeholder.
+
+    A Kerbside VDI console URL carries its own capability as a
+    short-lived, single-use JWT, and two separate debug paths print that
+    URL without knowing it is a credential: apiclient's _request_url()
+    logs the body of the /vdiconsoleproxy response, and urllib3 logs the
+    request target of every connection it makes. Redacting on the way
+    out of the logging system covers both, and covers whatever prints a
+    token next, in a way that patching each call site does not.
+
+    This is the same choice _request_url() already makes by hand for the
+    Authorization header, generalised. It applies to sf-client's own
+    output only; a library caller configures their own handlers and
+    makes their own decision.
+    """
+
+    def filter(self, record):
+        message = record.getMessage()
+        redacted = JWT_RE.sub('*****', message)
+        if redacted != message:
+            # args are already interpolated into the redacted message, so
+            # they must be dropped or getMessage() would try again.
+            record.msg = redacted
+            record.args = ()
+        return True
+
+
+# One instance, because addFilter() deduplicates by identity and
+# configure_logging() may run more than once in a test process.
+REDACT_TOKENS = RedactTokensFilter()
+
+
 def configure_logging():
-    """Give the root logger a handler.
+    """Give the root logger a handler, and redact tokens on the way out.
 
     setup_console() raises the root logger's level to INFO, but attaches
     its handler to this module's logger only. Records from every other
@@ -55,6 +97,10 @@ def configure_logging():
         level=logging.INFO,
         format='%(asctime)s %(levelname)s: %(name)s: %(message)s')
     logging.getLogger(__name__).propagate = False
+
+    for handler in (logging.root.handlers +
+                    logging.getLogger(__name__).handlers):
+        handler.addFilter(REDACT_TOKENS)
 
 
 class GroupCatchExceptions(click.Group):
@@ -137,7 +183,11 @@ def cli(ctx, output, verbose, namespace, key, apiurl, async_strategy):
         # its level alone would make sf-client's lines verbose and leave
         # every other module -- including requests and urllib3, where the
         # answer to "why did that call fail" usually is -- filtered at
-        # INFO by a root logger nobody moved.
+        # INFO by a root logger nobody moved. urllib3 logs the full
+        # request target of every connection, which is why
+        # configure_logging() installs RedactTokensFilter before we get
+        # here rather than trusting each library to know a credential
+        # when it sees one.
         logging.root.setLevel(logging.DEBUG)
         for handler in logging.root.handlers:
             handler.setLevel(logging.DEBUG)
