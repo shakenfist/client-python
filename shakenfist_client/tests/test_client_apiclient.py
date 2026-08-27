@@ -293,6 +293,76 @@ class ApiClientTestCase(testtools.TestCase):
         self.mock_request.assert_called_with(
             'DELETE', '/auth/namespaces/testspace/keys/keyname')
 
+    def test_get_namespace_claims(self):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.get_namespace_claims('testspace')
+
+        self.mock_request.assert_called_with(
+            'GET', '/auth/namespaces/testspace/claims')
+
+    def test_get_namespace_claim(self):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.get_namespace_claim('testspace', 'notreallyauuid')
+
+        self.mock_request.assert_called_with(
+            'GET', '/auth/namespaces/testspace/claims/notreallyauuid')
+
+    def test_create_namespace_claim(self):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.create_namespace_claim('testspace', 4, 4096, 40, 3600)
+
+        self.mock_request.assert_called_with(
+            'POST', '/auth/namespaces/testspace/claims',
+            data={'limit_cpus': 4, 'limit_memory_mb': 4096,
+                  'limit_disk_gb': 40, 'expires_in_seconds': 3600})
+
+    def test_update_namespace_claim_sends_only_what_changed(self):
+        # The server reads the body as a field mask. Sending values the
+        # caller did not ask to change turns a re-date into a resize, and
+        # races whatever else is moving the claim.
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.update_namespace_claim('testspace', 'notreallyauuid',
+                                      expires_in_seconds=1800)
+
+        self.mock_request.assert_called_with(
+            'PUT', '/auth/namespaces/testspace/claims/notreallyauuid',
+            data={'expires_in_seconds': 1800})
+
+    def test_update_namespace_claim_sends_every_field_it_is_given(self):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.update_namespace_claim('testspace', 'notreallyauuid',
+                                      limit_cpus=8, limit_memory_mb=8192,
+                                      limit_disk_gb=80, expires_in_seconds=60)
+
+        self.mock_request.assert_called_with(
+            'PUT', '/auth/namespaces/testspace/claims/notreallyauuid',
+            data={'limit_cpus': 8, 'limit_memory_mb': 8192,
+                  'limit_disk_gb': 80, 'expires_in_seconds': 60})
+
+    def test_update_namespace_claim_leaves_an_empty_body_to_the_server(self):
+        # Guessing at what the caller meant would be worse than the 400 the
+        # server already answers for an update which names no fields.
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.update_namespace_claim('testspace', 'notreallyauuid')
+
+        self.mock_request.assert_called_with(
+            'PUT', '/auth/namespaces/testspace/claims/notreallyauuid',
+            data={})
+
+    def test_delete_namespace_claim(self):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.delete_namespace_claim('testspace', 'notreallyauuid')
+
+        self.mock_request.assert_called_with(
+            'DELETE', '/auth/namespaces/testspace/claims/notreallyauuid')
+
     def test_get_namespace_metadata(self):
         client = apiclient.Client(suppress_configuration_lookup=True,
                                   base_url='http://localhost:13000')
@@ -1028,3 +1098,61 @@ class VDIConsoleProxyFileTestCase(testtools.TestCase):
                 self.assertEqual(
                     '[virt-viewer]\n',
                     client.get_vdi_console_proxy_file('inst-ref'))
+
+
+class StatusCodeMappingTestCase(testtools.TestCase):
+    """Statuses which carry a meaning get an exception which carries it too.
+
+    503 matters for the namespace claims API, which answers it for both of
+    its retryable refusals -- capacity accounting not built yet, and a claim
+    row which kept moving under a concurrent writer. A caller which cannot
+    tell that from a durable refusal either retries what it should not, or
+    gives up on what it should have retried.
+    """
+
+    def setUp(self):
+        super().setUp()
+
+        self.capabilities = mock.patch(
+            'shakenfist_client.apiclient.Client._collect_capabilities')
+        self.capabilities = self.capabilities.start()
+        self.addCleanup(self.capabilities.stop)
+
+    def _client(self):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.cached_auth = 'Bearer notreallyatoken'
+        return client
+
+    def _respond(self, client, status_code):
+        response = mock.MagicMock()
+        response.status_code = status_code
+        response.text = '{"error": "nope"}'
+        client.session = mock.MagicMock()
+        client.session.request.return_value = response
+
+    def test_503_raises_service_unavailable(self):
+        client = self._client()
+        self._respond(client, 503)
+
+        e = self.assertRaises(
+            apiclient.ServiceUnavailableException,
+            client._actual_request_url, 'POST', '/auth/namespaces/ns/claims')
+        self.assertEqual(503, e.status_code)
+
+    def test_507_still_raises_insufficient_resources(self):
+        client = self._client()
+        self._respond(client, 507)
+
+        self.assertRaises(
+            apiclient.InsufficientResourcesException,
+            client._actual_request_url, 'POST', '/auth/namespaces/ns/claims')
+
+    def test_an_unmapped_status_still_raises_the_base_exception(self):
+        client = self._client()
+        self._respond(client, 418)
+
+        e = self.assertRaises(
+            apiclient.APIException,
+            client._actual_request_url, 'POST', '/auth/namespaces/ns/claims')
+        self.assertEqual(418, e.status_code)

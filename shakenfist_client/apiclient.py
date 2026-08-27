@@ -102,6 +102,16 @@ class InsufficientResourcesException(APIException):
     ...
 
 
+class ServiceUnavailableException(APIException):
+    # The request was well formed and the server understood it, but could not
+    # answer it just now. The correct client behaviour is to retry, which is
+    # why this is worth telling apart from a durable refusal: the namespace
+    # claims API answers 503 both while the cluster capacity accounting is
+    # still being built and when a claim row kept moving under a concurrent
+    # writer until the optimistic retry budget ran out.
+    ...
+
+
 class UnknownAsyncStrategy(APIException):
     ...
 
@@ -147,6 +157,7 @@ STATUS_CODES_TO_ERRORS = {
     406: DependenciesNotReadyException,
     409: ResourceStateConflictException,
     500: InternalServerError,
+    503: ServiceUnavailableException,
     507: InsufficientResourcesException,
 }
 
@@ -1328,6 +1339,64 @@ class Client:
     def remove_namespace_trust(self, namespace, trusted_namespace):
         r = self._request_url(
             'DELETE', '/auth/namespaces/' + namespace + '/trust/' + trusted_namespace)
+        return r.json()
+
+    def get_namespace_claims(self, namespace):
+        r = self._request_url(
+            'GET', '/auth/namespaces/' + namespace + '/claims')
+        return r.json()
+
+    def get_namespace_claim(self, namespace, claim_uuid):
+        r = self._request_url(
+            'GET', '/auth/namespaces/' + namespace + '/claims/' + claim_uuid)
+        return r.json()
+
+    def create_namespace_claim(self, namespace, limit_cpus, limit_memory_mb,
+                               limit_disk_gb, expires_in_seconds):
+        """Claim aggregate cluster capacity for a namespace.
+
+        expires_in_seconds is a duration, not a timestamp, and is deliberately
+        so: the expiry is computed from the cluster's clock, which is the only
+        clock the expiry sweep ever compares against. Pass the duration
+        through rather than converting a local datetime into one.
+        """
+        r = self._request_url(
+            'POST', '/auth/namespaces/' + namespace + '/claims',
+            data={'limit_cpus': limit_cpus,
+                  'limit_memory_mb': limit_memory_mb,
+                  'limit_disk_gb': limit_disk_gb,
+                  'expires_in_seconds': expires_in_seconds})
+        return r.json()
+
+    def update_namespace_claim(self, namespace, claim_uuid, limit_cpus=None,
+                               limit_memory_mb=None, limit_disk_gb=None,
+                               expires_in_seconds=None):
+        """Grow, shrink or re-date a capacity claim.
+
+        The server treats the supplied keys as a field mask and changes only
+        those, so this sends only the arguments the caller actually passed.
+        Reading a claim and sending all four values back is not equivalent: it
+        turns a re-date into a resize which races whatever else is moving the
+        claim. An empty body is left for the server to reject rather than
+        guessed at here.
+        """
+        data = {}
+        for key, value in [('limit_cpus', limit_cpus),
+                           ('limit_memory_mb', limit_memory_mb),
+                           ('limit_disk_gb', limit_disk_gb),
+                           ('expires_in_seconds', expires_in_seconds)]:
+            if value is not None:
+                data[key] = value
+
+        r = self._request_url(
+            'PUT', '/auth/namespaces/' + namespace + '/claims/' + claim_uuid,
+            data=data)
+        return r.json()
+
+    def delete_namespace_claim(self, namespace, claim_uuid):
+        r = self._request_url(
+            'DELETE',
+            '/auth/namespaces/' + namespace + '/claims/' + claim_uuid)
         return r.json()
 
     def get_existing_locks(self):
