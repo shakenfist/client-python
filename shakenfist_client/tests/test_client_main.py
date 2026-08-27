@@ -2,9 +2,11 @@ import io
 import logging
 from unittest import mock
 
+import click
 import testtools
 from click.testing import CliRunner
 
+from shakenfist_client import apiclient
 from shakenfist_client import main
 
 
@@ -15,6 +17,7 @@ JWT = ('eyJhbGciOiJub25lIn0.'
        'eyJzdWIiOiJpbnN0YW5jZSIsImV4cCI6MTc2NzIyNTYwMH0.'
        'c2lnbmF0dXJlLWdvZXMtaGVyZQ')
 PROXY_URL = 'https://kerbside.example.com/vdi/console.vv?token=%s' % JWT
+CLAIMS_URL = 'http://localhost:13000/auth/namespaces/testspace/claims'
 
 
 class LoggingStateTestCase(testtools.TestCase):
@@ -201,3 +204,66 @@ class VerboseTestCase(LoggingStateTestCase):
         printed = stream.getvalue()
         self.assertIn('kerbside.example.com', printed)
         self.assertNotIn(JWT, printed)
+
+
+class GroupCatchExceptionsTestCase(testtools.TestCase):
+    """Tests for the CLI's translation of APIExceptions into messages.
+
+    A subclass which escapes this handler reaches the user as a Python
+    traceback, which is why each of these asserts the clean exit as well
+    as the message: exit code 1 and no traceback is the whole contract.
+    """
+
+    def _run(self, exception):
+        @click.group(cls=main.GroupCatchExceptions)
+        def cli():
+            pass
+
+        @cli.command(name='boom')
+        def boom():
+            raise exception
+
+        with mock.patch.object(main, 'LOG') as log:
+            self.assertRaises(SystemExit, cli, ['boom'],
+                              standalone_mode=False)
+        return log
+
+    def test_service_unavailable_is_reported_and_asks_for_a_retry(self):
+        # 503 is a routine answer from the namespace claims API -- the
+        # capacity accounting is still building, or the claim was
+        # contended -- so it has to read as "try again", not as a fault.
+        log = self._run(apiclient.ServiceUnavailableException(
+            'API request failed', 'POST', CLAIMS_URL, 503,
+            '{"error": "the cluster capacity accounting is not available '
+            'yet, please retry"}'))
+
+        log.error.assert_called_once()
+        message = log.error.call_args[0][0]
+        self.assertIn('Service unavailable, please retry', message)
+        self.assertIn('capacity accounting is not available yet', message)
+
+    def test_insufficient_resources_is_still_reported(self):
+        # The neighbouring handler, so that adding a case above it did
+        # not shadow the one which was already there.
+        log = self._run(apiclient.InsufficientResourcesException(
+            'API request failed', 'POST', CLAIMS_URL, 507,
+            '{"error": "the cluster does not have the capacity"}'))
+
+        log.error.assert_called_once()
+        self.assertIn('Insufficient Resources', log.error.call_args[0][0])
+
+    def test_an_unmapped_api_exception_is_not_swallowed(self):
+        # There is no bare APIException fallback, deliberately: a status
+        # nobody has taught the CLI about should be loud rather than
+        # reported as some other kind of failure.
+        @click.group(cls=main.GroupCatchExceptions)
+        def cli():
+            pass
+
+        @cli.command(name='boom')
+        def boom():
+            raise apiclient.APIException(
+                'API request failed', 'GET', CLAIMS_URL, 418, 'teapot')
+
+        self.assertRaises(apiclient.APIException, cli, ['boom'],
+                          standalone_mode=False)

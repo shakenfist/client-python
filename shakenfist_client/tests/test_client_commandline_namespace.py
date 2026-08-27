@@ -1,6 +1,10 @@
+import datetime
+import json
 from unittest import mock
 
+import click
 import testtools
+from click.shell_completion import ShellComplete
 from click.testing import CliRunner
 
 from shakenfist_client.commandline import namespace as namespace_cmd
@@ -101,7 +105,12 @@ class NamespaceClaimCommandTestCase(testtools.TestCase):
         client.delete_namespace_claim.assert_called_with(
             'testspace', 'a-claim')
 
-    def test_a_claim_with_no_expiry_renders(self):
+    def test_a_claim_with_no_expiry_renders_as_empty(self):
+        # The point of the guard in _claim_expiry is that a null expiry
+        # renders as nothing rather than crashing fromtimestamp() or
+        # printing the string 'None' at an operator, so the empty string
+        # is the thing worth asserting -- exit code 0 alone would pass
+        # for either of the wrong answers.
         client = mock.MagicMock()
         client.get_namespace_claim.return_value = dict(CLAIM, expires_at=None)
 
@@ -113,3 +122,139 @@ class NamespaceClaimCommandTestCase(testtools.TestCase):
             catch_exceptions=False)
 
         self.assertEqual(0, result.exit_code)
+        self.assertIn('expires_at      : \n', result.output)
+        self.assertNotIn('None', result.output)
+
+    def test_claim_expiry_renders_a_timestamp(self):
+        # The other half of the same helper: a real expiry has to come
+        # out as a readable local time, not as the raw unix float.
+        rendered = namespace_cmd._claim_expiry(CLAIM)
+
+        self.assertEqual(
+            str(datetime.datetime.fromtimestamp(CLAIM['expires_at'])),
+            rendered)
+        self.assertNotIn('1755300000', rendered)
+
+    def test_claim_expiry_is_empty_when_the_expiry_is_null(self):
+        self.assertEqual('', namespace_cmd._claim_expiry(
+            dict(CLAIM, expires_at=None)))
+
+    def test_show_renders_the_expiry_it_was_given(self):
+        result, _ = self._invoke(['claim', 'show', 'testspace', 'a-claim'])
+
+        self.assertEqual(0, result.exit_code)
+        self.assertIn(
+            str(datetime.datetime.fromtimestamp(CLAIM['expires_at'])),
+            result.output)
+
+    def test_update_with_no_options_does_not_call_the_server(self):
+        # The CLI knows the user named nothing, so it says which options
+        # they could have used rather than spending a round trip on the
+        # server's 400. The library layer deliberately still sends the
+        # empty body -- that behaviour is asserted in the apiclient tests.
+        result, client = self._invoke(
+            ['claim', 'update', 'testspace', 'a-claim'])
+
+        self.assertEqual(1, result.exit_code)
+        self.assertIn('--cpus', result.output)
+        self.assertIn('--expires-in', result.output)
+        client.update_namespace_claim.assert_not_called()
+
+    def test_create_prints_the_new_claim_uuid(self):
+        result, _ = self._invoke([
+            'claim', 'create', 'testspace', '--cpus', '4', '--memory-mb',
+            '4096', '--disk-gb', '40', '--expires-in', '3600'])
+
+        self.assertEqual(0, result.exit_code)
+        self.assertEqual('a-claim', result.output.strip())
+
+    def test_json_output_is_the_claim_the_server_sent(self):
+        # The json mode is what scripts consume, so it has to be the
+        # server's payload rather than anything this CLI rearranged.
+        result, _ = self._invoke(['claim', 'show', 'testspace', 'a-claim'],
+                                 output='json')
+
+        self.assertEqual(0, result.exit_code)
+        self.assertEqual(CLAIM, json.loads(result.output))
+
+    def test_list_of_no_claims_renders_a_header_and_nothing_else(self):
+        client = mock.MagicMock()
+        client.get_namespace_claims.return_value = []
+
+        runner = CliRunner()
+        result = runner.invoke(
+            namespace_cmd.namespace, ['claim', 'list', 'testspace'],
+            obj={'CLIENT': client, 'OUTPUT': 'simple'},
+            catch_exceptions=False)
+
+        self.assertEqual(0, result.exit_code)
+        self.assertEqual(','.join(namespace_cmd.CLAIM_COLUMNS),
+                         result.output.strip())
+
+
+class ClaimCompletionTestCase(testtools.TestCase):
+    """Tests for claim uuid shell completion.
+
+    click calls a shell_complete callback as (ctx, param, incomplete),
+    so the namespace has to come out of the partially parsed context --
+    the second argument is a click Parameter and has no arguments in it.
+    """
+
+    def _ctx(self, params):
+        client = mock.MagicMock()
+        client.get_namespace_claims.return_value = [
+            {'uuid': 'aaaa-claim'}, {'uuid': 'bbbb-claim'}]
+        ctx = mock.MagicMock()
+        ctx.obj = {'CLIENT': client}
+        ctx.params = params
+        return ctx, client
+
+    def test_claims_of_the_named_namespace_are_offered(self):
+        ctx, client = self._ctx({'namespace': 'testspace'})
+
+        self.assertEqual(
+            ['aaaa-claim', 'bbbb-claim'],
+            namespace_cmd._get_claims(ctx, mock.sentinel.param, ''))
+        client.get_namespace_claims.assert_called_with('testspace')
+
+    def test_completion_is_filtered_by_what_was_typed(self):
+        ctx, _ = self._ctx({'namespace': 'testspace'})
+
+        self.assertEqual(
+            ['bbbb-claim'],
+            namespace_cmd._get_claims(ctx, mock.sentinel.param, 'bb'))
+
+    def test_no_namespace_yet_asks_the_server_nothing(self):
+        # The namespace is the argument before this one, so it is absent
+        # while the user is still typing it. There is nothing to list,
+        # and no useful request to make.
+        ctx, client = self._ctx({})
+
+        self.assertEqual(
+            [], namespace_cmd._get_claims(ctx, mock.sentinel.param, ''))
+        client.get_namespace_claims.assert_not_called()
+
+    def test_completion_works_through_click(self):
+        # The tests above hand _get_claims a context they built, so they
+        # would pass even if click never populated ctx.params with the
+        # namespace. This one drives click's own completion machinery,
+        # which is the thing that has to hold.
+        client = mock.MagicMock()
+        client.get_namespace_claims.return_value = [
+            {'uuid': 'aaaa-claim'}, {'uuid': 'bbbb-claim'}]
+
+        @click.group()
+        @click.pass_context
+        def cli(ctx):
+            ctx.obj = {'CLIENT': client}
+
+        cli.add_command(namespace_cmd.namespace)
+
+        completer = ShellComplete(
+            cli, {'obj': {'CLIENT': client}}, 'sf-client', '_SF_COMPLETE')
+        completions = completer.get_completions(
+            ['namespace', 'claim', 'show', 'testspace'], '')
+
+        self.assertEqual(['aaaa-claim', 'bbbb-claim'],
+                         [c.value for c in completions])
+        client.get_namespace_claims.assert_called_with('testspace')

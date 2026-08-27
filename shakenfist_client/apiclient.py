@@ -104,11 +104,13 @@ class InsufficientResourcesException(APIException):
 
 class ServiceUnavailableException(APIException):
     # The request was well formed and the server understood it, but could not
-    # answer it just now. The correct client behaviour is to retry, which is
-    # why this is worth telling apart from a durable refusal: the namespace
-    # claims API answers 503 both while the cluster capacity accounting is
-    # still being built and when a claim row kept moving under a concurrent
-    # writer until the optimistic retry budget ran out.
+    # answer it just now. The correct behaviour for a caller is to retry --
+    # this client does not retry automatically, only _request_url's handling
+    # of 406 does that -- which is why this is worth telling apart from a
+    # durable refusal: the namespace claims API answers 503 both while the
+    # cluster capacity accounting is still being built and when a claim row
+    # kept moving under a concurrent writer until the optimistic retry budget
+    # ran out.
     ...
 
 

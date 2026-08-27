@@ -68,6 +68,22 @@ about the code are not derivable from reading it:
 The launch logic and viewer-selection chain live in
 `shakenfist_client/commandline/instance.py`.
 
+## Namespace Capacity Claims
+
+What the commands do, the two claim states and what each refusal
+status means is in `docs/namespace-claims.md`. Two invariants in the
+code look like tidy-up targets and are not:
+
+- `update_namespace_claim()` filters `None` arguments out of the body
+  on purpose. The server reads the body as a field mask, so sending
+  every dimension -- read back from the claim or otherwise -- turns a
+  re-date into a resize and races concurrent writers. Do not "simplify"
+  the filtering away.
+- The CLI keeps `state` and `coverage_state` as separate columns. They
+  answer different questions, and an expired claim (`created` /
+  `expired`) is the one an operator has to act on, so collapsing them
+  into a single status hides it.
+
 ## Code Conventions
 
 - Python >= 3.7 compatibility (conservative for broad client support)

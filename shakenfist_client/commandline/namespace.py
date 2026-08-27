@@ -253,12 +253,33 @@ def claim():
     pass
 
 
-def _claim_expiry(claim):
-    """Render a claim's expiry, which is a unix timestamp on the wire."""
-    expires_at = claim.get('expires_at')
-    if not expires_at:
+def _get_claims(ctx, param, incomplete):
+    # The second argument is the click Parameter, not the arguments seen so
+    # far -- _get_namespaces names it `args`, but click calls every
+    # shell_complete callback as (ctx, param, incomplete). The namespace a
+    # claim hangs off comes from the partially parsed context instead, and
+    # is absent while the user is still typing it, in which case there is
+    # nothing to list yet.
+    namespace = ctx.params.get('namespace')
+    if not namespace:
+        return []
+
+    choices = [c['uuid'] for c in
+               util.get_client(ctx).get_namespace_claims(namespace)]
+    return [arg for arg in choices if arg.startswith(incomplete)]
+
+
+def _claim_expiry(c):
+    """Render a claim's expiry, which is a unix timestamp on the wire.
+
+    The key is indexed directly, like every other claim field, so a server
+    which stopped sending it fails the same way as any other missing field
+    rather than silently rendering a claim as though it never expires. A
+    null value is a different thing and does render empty.
+    """
+    if not c['expires_at']:
         return ''
-    return str(datetime.datetime.fromtimestamp(expires_at))
+    return str(datetime.datetime.fromtimestamp(c['expires_at']))
 
 
 def _claim_rows(claims):
@@ -309,7 +330,7 @@ def claim_list(ctx, namespace=None):
                      'NAMESPACE:  The name of the namespace\n'
                      'CLAIM_UUID: The UUID of the claim'))
 @click.argument('namespace', type=click.STRING, shell_complete=_get_namespaces)
-@click.argument('claim_uuid', type=click.STRING)
+@click.argument('claim_uuid', type=click.STRING, shell_complete=_get_claims)
 @click.pass_context
 def claim_show(ctx, namespace=None, claim_uuid=None):
     c = ctx.obj['CLIENT'].get_namespace_claim(namespace, claim_uuid)
@@ -378,7 +399,7 @@ NAMESPACE:  The name of the namespace
 CLAIM_UUID: The UUID of the claim
 """)
 @click.argument('namespace', type=click.STRING, shell_complete=_get_namespaces)
-@click.argument('claim_uuid', type=click.STRING)
+@click.argument('claim_uuid', type=click.STRING, shell_complete=_get_claims)
 @click.option('--cpus', type=click.INT, default=None,
               help='The new vCPU limit')
 @click.option('--memory-mb', type=click.INT, default=None,
@@ -390,6 +411,17 @@ CLAIM_UUID: The UUID of the claim
 @click.pass_context
 def claim_update(ctx, namespace=None, claim_uuid=None, cpus=None,
                  memory_mb=None, disk_gb=None, expires_in=None):
+    if (cpus is None and memory_mb is None and disk_gb is None
+            and expires_in is None):
+        # The server rejects an empty body, but here we already know the
+        # user named nothing, and a local error names the options they
+        # could have used. The library layer deliberately does not do this
+        # -- it cannot tell "the caller meant nothing" from "the caller
+        # computed nothing" -- but a command line can.
+        print('No changes requested. Name at least one of --cpus, '
+              '--memory-mb, --disk-gb or --expires-in.')
+        sys.exit(1)
+
     # Deliberately passes through the options which were not supplied as
     # None, so the client sends a body naming only what changed. Filling
     # them in from a previous read would turn a re-date into a resize.
@@ -406,7 +438,7 @@ def claim_update(ctx, namespace=None, claim_uuid=None, cpus=None,
                      'NAMESPACE:  The name of the namespace\n'
                      'CLAIM_UUID: The UUID of the claim'))
 @click.argument('namespace', type=click.STRING, shell_complete=_get_namespaces)
-@click.argument('claim_uuid', type=click.STRING)
+@click.argument('claim_uuid', type=click.STRING, shell_complete=_get_claims)
 @click.pass_context
 def claim_delete(ctx, namespace=None, claim_uuid=None):
     c = ctx.obj['CLIENT'].delete_namespace_claim(namespace, claim_uuid)

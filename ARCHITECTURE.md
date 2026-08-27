@@ -67,6 +67,14 @@ REST API:
   tokens offline. `get_vdi_console_helper` remains the direct-to-
   hypervisor fallback. `docs/vdi-console.md` describes how the CLI
   chooses between the two paths.
+- **Namespace capacity claims**: `get_namespace_claims`,
+  `get_namespace_claim`, `create_namespace_claim`,
+  `update_namespace_claim` and `delete_namespace_claim` administer a
+  namespace's claim on aggregate cluster capacity
+  (`/auth/namespaces/<namespace>/claims`). A 503 raises
+  `ServiceUnavailableException` so a retryable refusal can be caught
+  apart from a durable one. `docs/namespace-claims.md` describes the
+  two claim states and the refusal statuses.
 
 ### CLI (`main.py`)
 
