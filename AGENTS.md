@@ -35,22 +35,38 @@ tox
 | `shakenfist_client/commandline/*.py` | CLI subcommands (Click-based) |
 | `shakenfist_client/tests/` | Unit tests |
 | `tools/flake8wrap.sh` | Flake8 wrapper for CI |
+| `tools/gitleaks-scan.sh` | Credential scan of the git history, with a positive control |
+| `docs/` | User facing documentation, indexed from README.md |
+| `docs/plans/index.md` | Register for phased plans; add a row when starting one |
 | `pyproject.toml` | Package metadata and dependencies |
 
 ## VDI Console Access
 
-`shakenfist_client/commandline/instance.py` hosts the `vdiconsole` and
-`vdiconsolefile` commands, including the proxy-vs-direct launch logic
-and the viewer-selection chain (prefers `ryll` on `PATH`, then falls
-back to `remote-viewer`; proxy connections via `ryll` launch with
-`--url` and never write the token to disk, all other combinations
-write a temporary `.vv` file). `shakenfist_client/apiclient.py` has the
-matching `Client` methods: `get_vdi_console_proxy` (`GET
-/instances/<ref>/vdiconsoleproxy`), `get_vdi_console_proxy_file`
-(fetches the `.vv` body from the URL returned above via a plain
-`requests.get()` -- it must NOT attach an SF bearer token, since the
-capability is already embedded as a JWT in the URL), and
-`get_vdi_token_public_keys` (`GET /admin/vditokenpubkey`).
+What the commands do, and which combinations of path and viewer write
+the console token to disk, is in `docs/vdi-console.md`. Three things
+about the code are not derivable from reading it:
+
+- `get_vdi_console_proxy_file` in `shakenfist_client/apiclient.py`
+  fetches the `.vv` body with a plain `requests.get()` and must NOT
+  attach an SF bearer token. The capability is already embedded as a
+  JWT in the URL, and sending the bearer token as well would put a
+  long-lived credential where a single-use one belongs.
+- `get_vdi_token_public_keys` (`GET /admin/vditokenpubkey`) has no CLI
+  caller. It exists for Kerbside's source driver, so "unused" is not a
+  reason to remove it.
+- A proxy console URL is a credential, and rendering it anywhere is
+  how that credential escapes. Two mechanisms cover the known routes,
+  and they are not interchangeable. `apiclient.redact_tokens()` is
+  applied where `get_vdi_console_proxy_file()` raises, because requests
+  builds its exception messages out of the URL and an uncaught one is
+  printed as a traceback that no logging filter ever sees. `main.py`
+  installs the same function as a logging filter, which covers what
+  libraries log -- `_request_url()`'s response bodies, urllib3's
+  request targets. A new way to render that URL needs one of the two
+  applied to it; neither is automatic.
+
+The launch logic and viewer-selection chain live in
+`shakenfist_client/commandline/instance.py`.
 
 ## Code Conventions
 

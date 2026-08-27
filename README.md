@@ -6,46 +6,42 @@ cloud [Shaken Fist](https://github.com/shakenfist/shakenfist).
 
 The library is a complete interface to the Shaken Fist HTTP API.
 
-## VDI console access
+## Installation
 
-`sf-client instance vdiconsole <ref>` opens a graphical console for an
-instance. When the Shaken Fist server advertises the
-`vdi-console-proxy` capability, the console is opened seamlessly
-through the [Kerbside](https://github.com/shakenfist/kerbside) SPICE
-proxy; otherwise the client falls back to its existing
-direct-to-hypervisor `.vv` path. Either way this "just works" without
-any extra flags.
+```bash
+pip install shakenfist-client
+```
 
-Install the optional `vdi` extra to get a viewer that supports the
-seamless proxy path out of the box:
+Add the `vdi` extra if you want graphical instance consoles to open
+seamlessly through the Kerbside SPICE proxy:
 
 ```bash
 pip install shakenfist-client[vdi]
 ```
 
-This pulls in [`ryll`](https://github.com/shakenfist/ryll) on Linux
-(it is not published for other platforms, so the extra resolves
-cleanly -- but does nothing -- elsewhere). When `ryll` is on `PATH`
-and the proxy is used, the console JWT is never written to disk --
-`ryll` performs the token exchange itself directly from the proxy
-URL.
+## Usage
 
-Two options tune this behaviour:
+```bash
+sf-client instance list
+sf-client instance show <ref>
+sf-client instance vdiconsole <ref>
+```
 
-- `--viewer <ryll|remote-viewer|PATH>` -- override viewer
-  auto-detection, which otherwise prefers `ryll` on `PATH` and falls
-  back to `remote-viewer`.
-- `--direct` -- force the original direct-to-hypervisor `.vv` path,
-  bypassing the Kerbside proxy even when the server advertises it.
-
-`remote-viewer` (from `virt-viewer`) remains fully supported as a
-fallback for either path -- the `.vv` file the client writes is a
-standard virt-viewer file. `sf-client instance vdiconsolefile`
-downloads that same `.vv` file without launching a viewer, and
-accepts `--direct` too.
+The client reads its credentials from the environment
+(`SHAKENFIST_NAMESPACE`, `SHAKENFIST_KEY`, `SHAKENFIST_API_URL`),
+from `~/.shakenfist`, or from `/etc/sf/shakenfist.json`.
 
 ## Documentation
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) -- project structure and key components
-- [AGENTS.md](AGENTS.md) -- guide for AI agents working on this codebase
-- [RELEASE-SETUP.md](RELEASE-SETUP.md) -- one-time release infrastructure setup
+<!-- These links are absolute, and stay absolute. README.md is the
+     package's long description on PyPI, where a relative link resolves
+     against pypi.org and 404s. They point at develop because that is
+     where the documentation this release's README describes is
+     maintained. -->
+
+- [VDI console access](https://github.com/shakenfist/client-python/blob/develop/docs/vdi-console.md)
+  -- graphical consoles, the Kerbside proxy and direct paths, and viewer
+  selection
+- [ARCHITECTURE.md](https://github.com/shakenfist/client-python/blob/develop/ARCHITECTURE.md) -- project structure and key components
+- [AGENTS.md](https://github.com/shakenfist/client-python/blob/develop/AGENTS.md) -- guide for AI agents working on this codebase
+- [RELEASE-SETUP.md](https://github.com/shakenfist/client-python/blob/develop/RELEASE-SETUP.md) -- one-time release infrastructure setup

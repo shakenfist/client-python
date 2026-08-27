@@ -81,8 +81,8 @@ The CLI's viewer-selection chain in `commandline/instance.py` prefers
 connections launched through `ryll` use `--url` directly so the token
 is never written to disk; every other combination writes a temporary
 `.vv` file that is deleted after the viewer exits. `--direct` forces
-the pre-existing direct-to-hypervisor path. See the README's "VDI
-console access" section for user-facing details.
+the pre-existing direct-to-hypervisor path. See
+`docs/vdi-console.md` for user-facing details.
 
 ### Plugin Loading Modernization (2026-01)
 
@@ -129,6 +129,9 @@ configuration steps.
 - **Functional tests** (`functional-tests.yml`): Linting, unit tests,
   and functional tests against live clusters. Includes automated PR
   review via Claude Code.
+- **Supply chain** (`supply-chain.yml`): gitleaks credential scanning of
+  the git history, and skillsaw linting of the agent context. Ungated by
+  path filters on purpose -- see the workflow's header.
 - **Code formatting** (`code-formatting.yml`): Daily automated
   formatting.
 - **CodeQL** (`codeql-analysis.yml`): Security scanning.
@@ -138,7 +141,8 @@ configuration steps.
 
 ### Pre-commit
 
-The project uses pre-commit with actionlint and shellcheck hooks.
+The project uses pre-commit with actionlint, shellcheck and skillsaw
+hooks.
 Install with:
 ```bash
 pre-commit install

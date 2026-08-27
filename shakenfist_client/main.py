@@ -27,6 +27,89 @@ LOG = logs.setup_console(__name__)
 CLIENT = None
 
 
+class RedactTokensFilter(logging.Filter):
+    """Replace JWTs in log records with a placeholder.
+
+    A Kerbside VDI console URL carries its own capability as a
+    short-lived, single-use JWT, and two separate debug paths print that
+    URL without knowing it is a credential: apiclient's _request_url()
+    logs the body of the /vdiconsoleproxy response, and urllib3 logs the
+    request target of every connection it makes. Redacting on the way
+    out of the logging system covers both, in a way that patching each
+    call site does not.
+
+    This is the same choice _request_url() already makes by hand for the
+    Authorization header, generalised. It applies to sf-client's own
+    output only; a library caller configures their own handlers and
+    makes their own decision.
+
+    It covers logging, and only logging. A credential can leave by
+    other routes -- an exception message rendered as a traceback is the
+    one that bit us -- so apiclient redacts those where it raises them
+    rather than relying on this.
+    """
+
+    def filter(self, record):
+        message = record.getMessage()
+        redacted = apiclient.redact_tokens(message)
+        if redacted != message:
+            # args are already interpolated into the redacted message, so
+            # they must be dropped or getMessage() would try again.
+            record.msg = redacted
+            record.args = ()
+        return True
+
+
+# One instance, because addFilter() deduplicates by identity and
+# configure_logging() may run more than once in a test process.
+REDACT_TOKENS = RedactTokensFilter()
+
+
+def configure_logging():
+    """Give the root logger a handler, and redact tokens on the way out.
+
+    setup_console() raises the root logger's level to INFO, but attaches
+    its handler to this module's logger only. Records from every other
+    module -- ours and our dependencies' alike -- therefore propagate up
+    to a root logger with no handler on it and are dropped, so sf-client
+    would print its own INFO lines and nothing else. basicConfig() gives
+    root a handler. Once root has one, our own records reach both it and
+    the handler setup_console() installed and are printed twice, which is
+    what turning off propagation prevents.
+
+    Root keeps basicConfig's stderr rather than the stdout that
+    ConsoleLoggingHandler print()s to, so that a urllib3 warning cannot
+    corrupt the output of `sf-client --json`. The format is matched by
+    hand so the two streams do not read as two different programs; the
+    logger name is kept on this one because a record from a dependency
+    is only useful once you know which dependency emitted it.
+
+    Called from cli() rather than run at import: this reconfigures
+    logging for the whole process, which is sf-client's business when it
+    is the program being run and nobody else's when a plugin, a test or
+    an embedding program merely imports this module.
+
+    The redaction filter reaches the handlers that exist when this runs,
+    which for a console script is all of them. A handler attached later
+    -- by a plugin, or by a library configuring itself lazily -- is not
+    covered, which is why apiclient redacts the tokens it raises in
+    exceptions itself rather than leaving it to logging.
+    """
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s %(levelname)s: %(name)s: %(message)s')
+    # basicConfig() puts its setLevel() inside "if root has no handlers",
+    # so if anything imported before us already gave root one, the level
+    # above is silently discarded. Set it ourselves; by the time cli()
+    # runs, sf-client is the program and the root level is its call.
+    logging.root.setLevel(logging.INFO)
+    logging.getLogger(__name__).propagate = False
+
+    for handler in (logging.root.handlers +
+                    logging.getLogger(__name__).handlers):
+        handler.addFilter(REDACT_TOKENS)
+
+
 class GroupCatchExceptions(click.Group):
     def __call__(self, *args, **kwargs):
         try:
@@ -94,12 +177,27 @@ def error_text(json_text):
               type=click.Choice(['continue', 'pause', 'block'], case_sensitive=False))
 @click.pass_context
 def cli(ctx, output, verbose, namespace, key, apiurl, async_strategy):
+    configure_logging()
+
     if not ctx.obj:
         ctx.obj = {}
     ctx.obj['OUTPUT'] = output
     ctx.obj['VERBOSE'] = verbose
 
     if verbose:
+        # Root and its handlers as well as LOG. LOG's own records go
+        # straight to the handler setup_console() installed, so raising
+        # its level alone would make sf-client's lines verbose and leave
+        # every other module -- including requests and urllib3, where the
+        # answer to "why did that call fail" usually is -- filtered at
+        # INFO by a root logger nobody moved. urllib3 logs the full
+        # request target of every connection, which is why
+        # configure_logging() installs RedactTokensFilter before we get
+        # here rather than trusting each library to know a credential
+        # when it sees one.
+        logging.root.setLevel(logging.DEBUG)
+        for handler in logging.root.handlers:
+            handler.setLevel(logging.DEBUG)
         LOG.setLevel(logging.DEBUG)
         LOG.debug('Set log level to DEBUG')
     else:

@@ -2,6 +2,7 @@ import json
 import time
 from unittest import mock
 
+import requests
 import testtools
 
 from shakenfist_client import apiclient
@@ -934,3 +935,96 @@ class RequestDeadlineTestCase(testtools.TestCase):
 
         self.assertEqual('success', r)
         self.assertEqual(2, self.mock_actual.call_count)
+
+
+# A structurally valid JWT: three base64url segments, the header being
+# base64url('{"alg":"none"}'). The redaction keys off the shape of the
+# string rather than where it came from, so a real shape matters.
+JWT = ('eyJhbGciOiJub25lIn0.'
+       'eyJzdWIiOiJpbnN0YW5jZSIsImV4cCI6MTc2NzIyNTYwMH0.'
+       'c2lnbmF0dXJlLWdvZXMtaGVyZQ')
+PROXY_URL = 'https://kerbside.example.com/vdi/console.vv?token=%s' % JWT
+
+
+class RedactTokensTestCase(testtools.TestCase):
+    def test_jwt_in_url_is_redacted(self):
+        redacted = apiclient.redact_tokens('fetching ' + PROXY_URL)
+        self.assertNotIn(JWT, redacted)
+        # The rest of the URL survives, because knowing which host was
+        # called is the reason the text is being rendered at all.
+        self.assertIn('kerbside.example.com', redacted)
+
+    def test_bare_jwt_is_redacted(self):
+        self.assertEqual('*****', apiclient.redact_tokens(JWT))
+
+    def test_hostname_is_not_redacted(self):
+        # Three dotted segments of base64url characters, which a shape
+        # test looser than "starts with eyJ" would eat.
+        self.assertEqual(
+            'mycluster.mycompany.internal',
+            apiclient.redact_tokens('mycluster.mycompany.internal'))
+
+    def test_text_without_a_token_is_unchanged(self):
+        self.assertEqual(
+            'nothing here', apiclient.redact_tokens('nothing here'))
+
+
+class VDIConsoleProxyFileTestCase(testtools.TestCase):
+    """The proxy URL is a credential, so nothing may render it whole.
+
+    requests builds its exception messages out of the URL it was handed,
+    and main.py's logging filter never sees an exception the interpreter
+    prints as a traceback. So these check the exception, not the logs.
+    """
+
+    def _client(self):
+        return apiclient.Client(suppress_configuration_lookup=True,
+                                base_url='http://sf/api')
+
+    def _raising(self, exception):
+        client = self._client()
+        with mock.patch.object(client, 'get_vdi_console_proxy',
+                               return_value={'url': PROXY_URL}):
+            with mock.patch('requests.get', side_effect=exception):
+                return self.assertRaises(
+                    type(exception), client.get_vdi_console_proxy_file,
+                    'inst-ref')
+
+    def test_http_error_message_is_redacted(self):
+        # What raise_for_status() raises: the message is built as
+        # '<code> Client Error: <reason> for url: <url>'.
+        raised = self._raising(requests.exceptions.HTTPError(
+            '403 Client Error: Forbidden for url: %s' % PROXY_URL))
+        self.assertNotIn(JWT, str(raised))
+        self.assertIn('403 Client Error', str(raised))
+
+    def test_connection_error_message_is_redacted(self):
+        raised = self._raising(requests.exceptions.ConnectionError(
+            "HTTPSConnectionPool(host='kerbside.example.com', port=443): "
+            'Max retries exceeded with url: /vdi/console.vv?token=%s' % JWT))
+        self.assertNotIn(JWT, str(raised))
+
+    def test_the_exception_class_is_preserved(self):
+        # Callers catch requests' own classes, so redaction must not
+        # change what an except clause matches.
+        raised = self._raising(requests.exceptions.Timeout(
+            'timed out for url: %s' % PROXY_URL))
+        self.assertIsInstance(raised, requests.exceptions.Timeout)
+
+    def test_the_unredacted_original_is_not_chained(self):
+        # Without "from None" the interpreter prints the original as the
+        # context of the replacement, token and all.
+        raised = self._raising(requests.exceptions.HTTPError(
+            '403 Client Error: Forbidden for url: %s' % PROXY_URL))
+        self.assertTrue(raised.__suppress_context__)
+
+    def test_a_successful_fetch_returns_the_body(self):
+        client = self._client()
+        response = mock.Mock()
+        response.text = '[virt-viewer]\n'
+        with mock.patch.object(client, 'get_vdi_console_proxy',
+                               return_value={'url': PROXY_URL}):
+            with mock.patch('requests.get', return_value=response):
+                self.assertEqual(
+                    '[virt-viewer]\n',
+                    client.get_vdi_console_proxy_file('inst-ref'))
