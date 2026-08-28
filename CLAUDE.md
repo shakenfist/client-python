@@ -61,6 +61,32 @@ or backport packages where necessary.
 
 ## Recent Changes
 
+### Namespace Capacity Claims (2026-08)
+
+Added the five `apiclient` verbs behind
+`/auth/namespaces/<namespace>/claims` and an `sf-client namespace
+claim` command group. Two behaviours are load bearing and easy to
+"tidy up" into bugs:
+
+- `update_namespace_claim()` sends **only** the arguments the caller
+  passed, because the server reads the body as a field mask. Reading a
+  claim and sending all four values back turns a re-date into a resize
+  and races concurrent writers.
+- `expires_in_seconds` is a duration, not a timestamp, because the
+  expiry is computed from the cluster's clock -- the only clock the
+  expiry sweep compares against. Converting a local datetime here would
+  fold workstation clock skew into the expiry.
+
+503 maps to the new `ServiceUnavailableException` so the claims API's
+two retryable refusals (capacity accounting not built yet, claim
+contended past the optimistic retry budget) can be told apart from
+durable ones; `main.py`'s `GroupCatchExceptions` reports it as a
+retry. The client does not retry a 503 itself.
+
+The CLI never merges `state` (object existence) and `coverage_state`
+(whether the claim covers placements) into one column. See
+`docs/namespace-claims.md`.
+
 ### Seamless Kerbside VDI Console Launch (2026-07)
 
 Added `instance vdiconsole` / `instance vdiconsolefile` support for

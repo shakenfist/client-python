@@ -149,6 +149,17 @@ class GroupCatchExceptions(click.Group):
                       error_text(e.text))
             sys.exit(1)
 
+        except apiclient.ServiceUnavailableException as e:
+            # A retryable refusal, not a durable one. The namespace claims
+            # API answers this while the cluster capacity accounting is
+            # still being built, and when a claim was contended for longer
+            # than the optimistic retry budget allowed -- so the message
+            # has to tell an operator the request was fine and to try it
+            # again, rather than to go looking for what they got wrong.
+            LOG.error('Service unavailable, please retry: %s' %
+                      error_text(e.text))
+            sys.exit(1)
+
         except apiclient.requests.exceptions.ConnectionError as e:
             LOG.error('Unable to connect to server: %s' % e)
             sys.exit(1)

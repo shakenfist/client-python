@@ -42,6 +42,9 @@ from `~/.shakenfist`, or from `/etc/sf/shakenfist.json`.
 - [VDI console access](https://github.com/shakenfist/client-python/blob/develop/docs/vdi-console.md)
   -- graphical consoles, the Kerbside proxy and direct paths, and viewer
   selection
+- [Namespace capacity claims](https://github.com/shakenfist/client-python/blob/develop/docs/namespace-claims.md)
+  -- claiming aggregate cluster capacity for a namespace, the two claim
+  states, and what each refusal means
 - [ARCHITECTURE.md](https://github.com/shakenfist/client-python/blob/develop/ARCHITECTURE.md) -- project structure and key components
 - [AGENTS.md](https://github.com/shakenfist/client-python/blob/develop/AGENTS.md) -- guide for AI agents working on this codebase
 - [RELEASE-SETUP.md](https://github.com/shakenfist/client-python/blob/develop/RELEASE-SETUP.md) -- one-time release infrastructure setup
