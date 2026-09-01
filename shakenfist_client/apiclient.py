@@ -126,6 +126,20 @@ class AgentCommandError(Exception):
     ...
 
 
+class AgentOperationFailed(Exception):
+    """Raised when a polled agent operation ends in a non-complete terminal state.
+
+    Carries the operation uuid and the operation's last known view so
+    callers can inspect ``state`` and any results the server attached
+    before the operation gave up.
+    """
+
+    def __init__(self, message, op_uuid, op_view=None):
+        super().__init__(message)
+        self.op_uuid = op_uuid
+        self.op_view = op_view or {}
+
+
 class ClusterOperationFailed(Exception):
     """Raised when a polled cluster operation ends in a terminal failure.
 
@@ -179,6 +193,13 @@ def _is_error_state(state):
     # settling in the terminal 'error' state. Both mean the instance will
     # never be ready.
     return state == 'error' or state.endswith('-error')
+
+
+# These four are exactly AgentOperation.TERMINAL_STATES in the server
+# repository (shakenfist/operations/agentoperation.py). The client cannot
+# import that module, so this duplicates it deliberately -- keep the two
+# in sync by hand.
+TERMINAL_AGENT_OPERATION_STATES = frozenset({'complete', 'error', 'expired', 'deleted'})
 
 
 def _correct_blob_indexes(d):
@@ -1255,11 +1276,20 @@ class Client:
     def _await_agentop(self, r):
         deadline = time.time() + _calculate_async_deadline(self.async_strategy)
         while True:
-            if r['state'] == 'complete':
+            if r['state'] in TERMINAL_AGENT_OPERATION_STATES:
+                if r['state'] != 'complete':
+                    raise AgentOperationFailed(
+                        f'Agent operation {r["uuid"]} entered terminal state '
+                        f'"{r["state"]}"', r['uuid'], r)
                 return r
 
             LOG.debug('Waiting for agent operation to be complete')
             if time.time() > deadline:
+                # This is not AgentAwaitTimeout: with ASYNC_CONTINUE the
+                # deadline is already in the past when the loop starts, so
+                # returning the still-in-flight operation here is the
+                # intended fire-and-forget behaviour for a caller that is
+                # not actually waiting, not a failure.
                 LOG.debug('Deadline exceeded waiting for agent operation to complete')
                 return r
 
@@ -1583,7 +1613,7 @@ class Client:
 
         # Wait for the operation to be complete
         while time.time() - start_time < timeout:
-            if op['state'] == 'complete':
+            if op['state'] in TERMINAL_AGENT_OPERATION_STATES:
                 break
             time.sleep(5)
             op = self.get_agent_operation(op['uuid'])
@@ -1591,6 +1621,13 @@ class Client:
         if op['state'] != 'complete':
             i = self.get_instance(instance_uuid)
             cd = self.get_console_data(instance_uuid)
+            if op['state'] in TERMINAL_AGENT_OPERATION_STATES:
+                raise AgentOperationFailed(
+                    f'Agent execute operation {op["uuid"]} on instance {i["uuid"]} '
+                    f'entered terminal state "{op["state"]}"\n'
+                    f'    Agent state: {i["agent_state"]}\n\n'
+                    f'    Console data: {cd}',
+                    op['uuid'], op)
             raise AgentAwaitTimeout(
                 f'Agent execute operation {op["uuid"]} on instance {i["uuid"]} '
                 'did not complete within specified timeout\n'
@@ -1652,13 +1689,17 @@ class Client:
 
         # Wait for the operation to be complete
         while time.time() - start_time < 120:
-            if op['state'] == 'complete':
+            if op['state'] in TERMINAL_AGENT_OPERATION_STATES:
                 break
             time.sleep(5)
             op = self.get_agent_operation(op['uuid'])
 
         if op['state'] != 'complete':
-            raise AgentCommandError(
+            if op['state'] in TERMINAL_AGENT_OPERATION_STATES:
+                raise AgentOperationFailed(
+                    f'Agent execute operation {op["uuid"]} entered terminal state '
+                    f'"{op["state"]}"', op['uuid'], op)
+            raise AgentAwaitTimeout(
                 f'Agent execute operation {op["uuid"]} did not complete in '
                 f'120 seconds with state {op["state"]}')
 

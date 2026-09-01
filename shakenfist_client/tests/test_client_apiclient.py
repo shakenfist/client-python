@@ -1156,3 +1156,171 @@ class StatusCodeMappingTestCase(testtools.TestCase):
             apiclient.APIException,
             client._actual_request_url, 'POST', '/auth/namespaces/ns/claims')
         self.assertEqual(418, e.status_code)
+
+
+class AgentOperationAwaitTestCase(testtools.TestCase):
+    """The three agent operation await loops must fail fast on a terminal
+    state rather than spinning out their budget first.
+
+    client-python#363: an operation that lands in 'error', 'expired' or
+    'deleted' used to be indistinguishable from one still in flight, so a
+    caller waited out the whole timeout only to be told it timed out.
+    """
+
+    TERMINAL_FAILURE_STATES = ('error', 'expired', 'deleted')
+
+    def setUp(self):
+        super().setUp()
+
+        self.capabilities = mock.patch(
+            'shakenfist_client.apiclient.Client._collect_capabilities')
+        self.capabilities.start()
+        self.addCleanup(self.capabilities.stop)
+
+        self.sleep = mock.patch('time.sleep')
+        self.mock_sleep = self.sleep.start()
+        self.addCleanup(self.sleep.stop)
+
+    def _client(self, **kwargs):
+        return apiclient.Client(suppress_configuration_lookup=True,
+                                base_url='http://localhost:13000', **kwargs)
+
+    # -- _await_agentop ----------------------------------------------
+
+    def test_await_agentop_complete_returns_the_operation(self):
+        client = self._client()
+        op = {'uuid': 'op1', 'state': 'complete'}
+        with mock.patch.object(client, 'get_agent_operation') as get_op:
+            result = client._await_agentop(dict(op))
+
+        self.assertEqual(op, result)
+        get_op.assert_not_called()
+
+    def test_await_agentop_terminal_failure_raises_on_first_poll(self):
+        for state in self.TERMINAL_FAILURE_STATES:
+            client = self._client()
+            op = {'uuid': 'op1', 'state': state}
+            with mock.patch.object(client, 'get_agent_operation') as get_op:
+                e = self.assertRaises(
+                    apiclient.AgentOperationFailed,
+                    client._await_agentop, dict(op))
+
+            get_op.assert_not_called()
+            self.assertEqual('op1', e.op_uuid)
+            self.assertEqual(state, e.op_view['state'])
+            self.assertIn(state, str(e))
+
+    def test_await_agentop_async_continue_returns_in_flight_operation(self):
+        # ASYNC_CONTINUE's deadline is already in the past when the loop
+        # starts, so a caller who is not really waiting gets the
+        # in-flight operation back -- this is the existing fire-and-forget
+        # behaviour, not the "budget ran out" case AgentAwaitTimeout
+        # describes, so it must not start raising here.
+        client = self._client(async_strategy=apiclient.ASYNC_CONTINUE)
+        op = {'uuid': 'op1', 'state': 'queued'}
+        with mock.patch.object(client, 'get_agent_operation') as get_op:
+            result = client._await_agentop(dict(op))
+
+        self.assertEqual(op, result)
+        get_op.assert_not_called()
+
+    # -- await_agent_command -------------------------------------------
+
+    def test_await_agent_command_complete_returns_normally(self):
+        client = self._client()
+        op = {'uuid': 'op1', 'state': 'complete',
+              'results': {'0': {'return-code': 0, 'stderr': '', 'stdout': 'hi'}}}
+        with mock.patch.object(client, 'await_agent_ready'), \
+                mock.patch.object(client, 'instance_execute', return_value=dict(op)), \
+                mock.patch.object(client, 'get_agent_operation') as get_op:
+            result = client.await_agent_command('notreallyauuid', 'true')
+
+        self.assertEqual((0, 'hi'), result)
+        get_op.assert_not_called()
+
+    def test_await_agent_command_terminal_failure_raises_on_first_poll(self):
+        for state in self.TERMINAL_FAILURE_STATES:
+            client = self._client()
+            op = {'uuid': 'op1', 'state': state}
+            with mock.patch.object(client, 'await_agent_ready'), \
+                    mock.patch.object(client, 'instance_execute', return_value=dict(op)), \
+                    mock.patch.object(client, 'get_agent_operation') as get_op, \
+                    mock.patch.object(
+                        client, 'get_instance',
+                        return_value={'uuid': 'notreallyauuid', 'agent_state': 'ready'}), \
+                    mock.patch.object(client, 'get_console_data', return_value='console'):
+                e = self.assertRaises(
+                    apiclient.AgentOperationFailed,
+                    client.await_agent_command, 'notreallyauuid', 'true')
+
+            get_op.assert_not_called()
+            self.assertEqual('op1', e.op_uuid)
+            self.assertEqual(state, e.op_view['state'])
+            self.assertIn(state, str(e))
+
+    def test_await_agent_command_never_settling_raises_timeout(self):
+        # timeout=0 means the operation-wait loop is not entered at all,
+        # so this proves the exception without waiting out any budget.
+        client = self._client()
+        op = {'uuid': 'op1', 'state': 'queued'}
+        with mock.patch.object(client, 'await_agent_ready'), \
+                mock.patch.object(client, 'instance_execute', return_value=dict(op)), \
+                mock.patch.object(client, 'get_agent_operation') as get_op, \
+                mock.patch.object(
+                    client, 'get_instance',
+                    return_value={'uuid': 'notreallyauuid', 'agent_state': 'ready'}), \
+                mock.patch.object(client, 'get_console_data', return_value='console'):
+            self.assertRaises(
+                apiclient.AgentAwaitTimeout,
+                client.await_agent_command, 'notreallyauuid', 'true', timeout=0)
+
+        get_op.assert_not_called()
+
+    # -- await_agent_fetch --------------------------------------------
+
+    def test_await_agent_fetch_complete_returns_normally(self):
+        client = self._client()
+        op = {'uuid': 'op1', 'state': 'complete',
+              'results': {'0': {'content_blob': 'blob1'}}}
+        with mock.patch.object(client, 'await_agent_ready'), \
+                mock.patch.object(client, 'instance_get', return_value=dict(op)), \
+                mock.patch.object(client, 'get_agent_operation') as get_op, \
+                mock.patch.object(client, 'get_blob', return_value={'state': 'created'}), \
+                mock.patch.object(client, 'get_blob_data', return_value=[b'hello']):
+            data = client.await_agent_fetch('notreallyauuid', '/tmp/f')
+
+        self.assertEqual('hello', data)
+        get_op.assert_not_called()
+
+    def test_await_agent_fetch_terminal_failure_raises_on_first_poll(self):
+        for state in self.TERMINAL_FAILURE_STATES:
+            client = self._client()
+            op = {'uuid': 'op1', 'state': state}
+            with mock.patch.object(client, 'await_agent_ready'), \
+                    mock.patch.object(client, 'instance_get', return_value=dict(op)), \
+                    mock.patch.object(client, 'get_agent_operation') as get_op:
+                e = self.assertRaises(
+                    apiclient.AgentOperationFailed,
+                    client.await_agent_fetch, 'notreallyauuid', '/tmp/f')
+
+            get_op.assert_not_called()
+            self.assertEqual('op1', e.op_uuid)
+            self.assertEqual(state, e.op_view['state'])
+            self.assertIn(state, str(e))
+
+    def test_await_agent_fetch_never_settling_raises_timeout(self):
+        # await_agent_fetch's operation-wait loop still has its own
+        # hardcoded 120 second budget rather than honouring `timeout`
+        # (that repair is a later step), so the clock itself is mocked
+        # here to prove the fail-fast path without a 120 second test.
+        client = self._client()
+        op = {'uuid': 'op1', 'state': 'queued'}
+        with mock.patch.object(client, 'await_agent_ready'), \
+                mock.patch.object(client, 'instance_get', return_value=dict(op)), \
+                mock.patch.object(client, 'get_agent_operation') as get_op, \
+                mock.patch('time.time', side_effect=[1000.0, 1300.0]):
+            self.assertRaises(
+                apiclient.AgentAwaitTimeout,
+                client.await_agent_fetch, 'notreallyauuid', '/tmp/f')
+
+        get_op.assert_not_called()
