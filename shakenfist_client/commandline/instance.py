@@ -799,8 +799,17 @@ def instance_snapshot(ctx, instance_ref=None, all=False, device=None, label_name
 @click.argument('instance_ref', type=click.STRING, shell_complete=_get_instances)
 @click.argument('source', type=click.Path(exists=True))
 @click.argument('destination', type=click.Path())
+@click.option('--deadline', type=click.INT, default=None,
+              help='The wall clock budget in seconds for the in-guest agent operation '
+              'which places the file, once the upload of the artifact to the cluster is '
+              'complete. 0 disables this budget. Omit to use the server default.')
+@click.option('--progress-timeout', type=click.INT, default=None,
+              help='The number of seconds of no progress on the in-guest agent operation '
+              'before it is considered stalled. 0 disables this budget. Omit to use the '
+              'server default.')
 @click.pass_context
-def instance_upload(ctx, instance_ref=None, source=None, destination=None):
+def instance_upload(ctx, instance_ref=None, source=None, destination=None,
+                    deadline=None, progress_timeout=None):
     if not ctx.obj['CLIENT'].check_capability('blob-search-by-hash'):
         blob = None
     else:
@@ -820,15 +829,20 @@ def instance_upload(ctx, instance_ref=None, source=None, destination=None):
 
     st = os.stat(source)
     ctx.obj['CLIENT'].instance_put_blob(
-            instance_ref, artifact['blob_uuid'], destination, st.st_mode)
+            instance_ref, artifact['blob_uuid'], destination, st.st_mode,
+            deadline_seconds=deadline, progress_timeout_seconds=progress_timeout)
 
 
 @instance.command(name='execute', help='Execute a command on an instance')
 @click.argument('instance_ref', type=click.STRING, shell_complete=_get_instances)
 @click.argument('commandline', type=click.STRING)
+@click.option('--deadline', type=click.INT, default=None,
+              help='The wall clock budget in seconds for the in-guest agent operation '
+              'which executes the command. 0 disables this budget. Omit to use the '
+              'server default.')
 @click.pass_context
-def instance_execute(ctx, instance_ref=None, commandline=None):
-    op = ctx.obj['CLIENT'].instance_execute(instance_ref, commandline)
+def instance_execute(ctx, instance_ref=None, commandline=None, deadline=None):
+    op = ctx.obj['CLIENT'].instance_execute(instance_ref, commandline, deadline_seconds=deadline)
 
     if ctx.obj['OUTPUT'] == 'json':
         print(json.dumps(op, indent=4, sort_keys=True))
@@ -860,9 +874,19 @@ def instance_execute(ctx, instance_ref=None, commandline=None):
 @click.argument('instance_ref', type=click.STRING, shell_complete=_get_instances)
 @click.argument('source', type=click.Path())
 @click.argument('destination', type=click.Path())
+@click.option('--deadline', type=click.INT, default=None,
+              help='The wall clock budget in seconds for the in-guest agent operation '
+              'which fetches the file. 0 disables this budget. Omit to use the server '
+              'default.')
+@click.option('--progress-timeout', type=click.INT, default=None,
+              help='The number of seconds of no progress on the in-guest agent operation '
+              'before it is considered stalled. 0 disables this budget. Omit to use the '
+              'server default.')
 @click.pass_context
-def instance_download(ctx, instance_ref=None, source=None, destination=None):
-    op = ctx.obj['CLIENT'].instance_get(instance_ref, source)
+def instance_download(ctx, instance_ref=None, source=None, destination=None,
+                      deadline=None, progress_timeout=None):
+    op = ctx.obj['CLIENT'].instance_get(
+        instance_ref, source, deadline_seconds=deadline, progress_timeout_seconds=progress_timeout)
     if '0' not in op.get('results', {}):
         print('Results not available.')
         sys.exit(1)

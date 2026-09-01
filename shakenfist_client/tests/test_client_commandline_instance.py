@@ -6,6 +6,7 @@ from unittest import mock
 import testtools
 from click.testing import CliRunner
 
+from shakenfist_client import util
 from shakenfist_client.commandline import instance as instance_cmd
 
 
@@ -400,3 +401,110 @@ class VdiConsoleFileCommandTestCase(testtools.TestCase):
 
         self.assertEqual(1, result.exit_code)
         self.assertIn('does not implement VDI console helpers', result.output)
+
+
+class ExecuteDeadlineOptionTestCase(testtools.TestCase):
+    """Tests for ``--deadline`` on ``sf-client instance execute``."""
+
+    def _invoke(self, extra_args):
+        client = mock.Mock()
+        client.instance_execute.return_value = {'results': {'0': {
+            'return-code': 0, 'stdout': '', 'stderr': ''}}}
+        runner = CliRunner()
+        result = runner.invoke(
+            instance_cmd.instance,
+            ['execute', 'inst-ref', 'true'] + extra_args,
+            obj={'CLIENT': client, 'OUTPUT': 'pretty'},
+            catch_exceptions=False)
+        return result, client
+
+    def test_unspecified_deadline_sends_none(self):
+        result, client = self._invoke([])
+        self.assertEqual(0, result.exit_code, result.output)
+        client.instance_execute.assert_called_once_with(
+            'inst-ref', 'true', deadline_seconds=None)
+
+    def test_explicit_deadline_is_passed(self):
+        result, client = self._invoke(['--deadline', '30'])
+        self.assertEqual(0, result.exit_code, result.output)
+        client.instance_execute.assert_called_once_with(
+            'inst-ref', 'true', deadline_seconds=30)
+
+    def test_no_progress_timeout_option(self):
+        result = CliRunner().invoke(
+            instance_cmd.instance, ['execute', '--help'],
+            obj={'CLIENT': mock.Mock(), 'OUTPUT': 'pretty'})
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertNotIn('--progress-timeout', result.output)
+
+
+class UploadDeadlineOptionsTestCase(testtools.TestCase):
+    """Tests for ``--deadline`` and ``--progress-timeout`` on
+    ``sf-client instance upload``.
+    """
+
+    def _invoke(self, extra_args):
+        client = mock.Mock()
+        client.check_capability.return_value = False
+        runner = CliRunner()
+        with tempfile.NamedTemporaryFile() as source:
+            with mock.patch.object(
+                    util, 'upload_artifact_with_progress',
+                    return_value={'uuid': 'art-uuid', 'blob_uuid': 'blob-uuid'}):
+                result = runner.invoke(
+                    instance_cmd.instance,
+                    ['upload', 'inst-ref', source.name, '/dest'] + extra_args,
+                    obj={'CLIENT': client, 'OUTPUT': 'pretty'},
+                    catch_exceptions=False)
+        return result, client
+
+    def test_unspecified_options_send_none(self):
+        result, client = self._invoke([])
+        self.assertEqual(0, result.exit_code, result.output)
+        kwargs = client.instance_put_blob.call_args.kwargs
+        self.assertIsNone(kwargs['deadline_seconds'])
+        self.assertIsNone(kwargs['progress_timeout_seconds'])
+
+    def test_explicit_options_are_passed(self):
+        result, client = self._invoke(
+            ['--deadline', '30', '--progress-timeout', '10'])
+        self.assertEqual(0, result.exit_code, result.output)
+        kwargs = client.instance_put_blob.call_args.kwargs
+        self.assertEqual(30, kwargs['deadline_seconds'])
+        self.assertEqual(10, kwargs['progress_timeout_seconds'])
+
+
+class DownloadDeadlineOptionsTestCase(testtools.TestCase):
+    """Tests for ``--deadline`` and ``--progress-timeout`` on
+    ``sf-client instance download``.
+    """
+
+    def _invoke(self, extra_args):
+        client = mock.Mock()
+        client.instance_get.return_value = {
+            'results': {'0': {'content_blob': 'blob-uuid'}}}
+        client.get_blob_data.return_value = [b'data']
+        runner = CliRunner()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            destination = os.path.join(tmpdir, 'dest')
+            result = runner.invoke(
+                instance_cmd.instance,
+                ['download', 'inst-ref', '/source', destination] + extra_args,
+                obj={'CLIENT': client, 'OUTPUT': 'pretty'},
+                catch_exceptions=False)
+        return result, client
+
+    def test_unspecified_options_send_none(self):
+        result, client = self._invoke([])
+        self.assertEqual(0, result.exit_code, result.output)
+        client.instance_get.assert_called_once_with(
+            'inst-ref', '/source', deadline_seconds=None,
+            progress_timeout_seconds=None)
+
+    def test_explicit_options_are_passed(self):
+        result, client = self._invoke(
+            ['--deadline', '30', '--progress-timeout', '10'])
+        self.assertEqual(0, result.exit_code, result.output)
+        client.instance_get.assert_called_once_with(
+            'inst-ref', '/source', deadline_seconds=30,
+            progress_timeout_seconds=10)
