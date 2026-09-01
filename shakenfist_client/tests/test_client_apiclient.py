@@ -1326,10 +1326,10 @@ class AgentOperationAwaitTestCase(testtools.TestCase):
             self.assertIn(state, str(e))
 
     def test_await_agent_fetch_never_settling_raises_timeout(self):
-        # await_agent_fetch's operation-wait loop still has its own
-        # hardcoded 120 second budget rather than honouring `timeout`
-        # (that repair is a later step), so the clock itself is mocked
-        # here to prove the fail-fast path without a 120 second test.
+        # await_agent_fetch's operation-wait loop now bounds itself by
+        # `timeout` (the default of 120 seconds here, since none is
+        # passed), so the clock itself is mocked here to prove the
+        # fail-fast path without an actual 120 second wait.
         client = self._client()
         op = {'uuid': 'op1', 'state': 'queued'}
         with mock.patch.object(client, 'await_agent_ready'), \
@@ -1359,6 +1359,45 @@ class AgentOperationAwaitTestCase(testtools.TestCase):
 
         instance_get.assert_called_with(
             'notreallyauuid', '/tmp/f', deadline_seconds=42)
+
+    def test_await_agent_fetch_slow_operation_still_reaches_results(self):
+        # Decision 6 / survey finding 5: all three loops in this method
+        # must share the same `timeout` budget, measured from the same
+        # start_time. Before that repair, the results-wait and blob-wait
+        # loops were hardcoded to 60 seconds from start_time regardless
+        # of `timeout`, so an operation that took longer than a minute
+        # to reach 'complete' entered those loops with their window
+        # already expired -- even though the default `timeout` of 120
+        # seconds had plenty of budget left. Here the operation reaches
+        # 'complete' 90 seconds in (comfortably inside the 120 second
+        # default) with its results still empty, and only fills them in
+        # on a later poll. Against the pre-fix code this raises
+        # AgentCommandError('operation returned no results') because the
+        # second loop's hardcoded `< 60` bound is already false by the
+        # time it is reached; against the fix it keeps polling and
+        # returns the fetched data.
+        client = self._client()
+        op_executing = {'uuid': 'op1', 'state': 'executing', 'results': {}}
+        op_complete_no_results = {'uuid': 'op1', 'state': 'complete', 'results': {}}
+        op_complete_with_results = {
+            'uuid': 'op1', 'state': 'complete',
+            'results': {'0': {'content_blob': 'blob1'}}}
+        with mock.patch.object(client, 'await_agent_ready'), \
+                mock.patch.object(
+                    client, 'instance_get', return_value=dict(op_executing)), \
+                mock.patch.object(
+                    client, 'get_agent_operation',
+                    side_effect=[dict(op_complete_no_results),
+                                 dict(op_complete_with_results)]) as get_op, \
+                mock.patch.object(client, 'get_blob', return_value={'state': 'created'}), \
+                mock.patch.object(client, 'get_blob_data', return_value=[b'hello']), \
+                mock.patch(
+                    'time.time',
+                    side_effect=[1000.0, 1005.0, 1090.0, 1095.0, 1100.0, 1105.0]):
+            data = client.await_agent_fetch('notreallyauuid', '/tmp/f')
+
+        self.assertEqual('hello', data)
+        self.assertEqual(2, get_op.call_count)
 
 
 class AgentOperationDeadlineTestCase(testtools.TestCase):

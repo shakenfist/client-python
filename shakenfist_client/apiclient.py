@@ -1739,7 +1739,7 @@ class Client:
         op = self.instance_get(instance_uuid, path, deadline_seconds=timeout)
 
         # Wait for the operation to be complete
-        while time.time() - start_time < 120:
+        while time.time() - start_time < timeout:
             if op['state'] in TERMINAL_AGENT_OPERATION_STATES:
                 break
             time.sleep(5)
@@ -1752,10 +1752,10 @@ class Client:
                     f'"{op["state"]}"', op['uuid'], op)
             raise AgentAwaitTimeout(
                 f'Agent execute operation {op["uuid"]} did not complete in '
-                f'120 seconds with state {op["state"]}')
+                f'{timeout} seconds with state {op["state"]}')
 
         # Wait for the operation to have results
-        while time.time() - start_time < 60:
+        while time.time() - start_time < timeout:
             if op['results'] != {}:
                 break
             time.sleep(5)
@@ -1768,7 +1768,7 @@ class Client:
 
         # Wait for the blob containing the file to be ready
         b = self.get_blob(op['results']['0']['content_blob'])
-        while time.time() - start_time < 60:
+        while time.time() - start_time < timeout:
             if b['state'] == 'created':
                 break
             time.sleep(5)
