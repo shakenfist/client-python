@@ -1276,6 +1276,23 @@ class AgentOperationAwaitTestCase(testtools.TestCase):
 
         get_op.assert_not_called()
 
+    def test_await_agent_command_passes_its_timeout_as_deadline(self):
+        # Decision 3 of PLAN-agent-operation-deadlines-phase-06-client.md:
+        # await_agent_command's own budget (its timeout argument) is what
+        # it hands instance_execute, not the async-strategy-derived value
+        # instance_execute would otherwise fall back to.
+        client = self._client()
+        op = {'uuid': 'op1', 'state': 'complete',
+              'results': {'0': {'return-code': 0, 'stderr': '', 'stdout': 'hi'}}}
+        with mock.patch.object(client, 'await_agent_ready'), \
+                mock.patch.object(
+                    client, 'instance_execute', return_value=dict(op)) as instance_execute, \
+                mock.patch.object(client, 'get_agent_operation'):
+            client.await_agent_command('notreallyauuid', 'true', timeout=42)
+
+        instance_execute.assert_called_with(
+            'notreallyauuid', 'true', deadline_seconds=42)
+
     # -- await_agent_fetch --------------------------------------------
 
     def test_await_agent_fetch_complete_returns_normally(self):
@@ -1324,3 +1341,163 @@ class AgentOperationAwaitTestCase(testtools.TestCase):
                 client.await_agent_fetch, 'notreallyauuid', '/tmp/f')
 
         get_op.assert_not_called()
+
+    def test_await_agent_fetch_passes_its_timeout_as_deadline(self):
+        # Decision 3: await_agent_fetch's own budget (its timeout argument)
+        # is what it hands instance_get, not the async-strategy-derived
+        # value instance_get would otherwise fall back to.
+        client = self._client()
+        op = {'uuid': 'op1', 'state': 'complete',
+              'results': {'0': {'content_blob': 'blob1'}}}
+        with mock.patch.object(client, 'await_agent_ready'), \
+                mock.patch.object(
+                    client, 'instance_get', return_value=dict(op)) as instance_get, \
+                mock.patch.object(client, 'get_agent_operation'), \
+                mock.patch.object(client, 'get_blob', return_value={'state': 'created'}), \
+                mock.patch.object(client, 'get_blob_data', return_value=[b'hello']):
+            client.await_agent_fetch('notreallyauuid', '/tmp/f', timeout=42)
+
+        instance_get.assert_called_with(
+            'notreallyauuid', '/tmp/f', deadline_seconds=42)
+
+
+class AgentOperationDeadlineTestCase(testtools.TestCase):
+    """The three agent-operation creating helpers propagate a deadline
+    (and, for put/get, a progress timeout) to the server -- but only once
+    the server has advertised it can accept them via the
+    'agentoperation-deadlines' capability token (decision 2 and 7 of
+    PLAN-agent-operation-deadlines-phase-06-client.md).
+    """
+
+    def setUp(self):
+        super().setUp()
+
+        self.request_url = mock.patch(
+            'shakenfist_client.apiclient.Client._request_url')
+        self.mock_request = self.request_url.start()
+        self.addCleanup(self.request_url.stop)
+        self.mock_request.return_value.json.return_value = {
+            'uuid': 'op1', 'state': 'complete'}
+
+        self.capabilities = mock.patch(
+            'shakenfist_client.apiclient.Client._collect_capabilities')
+        self.capabilities.start()
+        self.addCleanup(self.capabilities.stop)
+
+    def _client(self, capable, **kwargs):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000', **kwargs)
+        # check_capability() is a substring match against the server's root
+        # HTML page (apiclient.py:check_capability), so this is the same
+        # thing a real server response looks like to the client.
+        client.root_html = 'agentoperation-deadlines' if capable else ''
+        client.root_html += ' instance-put-blob instance-execute instance-get'
+        return client
+
+    def _sent_data(self):
+        return self.mock_request.call_args.kwargs['data']
+
+    # -- instance_put_blob ----------------------------------------------
+
+    def test_put_blob_sends_both_when_capable(self):
+        client = self._client(True)
+        client.instance_put_blob('inst1', 'blob1', '/path', 0o644,
+                                 deadline_seconds=42, progress_timeout_seconds=7)
+
+        self.assertEqual(
+            {'blob_uuid': 'blob1', 'path': '/path', 'mode': 0o644,
+             'deadline_seconds': 42, 'progress_timeout_seconds': 7},
+            self._sent_data())
+
+    def test_put_blob_sends_neither_when_not_capable(self):
+        client = self._client(False)
+        client.instance_put_blob('inst1', 'blob1', '/path', 0o644,
+                                 deadline_seconds=42, progress_timeout_seconds=7)
+
+        self.assertEqual(
+            {'blob_uuid': 'blob1', 'path': '/path', 'mode': 0o644},
+            self._sent_data())
+
+    def test_put_blob_derives_deadline_from_async_strategy(self):
+        client = self._client(True, async_strategy=apiclient.ASYNC_PAUSE)
+        client.instance_put_blob('inst1', 'blob1', '/path', 0o644)
+
+        sent = self._sent_data()
+        self.assertEqual(60, sent['deadline_seconds'])
+        self.assertNotIn('progress_timeout_seconds', sent)
+
+    def test_put_blob_explicit_deadline_overrides_derived(self):
+        client = self._client(True, async_strategy=apiclient.ASYNC_PAUSE)
+        client.instance_put_blob('inst1', 'blob1', '/path', 0o644, deadline_seconds=999)
+
+        self.assertEqual(999, self._sent_data()['deadline_seconds'])
+
+    def test_put_blob_async_continue_sends_no_deadline(self):
+        # ASYNC_CONTINUE's derived deadline is -1: the caller is not
+        # waiting, so it has no budget of its own to propagate.
+        client = self._client(True, async_strategy=apiclient.ASYNC_CONTINUE)
+        client.instance_put_blob('inst1', 'blob1', '/path', 0o644)
+
+        self.assertNotIn('deadline_seconds', self._sent_data())
+
+    # -- instance_execute -------------------------------------------------
+
+    def test_execute_sends_deadline_when_capable(self):
+        client = self._client(True)
+        client.instance_execute('inst1', 'true', deadline_seconds=42)
+
+        self.assertEqual(
+            {'command_line': 'true', 'deadline_seconds': 42}, self._sent_data())
+
+    def test_execute_sends_nothing_when_not_capable(self):
+        client = self._client(False)
+        client.instance_execute('inst1', 'true', deadline_seconds=42)
+
+        self.assertEqual({'command_line': 'true'}, self._sent_data())
+
+    def test_execute_derives_deadline_from_async_strategy(self):
+        client = self._client(True, async_strategy=apiclient.ASYNC_BLOCK)
+        client.instance_execute('inst1', 'true')
+
+        self.assertEqual(3600, self._sent_data()['deadline_seconds'])
+
+    def test_execute_has_no_progress_timeout_kwarg(self):
+        # The server refuses a progress timeout on execute (decision 4;
+        # shakenfist/external_api/instance.py) -- instance_execute must
+        # not grow a way to send one, even if a caller asks for it.
+        client = self._client(True)
+        self.assertRaises(
+            TypeError, client.instance_execute, 'inst1', 'true',
+            progress_timeout_seconds=7)
+
+    # -- instance_get -----------------------------------------------------
+
+    def test_get_sends_both_when_capable(self):
+        client = self._client(True)
+        client.instance_get('inst1', '/path',
+                            deadline_seconds=42, progress_timeout_seconds=7)
+
+        self.assertEqual(
+            {'path': '/path', 'deadline_seconds': 42, 'progress_timeout_seconds': 7},
+            self._sent_data())
+
+    def test_get_sends_neither_when_not_capable(self):
+        client = self._client(False)
+        client.instance_get('inst1', '/path',
+                            deadline_seconds=42, progress_timeout_seconds=7)
+
+        self.assertEqual({'path': '/path'}, self._sent_data())
+
+    def test_get_derives_deadline_from_async_strategy(self):
+        client = self._client(True, async_strategy=apiclient.ASYNC_PAUSE)
+        client.instance_get('inst1', '/path')
+
+        sent = self._sent_data()
+        self.assertEqual(60, sent['deadline_seconds'])
+        self.assertNotIn('progress_timeout_seconds', sent)
+
+    def test_get_explicit_deadline_overrides_derived(self):
+        client = self._client(True, async_strategy=apiclient.ASYNC_PAUSE)
+        client.instance_get('inst1', '/path', deadline_seconds=999)
+
+        self.assertEqual(999, self._sent_data()['deadline_seconds'])

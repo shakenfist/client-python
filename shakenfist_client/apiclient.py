@@ -1296,34 +1296,79 @@ class Client:
             time.sleep(1)
             r = self.get_agent_operation(r['uuid'])
 
-    def instance_put_blob(self, instance_ref, blob_uuid, path, mode):
+    def _derive_agentop_deadline(self, deadline_seconds):
+        # An explicit kwarg always wins over the derived value (decision 3
+        # of PLAN-agent-operation-deadlines-phase-06-client.md). This has to
+        # be called by instance_put_blob/instance_execute/instance_get --
+        # the creating helpers -- rather than from inside _await_agentop,
+        # because _await_agentop only starts polling after the POST that
+        # creates the operation has already gone out. A deadline computed
+        # there would be computed too late to travel with the request; it
+        # has to be known before the request body is built.
+        if deadline_seconds is not None:
+            return deadline_seconds
+
+        derived = _calculate_async_deadline(self.async_strategy)
+        # ASYNC_CONTINUE returns -1: the caller isn't waiting, so it has no
+        # budget of its own to propagate and the server's own default
+        # deadline applies instead.
+        return derived if derived > 0 else None
+
+    def instance_put_blob(self, instance_ref, blob_uuid, path, mode,
+                          deadline_seconds=None, progress_timeout_seconds=None):
         if not self.check_capability('instance-put-blob'):
             raise IncapableException(
                 'The API server version you are talking to does not support '
                 'placing a blob on an instance.')
 
+        data = {'blob_uuid': blob_uuid, 'path': path, 'mode': mode}
+        if self.check_capability('agentoperation-deadlines'):
+            deadline_seconds = self._derive_agentop_deadline(deadline_seconds)
+            if deadline_seconds is not None:
+                data['deadline_seconds'] = deadline_seconds
+            if progress_timeout_seconds is not None:
+                data['progress_timeout_seconds'] = progress_timeout_seconds
+
         r = self._request_url('POST', '/instances/' + instance_ref + '/agent/put',
-                              data={'blob_uuid': blob_uuid, 'path': path, 'mode': mode})
+                              data=data)
         return self._await_agentop(r.json())
 
-    def instance_execute(self, instance_ref, command_line):
+    def instance_execute(self, instance_ref, command_line, deadline_seconds=None):
         if not self.check_capability('instance-execute'):
             raise IncapableException(
                 'The API server version you are talking to does not support '
                 'executing a command within an instance.')
 
+        data = {'command_line': command_line}
+        if self.check_capability('agentoperation-deadlines'):
+            # The server refuses a progress timeout on execute (decision 4;
+            # shakenfist/external_api/instance.py), so execute never gains
+            # a progress_timeout_seconds kwarg to send.
+            deadline_seconds = self._derive_agentop_deadline(deadline_seconds)
+            if deadline_seconds is not None:
+                data['deadline_seconds'] = deadline_seconds
+
         r = self._request_url('POST', '/instances/' + instance_ref + '/agent/execute',
-                              data={'command_line': command_line})
+                              data=data)
         return self._await_agentop(r.json())
 
-    def instance_get(self, instance_ref, path):
+    def instance_get(self, instance_ref, path,
+                     deadline_seconds=None, progress_timeout_seconds=None):
         if not self.check_capability('instance-get'):
             raise IncapableException(
                 'The API server version you are talking to does not support '
                 'fetching a file from within an instance.')
 
+        data = {'path': path}
+        if self.check_capability('agentoperation-deadlines'):
+            deadline_seconds = self._derive_agentop_deadline(deadline_seconds)
+            if deadline_seconds is not None:
+                data['deadline_seconds'] = deadline_seconds
+            if progress_timeout_seconds is not None:
+                data['progress_timeout_seconds'] = progress_timeout_seconds
+
         r = self._request_url('POST', '/instances/' + instance_ref + '/agent/get',
-                              data={'path': path})
+                              data=data)
         return self._await_agentop(r.json())
 
     def get_namespaces(self):
@@ -1609,7 +1654,10 @@ class Client:
                             ignore_stderr=False, timeout=120):
         start_time = time.time()
         self.await_agent_ready(instance_uuid, timeout=timeout)
-        op = self.instance_execute(instance_uuid, command)
+        # Decision 3: this call site's own budget is its timeout argument,
+        # not the async-strategy-derived value _derive_agentop_deadline()
+        # would otherwise fall back to.
+        op = self.instance_execute(instance_uuid, command, deadline_seconds=timeout)
 
         # Wait for the operation to be complete
         while time.time() - start_time < timeout:
@@ -1685,7 +1733,10 @@ class Client:
     def await_agent_fetch(self, instance_uuid, path, timeout=120):
         start_time = time.time()
         self.await_agent_ready(instance_uuid, timeout=timeout)
-        op = self.instance_get(instance_uuid, path)
+        # Decision 3: this call site's own budget is its timeout argument,
+        # not the async-strategy-derived value _derive_agentop_deadline()
+        # would otherwise fall back to.
+        op = self.instance_get(instance_uuid, path, deadline_seconds=timeout)
 
         # Wait for the operation to be complete
         while time.time() - start_time < 120:
