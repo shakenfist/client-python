@@ -84,6 +84,33 @@ code look like tidy-up targets and are not:
   `expired`) is the one an operator has to act on, so collapsing them
   into a single status hides it.
 
+## Agent Operation Deadlines
+
+`deadline_seconds` and `progress_timeout_seconds` bound an in-guest
+agent operation on the *server*. Four invariants here read as tidy-up
+targets and are not:
+
+- `TERMINAL_AGENT_OPERATION_STATES` hand-duplicates
+  `AgentOperation.TERMINAL_STATES` in the server repository
+  (`shakenfist/operations/agentoperation.py`). The client cannot import
+  it, so a state added there has to be added here too.
+- Nothing derives a deadline from the async strategy. The strategy says
+  how long this client will block; the deadline says how long the
+  operation may live. Deriving one from the other gave every CLI
+  invocation a 60 second server side kill, because `pause` is the CLI
+  default.
+- The timing values are tested with `is not None`, never truthiness. The
+  server reads `0` as "no such budget at all", which is a different
+  answer from omitting the key, and `--deadline 0` has to reach the wire.
+- `_add_agentop_timing()` is called by the three creating helpers rather
+  than by `_await_agentop()`, because by the time that is polling the
+  POST which created the operation has already gone out.
+
+The capability gate (`agentoperation-deadlines`) fails closed: against a
+server which does not advertise it the client sends nothing. The CLI
+warns only when the user typed a flag, because an omitted flag already
+means "the server default".
+
 ## Code Conventions
 
 - Python >= 3.7 compatibility (conservative for broad client support)

@@ -1158,6 +1158,34 @@ class StatusCodeMappingTestCase(testtools.TestCase):
         self.assertEqual(418, e.status_code)
 
 
+class _FakeClock:
+    """A monotonically advancing stand-in for ``time.time``.
+
+    A fixed ``side_effect`` list breaks with ``StopIteration`` the moment
+    the code under test gains or loses a ``time.time()`` call, which is a
+    failure that says nothing about the behaviour being tested. This lets a
+    test move the clock explicitly, at the points where the thing it is
+    simulating would really have taken time, and read it as often as it
+    likes.
+    """
+
+    def __init__(self, start=1000.0):
+        self.now = start
+
+    def __call__(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now += seconds
+
+    def advancing(self, seconds, result=None):
+        """A side_effect which advances the clock and returns ``result``."""
+        def _side_effect(*args, **kwargs):
+            self.advance(seconds)
+            return result
+        return _side_effect
+
+
 class AgentOperationAwaitTestCase(testtools.TestCase):
     """The three agent operation await loops must fail fast on a terminal
     state rather than spinning out their budget first.
@@ -1224,6 +1252,30 @@ class AgentOperationAwaitTestCase(testtools.TestCase):
         self.assertEqual(op, result)
         get_op.assert_not_called()
 
+    def test_await_agentop_await_seconds_bounds_the_wait(self):
+        # await_seconds is how long *this client* waits, which is not the
+        # same number as the deadline the operation was created with. A
+        # caller that asked to wait ten seconds must not be held for the
+        # hour ASYNC_BLOCK would otherwise allow: it is the caller's budget
+        # that bounds the poll, not this client's general blocking policy.
+        clock = _FakeClock()
+        self.mock_sleep.side_effect = lambda seconds: clock.advance(seconds)
+        client = self._client(async_strategy=apiclient.ASYNC_BLOCK)
+        op = {'uuid': 'op1', 'state': 'queued'}
+        with mock.patch('time.time', clock), \
+                mock.patch.object(
+                    client, 'get_agent_operation',
+                    return_value=dict(op)) as get_op:
+            result = client._await_agentop(dict(op), await_seconds=10)
+
+        # Still in flight, returned rather than raised -- see the comment in
+        # _await_agentop about why the timeout path does not raise here.
+        self.assertEqual(op, result)
+        # One poll per second of the ten we asked for, give or take the
+        # boundary check. Unbounded, this would be ASYNC_BLOCK's 3600.
+        self.assertGreater(get_op.call_count, 1)
+        self.assertLess(get_op.call_count, 15)
+
     # -- await_agent_command -------------------------------------------
 
     def test_await_agent_command_complete_returns_normally(self):
@@ -1276,22 +1328,122 @@ class AgentOperationAwaitTestCase(testtools.TestCase):
 
         get_op.assert_not_called()
 
-    def test_await_agent_command_passes_its_timeout_as_deadline(self):
-        # Decision 3 of PLAN-agent-operation-deadlines-phase-06-client.md:
-        # await_agent_command's own budget (its timeout argument) is what
-        # it hands instance_execute, not the async-strategy-derived value
-        # instance_execute would otherwise fall back to.
+    def test_await_agent_command_passes_its_budget_as_deadline_and_wait(self):
+        # await_agent_command's own budget (its timeout argument) is what it
+        # hands instance_execute, both as the server side deadline and as
+        # the client side wait -- nothing is derived from the async
+        # strategy, and _await_agentop must not poll for longer than the
+        # caller asked to wait.
+        clock = _FakeClock()
         client = self._client()
         op = {'uuid': 'op1', 'state': 'complete',
               'results': {'0': {'return-code': 0, 'stderr': '', 'stdout': 'hi'}}}
-        with mock.patch.object(client, 'await_agent_ready'), \
+        with mock.patch('time.time', clock), \
+                mock.patch.object(client, 'await_agent_ready'), \
                 mock.patch.object(
                     client, 'instance_execute', return_value=dict(op)) as instance_execute, \
                 mock.patch.object(client, 'get_agent_operation'):
             client.await_agent_command('notreallyauuid', 'true', timeout=42)
 
         instance_execute.assert_called_with(
-            'notreallyauuid', 'true', deadline_seconds=42)
+            'notreallyauuid', 'true', deadline_seconds=42, await_seconds=42)
+
+    def test_await_agent_command_deadline_is_the_budget_ready_left_behind(self):
+        # await_agent_ready() shares start_time with the loops below, so the
+        # deadline sent must be what is *left* of the timeout once the agent
+        # became ready. Sending the full 120 here would keep the operation
+        # alive on the server for 120 seconds after this call, which gives
+        # up in 30, had already stopped caring about it.
+        clock = _FakeClock()
+        client = self._client()
+        op = {'uuid': 'op1', 'state': 'complete',
+              'results': {'0': {'return-code': 0, 'stderr': '', 'stdout': 'hi'}}}
+        with mock.patch('time.time', clock), \
+                mock.patch.object(
+                    client, 'await_agent_ready', side_effect=clock.advancing(90)), \
+                mock.patch.object(
+                    client, 'instance_execute', return_value=dict(op)) as instance_execute, \
+                mock.patch.object(client, 'get_agent_operation'):
+            client.await_agent_command('notreallyauuid', 'true', timeout=120)
+
+        instance_execute.assert_called_with(
+            'notreallyauuid', 'true', deadline_seconds=30, await_seconds=30)
+
+    def test_await_agent_command_exhausted_budget_sends_one_not_zero(self):
+        # The server reads a deadline of 0 as "no wall clock deadline at
+        # all", so a budget which has already run out must never be spelt
+        # that way -- doing so would create an unbounded operation at
+        # precisely the moment we have no time left to watch it.
+        clock = _FakeClock()
+        client = self._client()
+        op = {'uuid': 'op1', 'state': 'queued'}
+        with mock.patch('time.time', clock), \
+                mock.patch.object(
+                    client, 'await_agent_ready', side_effect=clock.advancing(500)), \
+                mock.patch.object(
+                    client, 'instance_execute', return_value=dict(op)) as instance_execute, \
+                mock.patch.object(client, 'get_agent_operation'), \
+                mock.patch.object(
+                    client, 'get_instance',
+                    return_value={'uuid': 'notreallyauuid', 'agent_state': 'ready'}), \
+                mock.patch.object(client, 'get_console_data', return_value='console'):
+            self.assertRaises(
+                apiclient.AgentAwaitTimeout,
+                client.await_agent_command, 'notreallyauuid', 'true', timeout=120)
+
+        self.assertEqual(
+            1, instance_execute.call_args.kwargs['deadline_seconds'])
+
+    def test_await_agent_command_terminal_failure_carries_console_data(self):
+        # The console data enrichment has to survive the real call chain,
+        # not just a mocked instance_execute: _await_agentop() raises
+        # AgentOperationFailed as soon as it polls a terminal state, which
+        # is the common case for a command that fails promptly, and the
+        # operator wants the console exactly then. Only _request_url and
+        # get_agent_operation are mocked here, so instance_execute and
+        # _await_agentop both really run.
+        client = self._client()
+        client.root_html = 'instance-execute agentoperation-deadlines'
+        with mock.patch.object(client, '_request_url') as request_url, \
+                mock.patch.object(client, 'await_agent_ready'), \
+                mock.patch.object(client, 'get_agent_operation') as get_op, \
+                mock.patch.object(
+                    client, 'get_instance',
+                    return_value={'uuid': 'notreallyauuid',
+                                  'agent_state': 'ready'}), \
+                mock.patch.object(
+                    client, 'get_console_data', return_value='panic: oops'):
+            request_url.return_value.json.return_value = {
+                'uuid': 'op1', 'state': 'error'}
+            e = self.assertRaises(
+                apiclient.AgentOperationFailed,
+                client.await_agent_command, 'notreallyauuid', 'true')
+
+        get_op.assert_not_called()
+        self.assertEqual('op1', e.op_uuid)
+        self.assertEqual('error', e.op_view['state'])
+        self.assertIn('panic: oops', str(e))
+        self.assertIn('Agent state: ready', str(e))
+
+    def test_await_agent_command_empty_results_raises_command_error(self):
+        # The guard has to precede the subscripts it protects. It used to
+        # sit below `op['results']['0']['return-code']`, which made it
+        # unreachable: an operation which completed with an empty results
+        # dict raised KeyError instead of saying what had gone wrong.
+        clock = _FakeClock()
+        client = self._client()
+        op = {'uuid': 'op1', 'state': 'complete', 'results': {}}
+        with mock.patch('time.time', clock), \
+                mock.patch.object(client, 'await_agent_ready'), \
+                mock.patch.object(client, 'instance_execute', return_value=dict(op)), \
+                mock.patch.object(
+                    client, 'get_agent_operation',
+                    side_effect=clock.advancing(300, dict(op))):
+            e = self.assertRaises(
+                apiclient.AgentCommandError,
+                client.await_agent_command, 'notreallyauuid', 'true')
+
+        self.assertIn('operation returned no results', str(e))
 
     # -- await_agent_fetch --------------------------------------------
 
@@ -1315,7 +1467,11 @@ class AgentOperationAwaitTestCase(testtools.TestCase):
             op = {'uuid': 'op1', 'state': state}
             with mock.patch.object(client, 'await_agent_ready'), \
                     mock.patch.object(client, 'instance_get', return_value=dict(op)), \
-                    mock.patch.object(client, 'get_agent_operation') as get_op:
+                    mock.patch.object(client, 'get_agent_operation') as get_op, \
+                    mock.patch.object(
+                        client, 'get_instance',
+                        return_value={'uuid': 'notreallyauuid', 'agent_state': 'ready'}), \
+                    mock.patch.object(client, 'get_console_data', return_value='console'):
                 e = self.assertRaises(
                     apiclient.AgentOperationFailed,
                     client.await_agent_fetch, 'notreallyauuid', '/tmp/f')
@@ -1326,26 +1482,31 @@ class AgentOperationAwaitTestCase(testtools.TestCase):
             self.assertIn(state, str(e))
 
     def test_await_agent_fetch_never_settling_raises_timeout(self):
-        # await_agent_fetch's operation-wait loop now bounds itself by
-        # `timeout` (the default of 120 seconds here, since none is
-        # passed), so the clock itself is mocked here to prove the
-        # fail-fast path without an actual 120 second wait.
+        # await_agent_fetch's operation-wait loop bounds itself by `timeout`
+        # (the default of 120 seconds here, since none is passed), so the
+        # clock is moved past that budget rather than waited out. Creating
+        # the operation is what burns the time, which is also the only
+        # honest way to spend it while `instance_get` is mocked.
+        clock = _FakeClock()
         client = self._client()
         op = {'uuid': 'op1', 'state': 'queued'}
-        with mock.patch.object(client, 'await_agent_ready'), \
-                mock.patch.object(client, 'instance_get', return_value=dict(op)), \
-                mock.patch.object(client, 'get_agent_operation') as get_op, \
-                mock.patch('time.time', side_effect=[1000.0, 1300.0]):
+        with mock.patch('time.time', clock), \
+                mock.patch.object(client, 'await_agent_ready'), \
+                mock.patch.object(
+                    client, 'instance_get',
+                    side_effect=clock.advancing(300, dict(op))), \
+                mock.patch.object(client, 'get_agent_operation') as get_op:
             self.assertRaises(
                 apiclient.AgentAwaitTimeout,
                 client.await_agent_fetch, 'notreallyauuid', '/tmp/f')
 
         get_op.assert_not_called()
 
-    def test_await_agent_fetch_passes_its_timeout_as_deadline(self):
-        # Decision 3: await_agent_fetch's own budget (its timeout argument)
-        # is what it hands instance_get, not the async-strategy-derived
-        # value instance_get would otherwise fall back to.
+    def test_await_agent_fetch_passes_its_budget_as_deadline_and_wait(self):
+        # await_agent_fetch's own budget (its timeout argument) is what it
+        # hands instance_get, as both the server side deadline and the
+        # client side wait.
+        clock = _FakeClock()
         client = self._client()
         op = {'uuid': 'op1', 'state': 'complete',
               'results': {'0': {'content_blob': 'blob1'}}}
@@ -1354,11 +1515,12 @@ class AgentOperationAwaitTestCase(testtools.TestCase):
                     client, 'instance_get', return_value=dict(op)) as instance_get, \
                 mock.patch.object(client, 'get_agent_operation'), \
                 mock.patch.object(client, 'get_blob', return_value={'state': 'created'}), \
-                mock.patch.object(client, 'get_blob_data', return_value=[b'hello']):
+                mock.patch.object(client, 'get_blob_data', return_value=[b'hello']), \
+                mock.patch('time.time', clock):
             client.await_agent_fetch('notreallyauuid', '/tmp/f', timeout=42)
 
         instance_get.assert_called_with(
-            'notreallyauuid', '/tmp/f', deadline_seconds=42)
+            'notreallyauuid', '/tmp/f', deadline_seconds=42, await_seconds=42)
 
     def test_await_agent_fetch_slow_operation_still_reaches_results(self):
         # Decision 6 / survey finding 5: all three loops in this method
@@ -1372,28 +1534,36 @@ class AgentOperationAwaitTestCase(testtools.TestCase):
         # 'complete' 90 seconds in (comfortably inside the 120 second
         # default) with its results still empty, and only fills them in
         # on a later poll. Against the pre-fix code this raises
-        # AgentCommandError('operation returned no results') because the
+        # AgentCommandError('operation returned no results'), because the
         # second loop's hardcoded `< 60` bound is already false by the
-        # time it is reached; against the fix it keeps polling and
-        # returns the fetched data.
+        # time it is reached; against the fix it keeps polling and returns
+        # the fetched data. The clock advances where the simulated work
+        # happens rather than once per read, so an added or removed
+        # time.time() call cannot turn this into a StopIteration.
+        clock = _FakeClock()
         client = self._client()
         op_executing = {'uuid': 'op1', 'state': 'executing', 'results': {}}
         op_complete_no_results = {'uuid': 'op1', 'state': 'complete', 'results': {}}
         op_complete_with_results = {
             'uuid': 'op1', 'state': 'complete',
             'results': {'0': {'content_blob': 'blob1'}}}
-        with mock.patch.object(client, 'await_agent_ready'), \
+
+        polls = [dict(op_complete_no_results), dict(op_complete_with_results)]
+
+        def poll(_op_uuid):
+            if len(polls) == 2:
+                # The operation itself takes 90 seconds to settle.
+                clock.advance(90)
+            return polls.pop(0)
+
+        with mock.patch('time.time', clock), \
+                mock.patch.object(client, 'await_agent_ready'), \
                 mock.patch.object(
                     client, 'instance_get', return_value=dict(op_executing)), \
                 mock.patch.object(
-                    client, 'get_agent_operation',
-                    side_effect=[dict(op_complete_no_results),
-                                 dict(op_complete_with_results)]) as get_op, \
+                    client, 'get_agent_operation', side_effect=poll) as get_op, \
                 mock.patch.object(client, 'get_blob', return_value={'state': 'created'}), \
-                mock.patch.object(client, 'get_blob_data', return_value=[b'hello']), \
-                mock.patch(
-                    'time.time',
-                    side_effect=[1000.0, 1005.0, 1090.0, 1095.0, 1100.0, 1105.0]):
+                mock.patch.object(client, 'get_blob_data', return_value=[b'hello']):
             data = client.await_agent_fetch('notreallyauuid', '/tmp/f')
 
         self.assertEqual('hello', data)
@@ -1457,27 +1627,37 @@ class AgentOperationDeadlineTestCase(testtools.TestCase):
             {'blob_uuid': 'blob1', 'path': '/path', 'mode': 0o644},
             self._sent_data())
 
-    def test_put_blob_derives_deadline_from_async_strategy(self):
+    def test_put_blob_omitted_deadline_sends_nothing(self):
+        # Nothing is derived from the async strategy. That strategy says how
+        # long this client will block; the deadline says how long the
+        # operation may live on the server. Deriving one from the other gave
+        # every CLI upload a 60 second server side kill under the default
+        # ASYNC_PAUSE, in place of the server's own, far longer, default.
         client = self._client(True, async_strategy=apiclient.ASYNC_PAUSE)
         client.instance_put_blob('inst1', 'blob1', '/path', 0o644)
 
-        sent = self._sent_data()
-        self.assertEqual(60, sent['deadline_seconds'])
-        self.assertNotIn('progress_timeout_seconds', sent)
+        self.assertEqual(
+            {'blob_uuid': 'blob1', 'path': '/path', 'mode': 0o644},
+            self._sent_data())
 
-    def test_put_blob_explicit_deadline_overrides_derived(self):
-        client = self._client(True, async_strategy=apiclient.ASYNC_PAUSE)
-        client.instance_put_blob('inst1', 'blob1', '/path', 0o644, deadline_seconds=999)
-
-        self.assertEqual(999, self._sent_data()['deadline_seconds'])
-
-    def test_put_blob_async_continue_sends_no_deadline(self):
-        # ASYNC_CONTINUE's derived deadline is -1: the caller is not
-        # waiting, so it has no budget of its own to propagate.
-        client = self._client(True, async_strategy=apiclient.ASYNC_CONTINUE)
+    def test_put_blob_async_block_omitted_deadline_sends_nothing(self):
+        client = self._client(True, async_strategy=apiclient.ASYNC_BLOCK)
         client.instance_put_blob('inst1', 'blob1', '/path', 0o644)
 
         self.assertNotIn('deadline_seconds', self._sent_data())
+
+    def test_put_blob_sends_zero_deadline(self):
+        # Zero means "no wall clock deadline at all" to the server, which is
+        # not the same as omitting the key. The propagation must test
+        # `is not None`, never truthiness, or --deadline 0 silently becomes
+        # the server default.
+        client = self._client(True)
+        client.instance_put_blob('inst1', 'blob1', '/path', 0o644,
+                                 deadline_seconds=0, progress_timeout_seconds=0)
+
+        sent = self._sent_data()
+        self.assertEqual(0, sent['deadline_seconds'])
+        self.assertEqual(0, sent['progress_timeout_seconds'])
 
     # -- instance_execute -------------------------------------------------
 
@@ -1494,11 +1674,17 @@ class AgentOperationDeadlineTestCase(testtools.TestCase):
 
         self.assertEqual({'command_line': 'true'}, self._sent_data())
 
-    def test_execute_derives_deadline_from_async_strategy(self):
+    def test_execute_omitted_deadline_sends_nothing(self):
         client = self._client(True, async_strategy=apiclient.ASYNC_BLOCK)
         client.instance_execute('inst1', 'true')
 
-        self.assertEqual(3600, self._sent_data()['deadline_seconds'])
+        self.assertEqual({'command_line': 'true'}, self._sent_data())
+
+    def test_execute_sends_zero_deadline(self):
+        client = self._client(True)
+        client.instance_execute('inst1', 'true', deadline_seconds=0)
+
+        self.assertEqual(0, self._sent_data()['deadline_seconds'])
 
     def test_execute_has_no_progress_timeout_kwarg(self):
         # The server refuses a progress timeout on execute (decision 4;
@@ -1527,16 +1713,16 @@ class AgentOperationDeadlineTestCase(testtools.TestCase):
 
         self.assertEqual({'path': '/path'}, self._sent_data())
 
-    def test_get_derives_deadline_from_async_strategy(self):
+    def test_get_omitted_deadline_sends_nothing(self):
         client = self._client(True, async_strategy=apiclient.ASYNC_PAUSE)
         client.instance_get('inst1', '/path')
 
+        self.assertEqual({'path': '/path'}, self._sent_data())
+
+    def test_get_sends_zero_progress_timeout(self):
+        client = self._client(True)
+        client.instance_get('inst1', '/path', progress_timeout_seconds=0)
+
         sent = self._sent_data()
-        self.assertEqual(60, sent['deadline_seconds'])
-        self.assertNotIn('progress_timeout_seconds', sent)
-
-    def test_get_explicit_deadline_overrides_derived(self):
-        client = self._client(True, async_strategy=apiclient.ASYNC_PAUSE)
-        client.instance_get('inst1', '/path', deadline_seconds=999)
-
-        self.assertEqual(999, self._sent_data()['deadline_seconds'])
+        self.assertEqual(0, sent['progress_timeout_seconds'])
+        self.assertNotIn('deadline_seconds', sent)

@@ -406,8 +406,9 @@ class VdiConsoleFileCommandTestCase(testtools.TestCase):
 class ExecuteDeadlineOptionTestCase(testtools.TestCase):
     """Tests for ``--deadline`` on ``sf-client instance execute``."""
 
-    def _invoke(self, extra_args):
+    def _invoke(self, extra_args, capable=True):
         client = mock.Mock()
+        client.check_capability.return_value = capable
         client.instance_execute.return_value = {'results': {'0': {
             'return-code': 0, 'stdout': '', 'stderr': ''}}}
         runner = CliRunner()
@@ -429,6 +430,28 @@ class ExecuteDeadlineOptionTestCase(testtools.TestCase):
         self.assertEqual(0, result.exit_code, result.output)
         client.instance_execute.assert_called_once_with(
             'inst-ref', 'true', deadline_seconds=30)
+
+    def test_zero_deadline_is_passed_not_dropped(self):
+        # 0 means "no wall clock deadline at all" to the server, so it must
+        # survive the client's `is not None` tests all the way to the wire.
+        result, client = self._invoke(['--deadline', '0'])
+        self.assertEqual(0, result.exit_code, result.output)
+        client.instance_execute.assert_called_once_with(
+            'inst-ref', 'true', deadline_seconds=0)
+
+    def test_explicit_deadline_warns_when_server_is_incapable(self):
+        # An omitted flag means "whatever the server does by default", which
+        # is exactly what an old server gives, so silence is right there. A
+        # value the user typed is a request, and dropping it silently hands
+        # them a budget they did not ask for with no clue why.
+        result, _ = self._invoke(['--deadline', '30'], capable=False)
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn('does not support --deadline', result.output)
+
+    def test_omitted_deadline_does_not_warn_when_server_is_incapable(self):
+        result, _ = self._invoke([], capable=False)
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertNotIn('does not support', result.output)
 
     def test_no_progress_timeout_option(self):
         result = CliRunner().invoke(
@@ -508,3 +531,29 @@ class DownloadDeadlineOptionsTestCase(testtools.TestCase):
         client.instance_get.assert_called_once_with(
             'inst-ref', '/source', deadline_seconds=30,
             progress_timeout_seconds=10)
+
+    def test_zero_options_are_passed_not_dropped(self):
+        result, client = self._invoke(
+            ['--deadline', '0', '--progress-timeout', '0'])
+        self.assertEqual(0, result.exit_code, result.output)
+        client.instance_get.assert_called_once_with(
+            'inst-ref', '/source', deadline_seconds=0,
+            progress_timeout_seconds=0)
+
+    def test_explicit_options_warn_when_server_is_incapable(self):
+        client = mock.Mock()
+        client.check_capability.return_value = False
+        client.instance_get.return_value = {
+            'results': {'0': {'content_blob': 'blob-uuid'}}}
+        client.get_blob_data.return_value = [b'data']
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = CliRunner().invoke(
+                instance_cmd.instance,
+                ['download', 'inst-ref', '/source',
+                 os.path.join(tmpdir, 'dest'),
+                 '--deadline', '30', '--progress-timeout', '10'],
+                obj={'CLIENT': client, 'OUTPUT': 'pretty'},
+                catch_exceptions=False)
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn('--deadline, --progress-timeout', result.output)

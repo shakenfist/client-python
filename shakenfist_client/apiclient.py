@@ -1273,8 +1273,23 @@ class Client:
         r = self._request_url('GET', '/instances/' + instance_ref + '/screenshot')
         return self.get_blob_data(r.json())
 
-    def _await_agentop(self, r):
-        deadline = time.time() + _calculate_async_deadline(self.async_strategy)
+    def _await_agentop(self, r, await_seconds=None):
+        """Poll an agent operation until it settles, or until we stop waiting.
+
+        ``await_seconds`` is how long *this client* will wait, which is a
+        different number from the ``deadline_seconds`` the operation was
+        created with -- that one bounds the operation's life on the server.
+        A caller which has a budget of its own (``await_agent_command``,
+        ``await_agent_fetch``) passes it here so the wait it asked for is
+        the wait it gets; every other caller waits for as long as the async
+        strategy says, which is this client's general policy for how long a
+        call may block.
+        """
+        if await_seconds is not None:
+            deadline = time.time() + await_seconds
+        else:
+            deadline = time.time() + _calculate_async_deadline(self.async_strategy)
+
         while True:
             if r['state'] in TERMINAL_AGENT_OPERATION_STATES:
                 if r['state'] != 'complete':
@@ -1285,91 +1300,124 @@ class Client:
 
             LOG.debug('Waiting for agent operation to be complete')
             if time.time() > deadline:
-                # This is not AgentAwaitTimeout: with ASYNC_CONTINUE the
-                # deadline is already in the past when the loop starts, so
-                # returning the still-in-flight operation here is the
-                # intended fire-and-forget behaviour for a caller that is
-                # not actually waiting, not a failure.
+                # Returning the still in flight operation instead of raising
+                # is deliberate, and it covers two cases which are not the
+                # same. With ASYNC_CONTINUE the deadline is already in the
+                # past when the loop starts, so this is the fire and forget
+                # path for a caller which never meant to wait. Under
+                # ASYNC_PAUSE or ASYNC_BLOCK the caller *was* waiting and
+                # still gets an in flight operation back with no exception:
+                # that is long standing behaviour the CLI depends on, since
+                # it prints whatever results have arrived and lets the user
+                # poll later. A caller which needs a hard failure passes
+                # await_seconds and inspects the state itself.
                 LOG.debug('Deadline exceeded waiting for agent operation to complete')
                 return r
 
             time.sleep(1)
             r = self.get_agent_operation(r['uuid'])
 
-    def _derive_agentop_deadline(self, deadline_seconds):
-        # An explicit kwarg always wins over the derived value (decision 3
-        # of PLAN-agent-operation-deadlines-phase-06-client.md). This has to
-        # be called by instance_put_blob/instance_execute/instance_get --
-        # the creating helpers -- rather than from inside _await_agentop,
-        # because _await_agentop only starts polling after the POST that
-        # creates the operation has already gone out. A deadline computed
-        # there would be computed too late to travel with the request; it
-        # has to be known before the request body is built.
-        if deadline_seconds is not None:
-            return deadline_seconds
+    def _add_agentop_timing(self, data, deadline_seconds, progress_timeout_seconds):
+        """Add the timing parameters the caller actually asked for to a request body.
 
-        derived = _calculate_async_deadline(self.async_strategy)
-        # ASYNC_CONTINUE returns -1: the caller isn't waiting, so it has no
-        # budget of its own to propagate and the server's own default
-        # deadline applies instead.
-        return derived if derived > 0 else None
+        Only values the caller passed are sent, and an omitted value means
+        the server's own default applies. Nothing is derived here, because
+        the async strategy is a statement about how long this client will
+        block and the deadline is a statement about how long the operation
+        may live -- deriving one from the other would give every CLI
+        invocation a 60 second server side kill (ASYNC_PAUSE is the CLI
+        default) in place of the server's far more generous default, and an
+        upload into a guest would start dying at a minute.
+
+        The keys are built here, in the creating helpers, rather than in
+        ``_await_agentop``, because by the time that is polling the POST
+        which created the operation has already gone out.
+
+        Zero is a real value and is passed through: the server reads it as
+        "no such budget at all", so the ``is not None`` tests below must not
+        be tidied into truthiness tests.
+        """
+        if not self.check_capability('agentoperation-deadlines'):
+            # Decision 7: against a server which cannot accept these, the
+            # client behaves exactly as it did before they existed.
+            return
+
+        if deadline_seconds is not None:
+            data['deadline_seconds'] = deadline_seconds
+        if progress_timeout_seconds is not None:
+            data['progress_timeout_seconds'] = progress_timeout_seconds
+
+    @staticmethod
+    def _remaining_agentop_budget(start_time, timeout):
+        # Never zero: the server reads a deadline of 0 as "no wall clock
+        # deadline at all", so an exhausted budget must not be spelt that
+        # way. One second says "give up almost immediately", which is what
+        # an exhausted budget means.
+        return max(1, round(timeout - (time.time() - start_time)))
+
+    def _enriched_agent_failure(self, verb, op, instance_uuid):
+        """Build an AgentOperationFailed carrying what an operator will want.
+
+        A failed agent operation is exactly when someone wants the console,
+        so gather it here. ``_await_agentop`` cannot: it knows the operation
+        but not the instance it ran against, and it raises before its caller
+        has a chance to add anything.
+        """
+        i = self.get_instance(instance_uuid)
+        cd = self.get_console_data(instance_uuid)
+        return AgentOperationFailed(
+            f'Agent {verb} operation {op["uuid"]} on instance {i["uuid"]} '
+            f'entered terminal state "{op["state"]}"\n'
+            f'    Agent state: {i["agent_state"]}\n\n'
+            f'    Console data: {cd}',
+            op['uuid'], op)
 
     def instance_put_blob(self, instance_ref, blob_uuid, path, mode,
-                          deadline_seconds=None, progress_timeout_seconds=None):
+                          deadline_seconds=None, progress_timeout_seconds=None,
+                          await_seconds=None):
         if not self.check_capability('instance-put-blob'):
             raise IncapableException(
                 'The API server version you are talking to does not support '
                 'placing a blob on an instance.')
 
         data = {'blob_uuid': blob_uuid, 'path': path, 'mode': mode}
-        if self.check_capability('agentoperation-deadlines'):
-            deadline_seconds = self._derive_agentop_deadline(deadline_seconds)
-            if deadline_seconds is not None:
-                data['deadline_seconds'] = deadline_seconds
-            if progress_timeout_seconds is not None:
-                data['progress_timeout_seconds'] = progress_timeout_seconds
+        self._add_agentop_timing(data, deadline_seconds, progress_timeout_seconds)
 
         r = self._request_url('POST', '/instances/' + instance_ref + '/agent/put',
                               data=data)
-        return self._await_agentop(r.json())
+        return self._await_agentop(r.json(), await_seconds=await_seconds)
 
-    def instance_execute(self, instance_ref, command_line, deadline_seconds=None):
+    def instance_execute(self, instance_ref, command_line, deadline_seconds=None,
+                         await_seconds=None):
         if not self.check_capability('instance-execute'):
             raise IncapableException(
                 'The API server version you are talking to does not support '
                 'executing a command within an instance.')
 
         data = {'command_line': command_line}
-        if self.check_capability('agentoperation-deadlines'):
-            # The server refuses a progress timeout on execute (decision 4;
-            # shakenfist/external_api/instance.py), so execute never gains
-            # a progress_timeout_seconds kwarg to send.
-            deadline_seconds = self._derive_agentop_deadline(deadline_seconds)
-            if deadline_seconds is not None:
-                data['deadline_seconds'] = deadline_seconds
+        # The server refuses a progress timeout on execute (decision 4;
+        # shakenfist/external_api/instance.py), so execute never gains a
+        # progress_timeout_seconds kwarg and always passes None here.
+        self._add_agentop_timing(data, deadline_seconds, None)
 
         r = self._request_url('POST', '/instances/' + instance_ref + '/agent/execute',
                               data=data)
-        return self._await_agentop(r.json())
+        return self._await_agentop(r.json(), await_seconds=await_seconds)
 
     def instance_get(self, instance_ref, path,
-                     deadline_seconds=None, progress_timeout_seconds=None):
+                     deadline_seconds=None, progress_timeout_seconds=None,
+                     await_seconds=None):
         if not self.check_capability('instance-get'):
             raise IncapableException(
                 'The API server version you are talking to does not support '
                 'fetching a file from within an instance.')
 
         data = {'path': path}
-        if self.check_capability('agentoperation-deadlines'):
-            deadline_seconds = self._derive_agentop_deadline(deadline_seconds)
-            if deadline_seconds is not None:
-                data['deadline_seconds'] = deadline_seconds
-            if progress_timeout_seconds is not None:
-                data['progress_timeout_seconds'] = progress_timeout_seconds
+        self._add_agentop_timing(data, deadline_seconds, progress_timeout_seconds)
 
         r = self._request_url('POST', '/instances/' + instance_ref + '/agent/get',
                               data=data)
-        return self._await_agentop(r.json())
+        return self._await_agentop(r.json(), await_seconds=await_seconds)
 
     def get_namespaces(self):
         r = self._request_url('GET', '/auth/namespaces')
@@ -1654,10 +1702,30 @@ class Client:
                             ignore_stderr=False, timeout=120):
         start_time = time.time()
         self.await_agent_ready(instance_uuid, timeout=timeout)
-        # Decision 3: this call site's own budget is its timeout argument,
-        # not the async-strategy-derived value _derive_agentop_deadline()
-        # would otherwise fall back to.
-        op = self.instance_execute(instance_uuid, command, deadline_seconds=timeout)
+
+        # Both budgets are what is *left* of the timeout once the agent
+        # became ready, not the whole of it: await_agent_ready() shares
+        # start_time with the loops below, so an instance which spent 90 of
+        # a 120 second budget becoming ready leaves 30 seconds here. Sending
+        # the full timeout would keep the operation alive on the server long
+        # after this call gave up on it, and the loops below would be
+        # entered already expired. The floor of one second matters because
+        # the server reads a deadline of 0 as "no wall clock deadline at
+        # all", which is the opposite of what an exhausted budget means.
+        remaining = self._remaining_agentop_budget(start_time, timeout)
+        try:
+            op = self.instance_execute(
+                instance_uuid, command, deadline_seconds=remaining,
+                await_seconds=remaining)
+        except AgentOperationFailed as e:
+            # _await_agentop() raises as soon as it polls a terminal failure
+            # state, which is the common case for a command which fails
+            # promptly. Catch it here so the console data below is actually
+            # reachable rather than only being gathered in the narrow window
+            # where the state turned terminal after we stopped polling.
+            raise self._enriched_agent_failure(
+                'execute', e.op_view or {'uuid': e.op_uuid, 'state': 'unknown'},
+                instance_uuid) from e
 
         # Wait for the operation to be complete
         while time.time() - start_time < timeout:
@@ -1667,15 +1735,11 @@ class Client:
             op = self.get_agent_operation(op['uuid'])
 
         if op['state'] != 'complete':
+            if op['state'] in TERMINAL_AGENT_OPERATION_STATES:
+                raise self._enriched_agent_failure('execute', op, instance_uuid)
+
             i = self.get_instance(instance_uuid)
             cd = self.get_console_data(instance_uuid)
-            if op['state'] in TERMINAL_AGENT_OPERATION_STATES:
-                raise AgentOperationFailed(
-                    f'Agent execute operation {op["uuid"]} on instance {i["uuid"]} '
-                    f'entered terminal state "{op["state"]}"\n'
-                    f'    Agent state: {i["agent_state"]}\n\n'
-                    f'    Console data: {cd}',
-                    op['uuid'], op)
             raise AgentAwaitTimeout(
                 f'Agent execute operation {op["uuid"]} on instance {i["uuid"]} '
                 'did not complete within specified timeout\n'
@@ -1691,10 +1755,13 @@ class Client:
             time.sleep(5)
             op = self.get_agent_operation(op['uuid'])
 
-        exit_code = op['results']['0']['return-code']
-        stderr = op['results']['0']['stderr']
+        # This guard has to precede the subscripts it protects, or an empty
+        # results dict raises KeyError instead of saying what went wrong.
         if not op['results']:
             raise AgentCommandError('operation returned no results')
+
+        exit_code = op['results']['0']['return-code']
+        stderr = op['results']['0']['stderr']
 
         if not ignore_stderr and stderr:
             raise AgentCommandError(f'stderr was "{stderr}", not empty')
@@ -1733,10 +1800,19 @@ class Client:
     def await_agent_fetch(self, instance_uuid, path, timeout=120):
         start_time = time.time()
         self.await_agent_ready(instance_uuid, timeout=timeout)
-        # Decision 3: this call site's own budget is its timeout argument,
-        # not the async-strategy-derived value _derive_agentop_deadline()
-        # would otherwise fall back to.
-        op = self.instance_get(instance_uuid, path, deadline_seconds=timeout)
+
+        # See await_agent_command() above for why this is the remaining
+        # budget rather than the whole timeout, and why it has a floor of
+        # one second.
+        remaining = self._remaining_agentop_budget(start_time, timeout)
+        try:
+            op = self.instance_get(
+                instance_uuid, path, deadline_seconds=remaining,
+                await_seconds=remaining)
+        except AgentOperationFailed as e:
+            raise self._enriched_agent_failure(
+                'fetch', e.op_view or {'uuid': e.op_uuid, 'state': 'unknown'},
+                instance_uuid) from e
 
         # Wait for the operation to be complete
         while time.time() - start_time < timeout:
@@ -1747,11 +1823,9 @@ class Client:
 
         if op['state'] != 'complete':
             if op['state'] in TERMINAL_AGENT_OPERATION_STATES:
-                raise AgentOperationFailed(
-                    f'Agent execute operation {op["uuid"]} entered terminal state '
-                    f'"{op["state"]}"', op['uuid'], op)
+                raise self._enriched_agent_failure('fetch', op, instance_uuid)
             raise AgentAwaitTimeout(
-                f'Agent execute operation {op["uuid"]} did not complete in '
+                f'Agent fetch operation {op["uuid"]} did not complete in '
                 f'{timeout} seconds with state {op["state"]}')
 
         # Wait for the operation to have results

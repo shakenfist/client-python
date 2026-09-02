@@ -25,6 +25,27 @@ def _get_instances(ctx, args, incomplete):
     return [arg for arg in choices if arg.startswith(incomplete)]
 
 
+def _warn_if_timing_unsupported(ctx, **timings):
+    """Warn when the user asked for a budget this server cannot accept.
+
+    The client is deliberately silent when it has nothing to send (decision
+    7 of PLAN-agent-operation-deadlines-phase-06-client.md), because an
+    omitted flag means "whatever the server does by default" and that is
+    exactly what an old server gives. A value the user typed is a different
+    thing: dropping it silently hands them an operation with the server's
+    default budget rather than the one they asked for, and no clue why.
+    """
+    asked = sorted(name for name, value in timings.items() if value is not None)
+    if not asked:
+        return
+    if ctx.obj['CLIENT'].check_capability('agentoperation-deadlines'):
+        return
+
+    print('Warning: the API server version you are talking to does not support '
+          '%s; the server default applies instead.' % ', '.join(asked),
+          file=sys.stderr)
+
+
 def _get_interfaces(ctx, instance):
     if instance.get('interfaces'):
         return instance['interfaces']
@@ -802,7 +823,9 @@ def instance_snapshot(ctx, instance_ref=None, all=False, device=None, label_name
 @click.option('--deadline', type=click.INT, default=None,
               help='The wall clock budget in seconds for the in-guest agent operation '
               'which places the file, once the upload of the artifact to the cluster is '
-              'complete. 0 disables this budget. Omit to use the server default.')
+              'complete. This bounds the operation on the server; it is not how long '
+              'this command waits. 0 disables this budget. Omit to use the server '
+              'default.')
 @click.option('--progress-timeout', type=click.INT, default=None,
               help='The number of seconds of no progress on the in-guest agent operation '
               'before it is considered stalled. 0 disables this budget. Omit to use the '
@@ -827,6 +850,9 @@ def instance_upload(ctx, instance_ref=None, source=None, destination=None,
             'upload-to-%s' % instance_ref, blob['uuid'], source_url=None)
     print('Created artifact %s' % artifact['uuid'])
 
+    _warn_if_timing_unsupported(
+        ctx, **{'--deadline': deadline, '--progress-timeout': progress_timeout})
+
     st = os.stat(source)
     ctx.obj['CLIENT'].instance_put_blob(
             instance_ref, artifact['blob_uuid'], destination, st.st_mode,
@@ -838,10 +864,12 @@ def instance_upload(ctx, instance_ref=None, source=None, destination=None,
 @click.argument('commandline', type=click.STRING)
 @click.option('--deadline', type=click.INT, default=None,
               help='The wall clock budget in seconds for the in-guest agent operation '
-              'which executes the command. 0 disables this budget. Omit to use the '
-              'server default.')
+              'which executes the command. This bounds the operation on the server; it is '
+              'not how long this command waits. 0 disables this budget. Omit to use '
+              'the server default.')
 @click.pass_context
 def instance_execute(ctx, instance_ref=None, commandline=None, deadline=None):
+    _warn_if_timing_unsupported(ctx, **{'--deadline': deadline})
     op = ctx.obj['CLIENT'].instance_execute(instance_ref, commandline, deadline_seconds=deadline)
 
     if ctx.obj['OUTPUT'] == 'json':
@@ -876,8 +904,9 @@ def instance_execute(ctx, instance_ref=None, commandline=None, deadline=None):
 @click.argument('destination', type=click.Path())
 @click.option('--deadline', type=click.INT, default=None,
               help='The wall clock budget in seconds for the in-guest agent operation '
-              'which fetches the file. 0 disables this budget. Omit to use the server '
-              'default.')
+              'which fetches the file. This bounds the operation on the server; it is not '
+              'how long this command waits. 0 disables this budget. Omit to use the '
+              'server default.')
 @click.option('--progress-timeout', type=click.INT, default=None,
               help='The number of seconds of no progress on the in-guest agent operation '
               'before it is considered stalled. 0 disables this budget. Omit to use the '
@@ -885,6 +914,8 @@ def instance_execute(ctx, instance_ref=None, commandline=None, deadline=None):
 @click.pass_context
 def instance_download(ctx, instance_ref=None, source=None, destination=None,
                       deadline=None, progress_timeout=None):
+    _warn_if_timing_unsupported(
+        ctx, **{'--deadline': deadline, '--progress-timeout': progress_timeout})
     op = ctx.obj['CLIENT'].instance_get(
         instance_ref, source, deadline_seconds=deadline, progress_timeout_seconds=progress_timeout)
     if '0' not in op.get('results', {}):

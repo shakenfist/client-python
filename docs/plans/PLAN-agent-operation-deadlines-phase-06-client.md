@@ -279,6 +279,64 @@ them:
   `client-python`, referenced as plain text for the reason finding 10
   gives.
 
+## Corrections applied in review
+
+The automated review of the phase 6 pull request
+(client-python#380) found that decision 3 was wrong, and that
+correcting it made several smaller things wrong too. All of the
+following are applied on the branch:
+
+- **Decision 3 is reversed for the derived case.** Deriving a
+  deadline from the async strategy conflated "how long this client
+  will wait" with "how long the operation may live". Those are not
+  the same number, and the CLI defaults to `pause`, so *every*
+  `sf-client instance execute`, `upload` and `download` acquired a 60
+  second server side hard deadline where previously the server's own
+  default (`AGENT_OPERATION_DEFAULT_DEADLINE`, 600 seconds) applied.
+  An upload into a guest would have started dying at a minute.
+  Nothing is derived now: a value is sent only when a caller passed
+  one, and omitting it means the server default, which is what the
+  CLI help text already claimed. `_derive_agentop_deadline()` is
+  gone; `_add_agentop_timing()` replaces it.
+- **`await_agent_command` and `await_agent_fetch` send the budget
+  that is left.** Both take `start_time` *before*
+  `await_agent_ready()` and share it with every loop below, so
+  sending the full `timeout` as the deadline kept the operation alive
+  on the server long after the client stopped watching it. They now
+  send `max(1, round(timeout - elapsed))`. The floor of one second
+  exists because the server reads a deadline of `0` as "no wall clock
+  deadline at all", which is the opposite of an exhausted budget.
+- **`_await_agentop` gains `await_seconds`.** Without it,
+  `await_agent_command(timeout=120)` could still block for the hour
+  `ASYNC_BLOCK` allows inside `instance_execute`, before reaching its
+  own already-expired loop. The three budgets stay three numbers --
+  this is the third, and it is the one the caller controls.
+- **The console data enrichment is reachable.** `_await_agentop`
+  raises `AgentOperationFailed` as soon as it polls a terminal
+  failure state, which is the common case, so the enriched raise in
+  `await_agent_command` only ever fired in the narrow window where
+  the state turned terminal after the poll gave up. Both helpers now
+  catch and re-raise through `_enriched_agent_failure()`, and a test
+  exercises the real `instance_execute` chain rather than mocking it.
+- **Decision 7 gains a warning for the explicit case.** Silence is
+  right when nothing was asked for, since an omitted flag and an old
+  server produce the same behaviour. A typed `--deadline` is a
+  request, so the CLI now says on stderr that the server cannot
+  accept it. The library stays silent, because `await_agent_command`
+  passes a deadline on every call and must keep working against an
+  old server.
+- **The dead `if not op['results']` guard in `await_agent_command`
+  moved above the subscripts it protects.** It was unreachable, so an
+  empty results dict raised `KeyError`. Same class of bug as decision
+  6 and three lines from code this phase already touched.
+- **The clock-mocking tests use an advancing fake clock.** A fixed
+  `side_effect` list breaks with `StopIteration` on any added
+  `time.time()` call, and the slow-fetch test's claim about the
+  pre-fix behaviour was untrue as written for that reason.
+
+Every one of these is covered by a mutation: breaking the property on
+purpose fails a test with a message that names it.
+
 ## Risks and mitigations
 
 - **The capability token lands after the client change.** If 6c

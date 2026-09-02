@@ -87,6 +87,30 @@ The CLI never merges `state` (object existence) and `coverage_state`
 (whether the claim covers placements) into one column. See
 `docs/namespace-claims.md`.
 
+### Agent Operation Deadlines (2026-09)
+
+The client half of shakenfist's `PLAN-agent-operation-deadlines.md`:
+`deadline_seconds` and `progress_timeout_seconds` on the three
+agent-operation creating helpers, `--deadline` and `--progress-timeout`
+on `instance execute`/`upload`/`download`, and await loops that fail
+fast with `AgentOperationFailed` on a terminal state instead of polling
+to their timeout (#363).
+
+Three budgets exist and are deliberately kept apart. The async strategy
+says how long this client blocks; `deadline_seconds` says how long the
+operation may live on the server; `await_seconds` bounds one call's
+poll. Nothing is derived from anything else -- an earlier revision
+derived the deadline from the async strategy, which gave every CLI
+invocation a 60 second server side kill in place of the server's own
+default.
+
+`0` and "omitted" are different answers -- the server reads `0` as "no
+such budget at all" -- so the propagation tests `is not None` and
+`await_agent_command`/`await_agent_fetch` floor their remaining budget
+at one second rather than sending the `0` an exhausted budget would
+otherwise produce. `TERMINAL_AGENT_OPERATION_STATES` hand-duplicates the
+server's `AgentOperation.TERMINAL_STATES`. See `AGENTS.md`.
+
 ### Seamless Kerbside VDI Console Launch (2026-07)
 
 Added `instance vdiconsole` / `instance vdiconsolefile` support for
