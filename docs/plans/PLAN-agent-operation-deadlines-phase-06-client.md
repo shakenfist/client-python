@@ -337,6 +337,66 @@ following are applied on the branch:
 Every one of these is covered by a mutation: breaking the property on
 purpose fails a test with a message that names it.
 
+## Corrections applied in the second review round
+
+The second automated review of client-python#380 read the corrected
+tree. Everything it found follows from the first round's corrections
+rather than contradicting them:
+
+- **`AgentOperationFailed` reaches the CLI's exception handler.** The
+  three agent verbs call the creating helpers directly, and those now
+  raise on a terminal failure instead of returning an in flight
+  operation. `GroupCatchExceptions` did not know the class, so the
+  user got a traceback -- and once the server side deadlines deploy,
+  `expired` makes that the *common* outcome rather than an edge case.
+- **`_enriched_agent_failure()` never eats the failure it decorates.**
+  `get_instance()` and `get_console_data()` fail for exactly the
+  reasons the operation did: a `deleted` operation is usually an
+  instance which went away underneath it. Both lookups are now best
+  effort, and a failed lookup still yields an `AgentOperationFailed`
+  carrying the operation uuid and state. The `AgentAwaitTimeout` report
+  a few lines below had the identical shape and the identical fix, so
+  both now share `_agent_failure_context()` rather than one of them
+  being right.
+- **The outer "wait for the operation to be complete" loops are
+  gone.** Once `_await_agentop()` is given the caller's own budget it
+  returns either a complete operation or an in flight one whose
+  deadline passed, and raises for everything terminal in between. The
+  loop below it was therefore always entered already expired, and the
+  terminal state check below *that* could never see a terminal state.
+  `_await_agentop()` is now the only place which polls operation
+  state. Two tests reached those branches only by mocking
+  `instance_execute`/`instance_get` to return a state the real chain
+  can no longer produce; they now drive the real chain.
+- **`instance upload` warns before it transfers anything.** The
+  capability check needs nothing the upload produces, so warning
+  afterwards told the user their `--deadline` could not be honoured
+  only once a multi-gigabyte file had crossed the network.
+- **Fire and forget does not mean fire and ignore.** `ASYNC_CONTINUE`
+  raises for a terminal failure like every other strategy, because an
+  operation which is dead in the POST response cannot usefully be
+  handed back to poll later. That was already the behaviour; the
+  docstring now says so and a test pins it.
+- **`_warn_if_timing_unsupported()` takes a plain dict.** It was
+  carrying `--deadline` and `--progress-timeout` through `**kwargs`,
+  which CPython allows but which makes a reader stop and check.
+- **Test gaps closed.** `await_seconds` is asserted to be forwarded by
+  each of the three helpers (a helper which dropped it would have
+  passed the whole suite while restoring the ASYNC_BLOCK bug); the
+  upload CLI tests now vary `blob-search-by-hash` and
+  `agentoperation-deadlines` independently, so the capable path and
+  the blob-recycling path are both covered.
+
+The remaining review items were declined with reasons rather than
+applied. The one second floor on an exhausted budget stays, because an
+operation nobody is waiting for should be reaped rather than left
+running under the server's default -- the docstring now says that in
+those terms. The capability substring match is pre-existing and fails
+closed. There is still no user-facing document, because this plan's
+"Out of scope" section gives that to phase 7 deliberately, and
+`AGENTS.md` now says so rather than leaving the absence to read as an
+oversight.
+
 ## Risks and mitigations
 
 - **The capability token lands after the client change.** If 6c

@@ -252,6 +252,22 @@ class GroupCatchExceptionsTestCase(testtools.TestCase):
         log.error.assert_called_once()
         self.assertIn('Insufficient Resources', log.error.call_args[0][0])
 
+    def test_agent_operation_failed_is_reported_not_traced(self):
+        # instance execute, upload and download call the creating helpers
+        # directly, and those raise as soon as the operation reaches a
+        # terminal failure state rather than handing back an in flight
+        # operation. "expired" makes that a routine outcome once the server
+        # side deadlines deploy, so it has to read as an error message and
+        # exit 1 like everything else here, not as a traceback.
+        log = self._run(apiclient.AgentOperationFailed(
+            'Agent execute operation op1 on instance i1 entered terminal '
+            'state "expired"', 'op1', {'uuid': 'op1', 'state': 'expired'}))
+
+        log.error.assert_called_once()
+        message = log.error.call_args[0][0]
+        self.assertIn('Agent operation failed', message)
+        self.assertIn('expired', message)
+
     def test_an_unmapped_api_exception_is_not_swallowed(self):
         # There is no bare APIException fallback, deliberately: a status
         # nobody has taught the CLI about should be loud rather than

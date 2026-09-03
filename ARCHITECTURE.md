@@ -81,11 +81,13 @@ REST API:
   get, `progress_timeout_seconds`) which bound the operation's life on
   the server, plus `await_seconds` which bounds how long this client
   polls for it -- three separate budgets that are deliberately not
-  derived from one another. All three await loops break on any member
-  of `TERMINAL_AGENT_OPERATION_STATES` and raise `AgentOperationFailed`
-  rather than waiting out their budget and reporting a timeout. The
-  timing parameters are gated on the `agentoperation-deadlines`
-  capability and fail closed.
+  derived from one another. `_await_agentop()` is the single place
+  which polls operation state: it breaks on any member of
+  `TERMINAL_AGENT_OPERATION_STATES` and raises `AgentOperationFailed`
+  rather than waiting out its budget and reporting a timeout, and
+  `await_agent_command()`/`await_agent_fetch()` catch that to attach the
+  instance's console data. The timing parameters are gated on the
+  `agentoperation-deadlines` capability and fail closed.
 
 ### CLI (`main.py`)
 

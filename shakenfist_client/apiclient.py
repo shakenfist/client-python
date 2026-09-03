@@ -1284,6 +1284,13 @@ class Client:
         the wait it gets; every other caller waits for as long as the async
         strategy says, which is this client's general policy for how long a
         call may block.
+
+        A terminal failure state raises for *every* caller, including
+        ASYNC_CONTINUE. Fire and forget means "do not wait", not "do not
+        notice a failure the server has already reported": an operation
+        which is dead in the POST response is not something a caller can
+        usefully be handed and told to poll later. Only the still in flight
+        case returns silently.
         """
         if await_seconds is not None:
             deadline = time.time() + await_seconds
@@ -1349,11 +1356,39 @@ class Client:
 
     @staticmethod
     def _remaining_agentop_budget(start_time, timeout):
-        # Never zero: the server reads a deadline of 0 as "no wall clock
-        # deadline at all", so an exhausted budget must not be spelt that
-        # way. One second says "give up almost immediately", which is what
-        # an exhausted budget means.
+        """How much of the caller's timeout is left, as a server side budget.
+
+        Never zero, and never omitted, which are the two other things an
+        exhausted budget could plausibly be spelt as. Zero is wrong because
+        the server reads a deadline of 0 as "no wall clock deadline at all",
+        which is the opposite of what an exhausted caller means. Omitting
+        the key is wrong for a subtler reason: this client is about to stop
+        waiting, and an operation nobody is waiting for should be reaped
+        rather than left running under the server's default budget. One
+        second says "start it, then kill it", which is the honest request.
+        """
         return max(1, round(timeout - (time.time() - start_time)))
+
+    def _agent_failure_context(self, instance_uuid):
+        """Gather what an operator wants to see when an agent operation fails.
+
+        Best effort, deliberately. Both lookups can fail for the same
+        reason the operation being reported failed -- an instance which
+        went away underneath a long running operation is the common case,
+        and it is exactly what a "deleted" operation usually means -- and
+        letting a ResourceNotFoundException raised while *decorating* a
+        failure replace that failure would report the wrong thing
+        entirely, losing the operation uuid and state the caller needs.
+
+        Returns the agent state and console data as strings, already
+        phrased for a failure message, so both callers below read the same
+        way whether or not the lookups worked.
+        """
+        try:
+            i = self.get_instance(instance_uuid)
+            return i['agent_state'], self.get_console_data(instance_uuid)
+        except Exception as e:
+            return f'could not be gathered: {e}', f'could not be gathered: {e}'
 
     def _enriched_agent_failure(self, verb, op, instance_uuid):
         """Build an AgentOperationFailed carrying what an operator will want.
@@ -1363,12 +1398,11 @@ class Client:
         but not the instance it ran against, and it raises before its caller
         has a chance to add anything.
         """
-        i = self.get_instance(instance_uuid)
-        cd = self.get_console_data(instance_uuid)
+        agent_state, cd = self._agent_failure_context(instance_uuid)
         return AgentOperationFailed(
-            f'Agent {verb} operation {op["uuid"]} on instance {i["uuid"]} '
+            f'Agent {verb} operation {op["uuid"]} on instance {instance_uuid} '
             f'entered terminal state "{op["state"]}"\n'
-            f'    Agent state: {i["agent_state"]}\n\n'
+            f'    Agent state: {agent_state}\n\n'
             f'    Console data: {cd}',
             op['uuid'], op)
 
@@ -1727,25 +1761,21 @@ class Client:
                 'execute', e.op_view or {'uuid': e.op_uuid, 'state': 'unknown'},
                 instance_uuid) from e
 
-        # Wait for the operation to be complete
-        while time.time() - start_time < timeout:
-            if op['state'] in TERMINAL_AGENT_OPERATION_STATES:
-                break
-            time.sleep(5)
-            op = self.get_agent_operation(op['uuid'])
-
+        # There is no state polling loop here, because instance_execute()
+        # has already done it: _await_agentop() was handed this call's own
+        # budget, so it returns either a complete operation or an in flight
+        # one whose deadline has passed, and raises for every terminal
+        # failure (caught above). A second loop would be an already expired
+        # copy of the first, and a second terminal state check could never
+        # see one. All that is left is to report the timeout.
         if op['state'] != 'complete':
-            if op['state'] in TERMINAL_AGENT_OPERATION_STATES:
-                raise self._enriched_agent_failure('execute', op, instance_uuid)
-
-            i = self.get_instance(instance_uuid)
-            cd = self.get_console_data(instance_uuid)
+            agent_state, cd = self._agent_failure_context(instance_uuid)
             raise AgentAwaitTimeout(
-                f'Agent execute operation {op["uuid"]} on instance {i["uuid"]} '
+                f'Agent execute operation {op["uuid"]} on instance {instance_uuid} '
                 'did not complete within specified timeout\n'
                 f'    Timeout: {timeout}\n'
                 f'    Operation state: {op["state"]}\n'
-                f'    Agent state: {i["agent_state"]}\n\n'
+                f'    Agent state: {agent_state}\n\n'
                 f'    Console data: {cd}')
 
         # Wait for the operation to have results.
@@ -1814,16 +1844,10 @@ class Client:
                 'fetch', e.op_view or {'uuid': e.op_uuid, 'state': 'unknown'},
                 instance_uuid) from e
 
-        # Wait for the operation to be complete
-        while time.time() - start_time < timeout:
-            if op['state'] in TERMINAL_AGENT_OPERATION_STATES:
-                break
-            time.sleep(5)
-            op = self.get_agent_operation(op['uuid'])
-
+        # See await_agent_command() above for why there is no state polling
+        # loop here: instance_get() has already waited out this call's
+        # budget and raised for every terminal failure.
         if op['state'] != 'complete':
-            if op['state'] in TERMINAL_AGENT_OPERATION_STATES:
-                raise self._enriched_agent_failure('fetch', op, instance_uuid)
             raise AgentAwaitTimeout(
                 f'Agent fetch operation {op["uuid"]} did not complete in '
                 f'{timeout} seconds with state {op["state"]}')

@@ -108,8 +108,17 @@ default.
 such budget at all" -- so the propagation tests `is not None` and
 `await_agent_command`/`await_agent_fetch` floor their remaining budget
 at one second rather than sending the `0` an exhausted budget would
-otherwise produce. `TERMINAL_AGENT_OPERATION_STATES` hand-duplicates the
-server's `AgentOperation.TERMINAL_STATES`. See `AGENTS.md`.
+otherwise produce -- an operation nobody is waiting for should be reaped,
+not left running under the server's default.
+`TERMINAL_AGENT_OPERATION_STATES` hand-duplicates the server's
+`AgentOperation.TERMINAL_STATES`.
+
+`_await_agentop()` is the only place which polls operation state; the two
+await helpers give it their remaining budget and catch
+`AgentOperationFailed` to attach console data, rather than looping again
+themselves. `main.py`'s `GroupCatchExceptions` reports that exception,
+because `expired` becomes a routine CLI outcome once the server side
+deadlines deploy. See `AGENTS.md`.
 
 ### Seamless Kerbside VDI Console Launch (2026-07)
 

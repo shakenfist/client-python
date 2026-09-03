@@ -25,7 +25,7 @@ def _get_instances(ctx, args, incomplete):
     return [arg for arg in choices if arg.startswith(incomplete)]
 
 
-def _warn_if_timing_unsupported(ctx, **timings):
+def _warn_if_timing_unsupported(ctx, timings):
     """Warn when the user asked for a budget this server cannot accept.
 
     The client is deliberately silent when it has nothing to send (decision
@@ -34,6 +34,9 @@ def _warn_if_timing_unsupported(ctx, **timings):
     exactly what an old server gives. A value the user typed is a different
     thing: dropping it silently hands them an operation with the server's
     default budget rather than the one they asked for, and no clue why.
+
+    ``timings`` is a plain dict keyed by the flag name as the user typed
+    it, so the warning can name the flag rather than the kwarg.
     """
     asked = sorted(name for name, value in timings.items() if value is not None)
     if not asked:
@@ -833,6 +836,13 @@ def instance_snapshot(ctx, instance_ref=None, all=False, device=None, label_name
 @click.pass_context
 def instance_upload(ctx, instance_ref=None, source=None, destination=None,
                     deadline=None, progress_timeout=None):
+    # Warn before anything is transferred. The capability check needs
+    # nothing the upload produces, and telling someone their --deadline
+    # cannot be honoured only after a multi-gigabyte file has finished
+    # crossing the network is telling them far too late to act on it.
+    _warn_if_timing_unsupported(
+        ctx, {'--deadline': deadline, '--progress-timeout': progress_timeout})
+
     if not ctx.obj['CLIENT'].check_capability('blob-search-by-hash'):
         blob = None
     else:
@@ -850,9 +860,6 @@ def instance_upload(ctx, instance_ref=None, source=None, destination=None,
             'upload-to-%s' % instance_ref, blob['uuid'], source_url=None)
     print('Created artifact %s' % artifact['uuid'])
 
-    _warn_if_timing_unsupported(
-        ctx, **{'--deadline': deadline, '--progress-timeout': progress_timeout})
-
     st = os.stat(source)
     ctx.obj['CLIENT'].instance_put_blob(
             instance_ref, artifact['blob_uuid'], destination, st.st_mode,
@@ -869,7 +876,7 @@ def instance_upload(ctx, instance_ref=None, source=None, destination=None,
               'the server default.')
 @click.pass_context
 def instance_execute(ctx, instance_ref=None, commandline=None, deadline=None):
-    _warn_if_timing_unsupported(ctx, **{'--deadline': deadline})
+    _warn_if_timing_unsupported(ctx, {'--deadline': deadline})
     op = ctx.obj['CLIENT'].instance_execute(instance_ref, commandline, deadline_seconds=deadline)
 
     if ctx.obj['OUTPUT'] == 'json':
@@ -915,7 +922,7 @@ def instance_execute(ctx, instance_ref=None, commandline=None, deadline=None):
 def instance_download(ctx, instance_ref=None, source=None, destination=None,
                       deadline=None, progress_timeout=None):
     _warn_if_timing_unsupported(
-        ctx, **{'--deadline': deadline, '--progress-timeout': progress_timeout})
+        ctx, {'--deadline': deadline, '--progress-timeout': progress_timeout})
     op = ctx.obj['CLIENT'].instance_get(
         instance_ref, source, deadline_seconds=deadline, progress_timeout_seconds=progress_timeout)
     if '0' not in op.get('results', {}):
