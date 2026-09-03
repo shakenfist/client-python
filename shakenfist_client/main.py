@@ -160,6 +160,18 @@ class GroupCatchExceptions(click.Group):
                       error_text(e.text))
             sys.exit(1)
 
+        except apiclient.AgentOperationFailed as e:
+            # The three agent verbs (instance execute, upload and download)
+            # call the creating helpers directly, and those now raise as
+            # soon as the operation reaches a terminal failure state rather
+            # than handing back an in flight operation for the caller to
+            # give up on. Once the server side deadlines deploy, "expired"
+            # makes that a routine outcome rather than an edge case, so it
+            # has to read as an error message and exit 1 like every other
+            # failure here, not as a traceback.
+            LOG.error('Agent operation failed: %s' % e)
+            sys.exit(1)
+
         except apiclient.requests.exceptions.ConnectionError as e:
             LOG.error('Unable to connect to server: %s' % e)
             sys.exit(1)

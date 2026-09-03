@@ -76,6 +76,19 @@ REST API:
   apart from a durable one. `docs/namespace-claims.md` describes the
   two claim states and the refusal statuses.
 
+- **Agent operation deadlines**: `instance_put_blob`, `instance_get`
+  and `instance_execute` accept `deadline_seconds` (and, for put and
+  get, `progress_timeout_seconds`) which bound the operation's life on
+  the server, plus `await_seconds` which bounds how long this client
+  polls for it -- three separate budgets that are deliberately not
+  derived from one another. `_await_agentop()` is the single place
+  which polls operation state: it breaks on any member of
+  `TERMINAL_AGENT_OPERATION_STATES` and raises `AgentOperationFailed`
+  rather than waiting out its budget and reporting a timeout, and
+  `await_agent_command()`/`await_agent_fetch()` catch that to attach the
+  instance's console data. The timing parameters are gated on the
+  `agentoperation-deadlines` capability and fail closed.
+
 ### CLI (`main.py`)
 
 Built with [Click](https://click.palletsprojects.com/):

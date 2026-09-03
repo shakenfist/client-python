@@ -25,6 +25,30 @@ def _get_instances(ctx, args, incomplete):
     return [arg for arg in choices if arg.startswith(incomplete)]
 
 
+def _warn_if_timing_unsupported(ctx, timings):
+    """Warn when the user asked for a budget this server cannot accept.
+
+    The client is deliberately silent when it has nothing to send (decision
+    7 of PLAN-agent-operation-deadlines-phase-06-client.md), because an
+    omitted flag means "whatever the server does by default" and that is
+    exactly what an old server gives. A value the user typed is a different
+    thing: dropping it silently hands them an operation with the server's
+    default budget rather than the one they asked for, and no clue why.
+
+    ``timings`` is a plain dict keyed by the flag name as the user typed
+    it, so the warning can name the flag rather than the kwarg.
+    """
+    asked = sorted(name for name, value in timings.items() if value is not None)
+    if not asked:
+        return
+    if ctx.obj['CLIENT'].check_capability('agentoperation-deadlines'):
+        return
+
+    print('Warning: the API server version you are talking to does not support '
+          '%s; the server default applies instead.' % ', '.join(asked),
+          file=sys.stderr)
+
+
 def _get_interfaces(ctx, instance):
     if instance.get('interfaces'):
         return instance['interfaces']
@@ -799,8 +823,26 @@ def instance_snapshot(ctx, instance_ref=None, all=False, device=None, label_name
 @click.argument('instance_ref', type=click.STRING, shell_complete=_get_instances)
 @click.argument('source', type=click.Path(exists=True))
 @click.argument('destination', type=click.Path())
+@click.option('--deadline', type=click.INT, default=None,
+              help='The wall clock budget in seconds for the in-guest agent operation '
+              'which places the file, once the upload of the artifact to the cluster is '
+              'complete. This bounds the operation on the server; it is not how long '
+              'this command waits. 0 disables this budget. Omit to use the server '
+              'default.')
+@click.option('--progress-timeout', type=click.INT, default=None,
+              help='The number of seconds of no progress on the in-guest agent operation '
+              'before it is considered stalled. 0 disables this budget. Omit to use the '
+              'server default.')
 @click.pass_context
-def instance_upload(ctx, instance_ref=None, source=None, destination=None):
+def instance_upload(ctx, instance_ref=None, source=None, destination=None,
+                    deadline=None, progress_timeout=None):
+    # Warn before anything is transferred. The capability check needs
+    # nothing the upload produces, and telling someone their --deadline
+    # cannot be honoured only after a multi-gigabyte file has finished
+    # crossing the network is telling them far too late to act on it.
+    _warn_if_timing_unsupported(
+        ctx, {'--deadline': deadline, '--progress-timeout': progress_timeout})
+
     if not ctx.obj['CLIENT'].check_capability('blob-search-by-hash'):
         blob = None
     else:
@@ -820,15 +862,22 @@ def instance_upload(ctx, instance_ref=None, source=None, destination=None):
 
     st = os.stat(source)
     ctx.obj['CLIENT'].instance_put_blob(
-            instance_ref, artifact['blob_uuid'], destination, st.st_mode)
+            instance_ref, artifact['blob_uuid'], destination, st.st_mode,
+            deadline_seconds=deadline, progress_timeout_seconds=progress_timeout)
 
 
 @instance.command(name='execute', help='Execute a command on an instance')
 @click.argument('instance_ref', type=click.STRING, shell_complete=_get_instances)
 @click.argument('commandline', type=click.STRING)
+@click.option('--deadline', type=click.INT, default=None,
+              help='The wall clock budget in seconds for the in-guest agent operation '
+              'which executes the command. This bounds the operation on the server; it is '
+              'not how long this command waits. 0 disables this budget. Omit to use '
+              'the server default.')
 @click.pass_context
-def instance_execute(ctx, instance_ref=None, commandline=None):
-    op = ctx.obj['CLIENT'].instance_execute(instance_ref, commandline)
+def instance_execute(ctx, instance_ref=None, commandline=None, deadline=None):
+    _warn_if_timing_unsupported(ctx, {'--deadline': deadline})
+    op = ctx.obj['CLIENT'].instance_execute(instance_ref, commandline, deadline_seconds=deadline)
 
     if ctx.obj['OUTPUT'] == 'json':
         print(json.dumps(op, indent=4, sort_keys=True))
@@ -860,9 +909,22 @@ def instance_execute(ctx, instance_ref=None, commandline=None):
 @click.argument('instance_ref', type=click.STRING, shell_complete=_get_instances)
 @click.argument('source', type=click.Path())
 @click.argument('destination', type=click.Path())
+@click.option('--deadline', type=click.INT, default=None,
+              help='The wall clock budget in seconds for the in-guest agent operation '
+              'which fetches the file. This bounds the operation on the server; it is not '
+              'how long this command waits. 0 disables this budget. Omit to use the '
+              'server default.')
+@click.option('--progress-timeout', type=click.INT, default=None,
+              help='The number of seconds of no progress on the in-guest agent operation '
+              'before it is considered stalled. 0 disables this budget. Omit to use the '
+              'server default.')
 @click.pass_context
-def instance_download(ctx, instance_ref=None, source=None, destination=None):
-    op = ctx.obj['CLIENT'].instance_get(instance_ref, source)
+def instance_download(ctx, instance_ref=None, source=None, destination=None,
+                      deadline=None, progress_timeout=None):
+    _warn_if_timing_unsupported(
+        ctx, {'--deadline': deadline, '--progress-timeout': progress_timeout})
+    op = ctx.obj['CLIENT'].instance_get(
+        instance_ref, source, deadline_seconds=deadline, progress_timeout_seconds=progress_timeout)
     if '0' not in op.get('results', {}):
         print('Results not available.')
         sys.exit(1)

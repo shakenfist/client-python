@@ -6,6 +6,7 @@ from unittest import mock
 import testtools
 from click.testing import CliRunner
 
+from shakenfist_client import util
 from shakenfist_client.commandline import instance as instance_cmd
 
 
@@ -400,3 +401,233 @@ class VdiConsoleFileCommandTestCase(testtools.TestCase):
 
         self.assertEqual(1, result.exit_code)
         self.assertIn('does not implement VDI console helpers', result.output)
+
+
+class ExecuteDeadlineOptionTestCase(testtools.TestCase):
+    """Tests for ``--deadline`` on ``sf-client instance execute``."""
+
+    def _invoke(self, extra_args, capable=True):
+        client = mock.Mock()
+        client.check_capability.return_value = capable
+        client.instance_execute.return_value = {'results': {'0': {
+            'return-code': 0, 'stdout': '', 'stderr': ''}}}
+        runner = CliRunner()
+        result = runner.invoke(
+            instance_cmd.instance,
+            ['execute', 'inst-ref', 'true'] + extra_args,
+            obj={'CLIENT': client, 'OUTPUT': 'pretty'},
+            catch_exceptions=False)
+        return result, client
+
+    def test_unspecified_deadline_sends_none(self):
+        result, client = self._invoke([])
+        self.assertEqual(0, result.exit_code, result.output)
+        client.instance_execute.assert_called_once_with(
+            'inst-ref', 'true', deadline_seconds=None)
+
+    def test_explicit_deadline_is_passed(self):
+        result, client = self._invoke(['--deadline', '30'])
+        self.assertEqual(0, result.exit_code, result.output)
+        client.instance_execute.assert_called_once_with(
+            'inst-ref', 'true', deadline_seconds=30)
+
+    def test_zero_deadline_is_passed_not_dropped(self):
+        # 0 means "no wall clock deadline at all" to the server, so it must
+        # survive the client's `is not None` tests all the way to the wire.
+        result, client = self._invoke(['--deadline', '0'])
+        self.assertEqual(0, result.exit_code, result.output)
+        client.instance_execute.assert_called_once_with(
+            'inst-ref', 'true', deadline_seconds=0)
+
+    def test_explicit_deadline_warns_when_server_is_incapable(self):
+        # An omitted flag means "whatever the server does by default", which
+        # is exactly what an old server gives, so silence is right there. A
+        # value the user typed is a request, and dropping it silently hands
+        # them a budget they did not ask for with no clue why.
+        result, _ = self._invoke(['--deadline', '30'], capable=False)
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn('does not support --deadline', result.output)
+
+    def test_omitted_deadline_does_not_warn_when_server_is_incapable(self):
+        result, _ = self._invoke([], capable=False)
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertNotIn('does not support', result.output)
+
+    def test_no_progress_timeout_option(self):
+        result = CliRunner().invoke(
+            instance_cmd.instance, ['execute', '--help'],
+            obj={'CLIENT': mock.Mock(), 'OUTPUT': 'pretty'})
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertNotIn('--progress-timeout', result.output)
+
+
+class UploadDeadlineOptionsTestCase(testtools.TestCase):
+    """Tests for ``--deadline`` and ``--progress-timeout`` on
+    ``sf-client instance upload``.
+    """
+
+    def _invoke(self, extra_args, capable=True, recycle=False):
+        """Drive ``instance upload`` against a client with known capabilities.
+
+        ``check_capability`` is answered per capability rather than with one
+        blanket value, because the two this command consults are
+        independent: ``blob-search-by-hash`` decides whether the checksum
+        shortcut runs, and ``agentoperation-deadlines`` decides whether the
+        timing flags reach the wire. A single ``return_value`` ties them
+        together and leaves half of that matrix untested.
+        """
+        capabilities = {'blob-search-by-hash': recycle,
+                        'agentoperation-deadlines': capable}
+        client = mock.Mock()
+        client.check_capability.side_effect = lambda name: capabilities[name]
+        client.blob_artifact.return_value = {
+            'uuid': 'art-uuid', 'blob_uuid': 'blob-uuid'}
+        runner = CliRunner()
+        with tempfile.NamedTemporaryFile() as source:
+            with mock.patch.object(
+                    util, 'upload_artifact_with_progress',
+                    return_value={'uuid': 'art-uuid', 'blob_uuid': 'blob-uuid'}), \
+                    mock.patch.object(
+                        util, 'checksum_with_progress',
+                        return_value={'uuid': 'blob-uuid'}):
+                result = runner.invoke(
+                    instance_cmd.instance,
+                    ['upload', 'inst-ref', source.name, '/dest'] + extra_args,
+                    obj={'CLIENT': client, 'OUTPUT': 'pretty'},
+                    catch_exceptions=False)
+        return result, client
+
+    def test_unspecified_options_send_none(self):
+        result, client = self._invoke([])
+        self.assertEqual(0, result.exit_code, result.output)
+        kwargs = client.instance_put_blob.call_args.kwargs
+        self.assertIsNone(kwargs['deadline_seconds'])
+        self.assertIsNone(kwargs['progress_timeout_seconds'])
+
+    def test_explicit_options_are_passed(self):
+        result, client = self._invoke(
+            ['--deadline', '30', '--progress-timeout', '10'])
+        self.assertEqual(0, result.exit_code, result.output)
+        kwargs = client.instance_put_blob.call_args.kwargs
+        self.assertEqual(30, kwargs['deadline_seconds'])
+        self.assertEqual(10, kwargs['progress_timeout_seconds'])
+        self.assertNotIn('does not support', result.output)
+
+    def test_explicit_options_are_passed_when_recycling_a_blob(self):
+        # The other branch of the upload: a blob with this checksum already
+        # exists in the cluster, so nothing is transferred. The flags have
+        # to reach the agent operation just the same, because the agent
+        # operation is the part they bound.
+        result, client = self._invoke(
+            ['--deadline', '30', '--progress-timeout', '10'], recycle=True)
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn('Recycling existing blob', result.output)
+        kwargs = client.instance_put_blob.call_args.kwargs
+        self.assertEqual(30, kwargs['deadline_seconds'])
+        self.assertEqual(10, kwargs['progress_timeout_seconds'])
+
+    def test_explicit_options_warn_when_server_is_incapable(self):
+        result, _ = self._invoke(
+            ['--deadline', '30', '--progress-timeout', '10'], capable=False)
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn('--deadline, --progress-timeout', result.output)
+
+    def test_omitted_options_do_not_warn_when_server_is_incapable(self):
+        result, _ = self._invoke([], capable=False)
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertNotIn('does not support', result.output)
+
+    def test_the_warning_precedes_the_upload(self):
+        # The capability check needs nothing the upload produces, so
+        # emitting the warning afterwards tells a user their --deadline
+        # cannot be honoured only once a multi-gigabyte file has finished
+        # crossing the network -- long past the point where they could
+        # have done anything about it.
+        calls = []
+        client = mock.Mock()
+        client.check_capability.side_effect = lambda name: False
+        real_warn = instance_cmd._warn_if_timing_unsupported
+
+        def warn(ctx, timings):
+            calls.append('warn')
+            return real_warn(ctx, timings)
+
+        def upload(*args, **kwargs):
+            calls.append('upload')
+            return {'uuid': 'art-uuid', 'blob_uuid': 'blob-uuid'}
+
+        with tempfile.NamedTemporaryFile() as source, \
+                mock.patch.object(
+                    instance_cmd, '_warn_if_timing_unsupported', warn), \
+                mock.patch.object(util, 'upload_artifact_with_progress', upload):
+            result = CliRunner().invoke(
+                instance_cmd.instance,
+                ['upload', 'inst-ref', source.name, '/dest', '--deadline', '30'],
+                obj={'CLIENT': client, 'OUTPUT': 'pretty'},
+                catch_exceptions=False)
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertEqual(['warn', 'upload'], calls)
+        self.assertIn('does not support --deadline', result.output)
+
+
+class DownloadDeadlineOptionsTestCase(testtools.TestCase):
+    """Tests for ``--deadline`` and ``--progress-timeout`` on
+    ``sf-client instance download``.
+    """
+
+    def _invoke(self, extra_args):
+        client = mock.Mock()
+        client.instance_get.return_value = {
+            'results': {'0': {'content_blob': 'blob-uuid'}}}
+        client.get_blob_data.return_value = [b'data']
+        runner = CliRunner()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            destination = os.path.join(tmpdir, 'dest')
+            result = runner.invoke(
+                instance_cmd.instance,
+                ['download', 'inst-ref', '/source', destination] + extra_args,
+                obj={'CLIENT': client, 'OUTPUT': 'pretty'},
+                catch_exceptions=False)
+        return result, client
+
+    def test_unspecified_options_send_none(self):
+        result, client = self._invoke([])
+        self.assertEqual(0, result.exit_code, result.output)
+        client.instance_get.assert_called_once_with(
+            'inst-ref', '/source', deadline_seconds=None,
+            progress_timeout_seconds=None)
+
+    def test_explicit_options_are_passed(self):
+        result, client = self._invoke(
+            ['--deadline', '30', '--progress-timeout', '10'])
+        self.assertEqual(0, result.exit_code, result.output)
+        client.instance_get.assert_called_once_with(
+            'inst-ref', '/source', deadline_seconds=30,
+            progress_timeout_seconds=10)
+
+    def test_zero_options_are_passed_not_dropped(self):
+        result, client = self._invoke(
+            ['--deadline', '0', '--progress-timeout', '0'])
+        self.assertEqual(0, result.exit_code, result.output)
+        client.instance_get.assert_called_once_with(
+            'inst-ref', '/source', deadline_seconds=0,
+            progress_timeout_seconds=0)
+
+    def test_explicit_options_warn_when_server_is_incapable(self):
+        client = mock.Mock()
+        client.check_capability.return_value = False
+        client.instance_get.return_value = {
+            'results': {'0': {'content_blob': 'blob-uuid'}}}
+        client.get_blob_data.return_value = [b'data']
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = CliRunner().invoke(
+                instance_cmd.instance,
+                ['download', 'inst-ref', '/source',
+                 os.path.join(tmpdir, 'dest'),
+                 '--deadline', '30', '--progress-timeout', '10'],
+                obj={'CLIENT': client, 'OUTPUT': 'pretty'},
+                catch_exceptions=False)
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn('--deadline, --progress-timeout', result.output)
