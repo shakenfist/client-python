@@ -45,6 +45,9 @@ from `~/.shakenfist`, or from `/etc/sf/shakenfist.json`.
 - [Namespace capacity claims](https://github.com/shakenfist/client-python/blob/develop/docs/namespace-claims.md)
   -- claiming aggregate cluster capacity for a namespace, the two claim
   states, and what each refusal means
+- [Waiting out a transient capacity refusal](https://github.com/shakenfist/client-python/blob/develop/docs/transient-capacity-retry.md)
+  -- how the server marks a capacity refusal it expects to pass, and the
+  opt-in client retry which waits for it
 - [ARCHITECTURE.md](https://github.com/shakenfist/client-python/blob/develop/ARCHITECTURE.md) -- project structure and key components
 - [AGENTS.md](https://github.com/shakenfist/client-python/blob/develop/AGENTS.md) -- guide for AI agents working on this codebase
 - [RELEASE-SETUP.md](https://github.com/shakenfist/client-python/blob/develop/RELEASE-SETUP.md) -- one-time release infrastructure setup

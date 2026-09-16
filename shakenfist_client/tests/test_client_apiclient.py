@@ -1007,6 +1007,232 @@ class RequestDeadlineTestCase(testtools.TestCase):
         self.assertEqual(2, self.mock_actual.call_count)
 
 
+TRANSIENT_BODY = json.dumps(
+    {'error': 'no node had capacity for this instance', 'status': 507,
+     'stage': 'capacity_guard', 'transient': True})
+DURABLE_BODY = json.dumps(
+    {'error': 'no node had capacity for this instance', 'status': 507})
+
+
+def _refusal(body=TRANSIENT_BODY, headers=None):
+    return apiclient.InsufficientResourcesException(
+        'API request failed', 'POST', '/instances', 507, body,
+        headers=headers or {})
+
+
+class TransientCapacityRetryTestCase(testtools.TestCase):
+    """The opt-in retry of a 507 the server marked as transient."""
+
+    def setUp(self):
+        super().setUp()
+
+        self.actual = mock.patch(
+            'shakenfist_client.apiclient.Client._actual_request_url')
+        self.mock_actual = self.actual.start()
+        self.addCleanup(self.actual.stop)
+
+        self.capabilities = mock.patch(
+            'shakenfist_client.apiclient.Client._collect_capabilities')
+        self.capabilities = self.capabilities.start()
+        self.addCleanup(self.capabilities.stop)
+
+        self.sleep = mock.patch('time.sleep')
+        self.mock_sleep = self.sleep.start()
+        self.addCleanup(self.sleep.stop)
+
+    def _client(self, retry_transient_capacity=False):
+        client = apiclient.Client(
+            suppress_configuration_lookup=True,
+            base_url='http://localhost:13000',
+            async_strategy=apiclient.ASYNC_BLOCK,
+            retry_transient_capacity=retry_transient_capacity)
+        client.cached_auth = 'Bearer notreallyatoken'
+        return client
+
+    def _forbid_sleep(self):
+        # A test which asserts that no retry happens should fail rather
+        # than hang if one does: with time.sleep mocked out, a retry loop
+        # never advances the clock towards its deadline.
+        self.mock_sleep.side_effect = AssertionError(
+            'this refusal should not have been waited out')
+
+    def test_the_flag_defaults_to_off(self):
+        self.assertFalse(self._client().retry_transient_capacity)
+
+    def test_off_by_default_a_marked_refusal_raises_immediately(self):
+        # A caller which did not ask to wait is told about the refusal
+        # straight away, however transient the server says it is.
+        self._forbid_sleep()
+        self.mock_actual.side_effect = _refusal(
+            headers={'Retry-After': '15'})
+
+        client = self._client()
+        self.assertRaises(
+            apiclient.InsufficientResourcesException,
+            client._request_url, 'POST', '/instances',
+            deadline=time.time() + 600)
+
+        self.assertEqual(1, self.mock_actual.call_count)
+        self.mock_sleep.assert_not_called()
+
+    def test_on_an_unmarked_refusal_raises_immediately(self):
+        # An older server's 507 has no marker, and an unmarked 507 is not
+        # a promise that waiting will help.
+        self._forbid_sleep()
+        self.mock_actual.side_effect = _refusal(body=DURABLE_BODY)
+
+        client = self._client(retry_transient_capacity=True)
+        self.assertRaises(
+            apiclient.InsufficientResourcesException,
+            client._request_url, 'POST', '/instances',
+            deadline=time.time() + 600)
+
+        self.assertEqual(1, self.mock_actual.call_count)
+        self.mock_sleep.assert_not_called()
+
+    def test_on_an_unparseable_body_raises_immediately(self):
+        # A proxy's HTML 507 carries no marker either.
+        self._forbid_sleep()
+        self.mock_actual.side_effect = _refusal(
+            body='<html><body>Insufficient Storage</body></html>')
+
+        client = self._client(retry_transient_capacity=True)
+        self.assertRaises(
+            apiclient.InsufficientResourcesException,
+            client._request_url, 'POST', '/instances',
+            deadline=time.time() + 600)
+
+        self.assertEqual(1, self.mock_actual.call_count)
+        self.mock_sleep.assert_not_called()
+
+    def test_on_a_marked_refusal_retries_and_honours_the_header(self):
+        # Seven is deliberately not TRANSIENT_RETRY_DEFAULT, so this
+        # assertion can tell the header from the fallback.
+        self.mock_actual.side_effect = [
+            _refusal(headers={'Retry-After': '7'}), 'success']
+
+        client = self._client(retry_transient_capacity=True)
+        r = client._request_url('POST', '/instances',
+                                deadline=time.time() + 600)
+
+        self.assertEqual('success', r)
+        self.assertEqual(2, self.mock_actual.call_count)
+        self.mock_sleep.assert_called_once_with(7)
+        self.assertNotEqual(apiclient.TRANSIENT_RETRY_DEFAULT, 7)
+
+    def test_a_missing_header_falls_back_to_the_default(self):
+        self.mock_actual.side_effect = [_refusal(), 'success']
+
+        client = self._client(retry_transient_capacity=True)
+        self.assertEqual(
+            'success',
+            client._request_url('POST', '/instances',
+                                deadline=time.time() + 600))
+        self.mock_sleep.assert_called_once_with(
+            apiclient.TRANSIENT_RETRY_DEFAULT)
+
+    def test_a_garbage_header_falls_back_to_the_default(self):
+        # Including the RFC 9110 HTTP-date form, which we do not parse.
+        for value in ['tomorrow please', '', 'Wed, 21 Oct 2026 07:28:00 GMT',
+                      '12.5']:
+            self.mock_actual.reset_mock()
+            self.mock_sleep.reset_mock()
+            self.mock_actual.side_effect = [
+                _refusal(headers={'Retry-After': value}), 'success']
+
+            client = self._client(retry_transient_capacity=True)
+            self.assertEqual(
+                'success',
+                client._request_url('POST', '/instances',
+                                    deadline=time.time() + 600))
+            self.mock_sleep.assert_called_once_with(
+                apiclient.TRANSIENT_RETRY_DEFAULT)
+
+    def test_a_hostile_header_is_clamped(self):
+        for value, expected in [('0', apiclient.TRANSIENT_RETRY_MINIMUM),
+                                ('-60', apiclient.TRANSIENT_RETRY_MINIMUM),
+                                ('86400', apiclient.TRANSIENT_RETRY_MAXIMUM)]:
+            self.mock_actual.reset_mock()
+            self.mock_sleep.reset_mock()
+            self.mock_actual.side_effect = [
+                _refusal(headers={'Retry-After': value}), 'success']
+
+            client = self._client(retry_transient_capacity=True)
+            self.assertEqual(
+                'success',
+                client._request_url('POST', '/instances',
+                                    deadline=time.time() + 600))
+            self.mock_sleep.assert_called_once_with(expected)
+
+    def test_an_expired_deadline_does_not_retry(self):
+        self._forbid_sleep()
+        self.mock_actual.side_effect = _refusal(
+            headers={'Retry-After': '15'})
+
+        client = self._client(retry_transient_capacity=True)
+        self.assertRaises(
+            apiclient.InsufficientResourcesException,
+            client._request_url, 'POST', '/instances',
+            deadline=time.time() - 1)
+
+        self.assertEqual(1, self.mock_actual.call_count)
+        self.mock_sleep.assert_not_called()
+
+    def test_the_sleep_is_clamped_to_the_remaining_deadline(self):
+        # Unlike the 406 clause, a 507 wait never overshoots the budget.
+        self.mock_actual.side_effect = [
+            _refusal(headers={'Retry-After': '30'}), 'success']
+
+        client = self._client(retry_transient_capacity=True)
+        self.assertEqual(
+            'success',
+            client._request_url('POST', '/instances',
+                                deadline=time.time() + 5))
+
+        slept = self.mock_sleep.call_args[0][0]
+        self.assertGreater(slept, 4)
+        self.assertLessEqual(slept, 5)
+
+    def test_the_deadline_bounds_a_refusal_which_never_stops(self):
+        clock = [1000.0]
+        self.mock_actual.side_effect = _refusal()
+        self.mock_sleep.side_effect = lambda seconds: clock.__setitem__(
+            0, clock[0] + seconds)
+
+        client = self._client(retry_transient_capacity=True)
+        with mock.patch('time.time', lambda: clock[0]):
+            self.assertRaises(
+                apiclient.InsufficientResourcesException,
+                client._request_url, 'POST', '/instances', deadline=1060.0)
+
+        # A 60 second budget and a 15 second wait each time: four waits,
+        # and then the fifth refusal is raised rather than waited out.
+        self.assertEqual(4, self.mock_sleep.call_count)
+        self.assertEqual(5, self.mock_actual.call_count)
+
+    def test_an_async_continue_client_never_retries(self):
+        # _calculate_async_deadline(ASYNC_CONTINUE) is -1, so a caller
+        # which passes no deadline of its own has one already in the past.
+        # That is the documented behaviour, not an accident.
+        self._forbid_sleep()
+        self.mock_actual.side_effect = _refusal(
+            headers={'Retry-After': '15'})
+
+        client = apiclient.Client(
+            suppress_configuration_lookup=True,
+            base_url='http://localhost:13000',
+            async_strategy=apiclient.ASYNC_CONTINUE,
+            retry_transient_capacity=True)
+        client.cached_auth = 'Bearer notreallyatoken'
+
+        self.assertRaises(
+            apiclient.InsufficientResourcesException,
+            client._request_url, 'POST', '/instances')
+
+        self.assertEqual(1, self.mock_actual.call_count)
+        self.mock_sleep.assert_not_called()
+
+
 # A structurally valid JWT: three base64url segments, the header being
 # base64url('{"alg":"none"}'). The redaction keys off the shape of the
 # string rather than where it came from, so a real shape matters.
