@@ -62,12 +62,13 @@ class TimeoutException(Exception):
 
 
 class APIException(Exception):
-    def __init__(self, message, method, url, status_code, text):
+    def __init__(self, message, method, url, status_code, text, headers=None):
         self.message = message
         self.method = method
         self.url = url
         self.status_code = status_code
         self.text = text
+        self.headers = headers or {}
 
 
 class RequestMalformedException(APIException):
@@ -384,14 +385,16 @@ class Client:
 
         if r.status_code in STATUS_CODES_TO_ERRORS:
             raise STATUS_CODES_TO_ERRORS[r.status_code](
-                'API request failed', method, url, r.status_code, r.text)
+                'API request failed', method, url, r.status_code, r.text,
+                headers=r.headers)
 
         acceptable = [200, 202]
         if not allow_redirects:
             acceptable.append(301)
         if r.status_code not in acceptable:
             raise APIException(
-                'API request failed', method, url, r.status_code, r.text)
+                'API request failed', method, url, r.status_code, r.text,
+                headers=r.headers)
         return r
 
     def _authenticate(self):
@@ -406,7 +409,7 @@ class Client:
                              timeout=self.sync_request_timeout)
         if r.status_code != 200:
             raise UnauthenticatedException('API unauthenticated', 'POST', auth_url,
-                                           r.status_code, r.text)
+                                           r.status_code, r.text, headers=r.headers)
         return 'Bearer %s' % r.json()['access_token']
 
     def _request_url(self, method, url, data=None, request_body_is_binary=False,

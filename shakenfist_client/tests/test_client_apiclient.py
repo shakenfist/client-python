@@ -1900,3 +1900,30 @@ class AgentOperationDeadlineTestCase(testtools.TestCase):
         sent = self._sent_data()
         self.assertEqual(0, sent['progress_timeout_seconds'])
         self.assertNotIn('deadline_seconds', sent)
+
+
+class APIExceptionTestCase(testtools.TestCase):
+    # Downstream repositories construct APIException with five positional
+    # arguments and no headers, so that form must keep working even though
+    # this phase adds a headers keyword. See
+    # PLAN-transient-capacity-refusals-phase-04-retry-after.md step 4d.
+    def test_old_five_positional_form_still_works(self):
+        exc = apiclient.APIException('m', 'GET', 'u', 507, 't')
+
+        self.assertEqual('m', exc.message)
+        self.assertEqual('GET', exc.method)
+        self.assertEqual('u', exc.url)
+        self.assertEqual(507, exc.status_code)
+        self.assertEqual('t', exc.text)
+        self.assertEqual({}, exc.headers)
+
+    def test_headers_keyword_is_stored(self):
+        headers = {'Retry-After': '15'}
+        exc = apiclient.APIException('m', 'GET', 'u', 507, 't', headers=headers)
+
+        self.assertEqual(headers, exc.headers)
+
+    def test_headers_defaults_to_empty_dict_not_none(self):
+        exc = apiclient.APIException('m', 'GET', 'u', 507, 't', headers=None)
+
+        self.assertEqual({}, exc.headers)
