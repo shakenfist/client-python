@@ -1127,6 +1127,30 @@ class Client:
         r = self._request_url('GET', '/networks/' + network_ref + '/addresses')
         return r.json()
 
+    def reserve_network_address(self, network_ref, address, comment=None):
+        if not self.check_capability('reserve-addresses'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'reserving addresses.')
+
+        body = {}
+        if comment:
+            body['comment'] = comment
+
+        r = self._request_url(
+            'POST', '/networks/' + network_ref + '/addresses/' + address,
+            data=body)
+        return r.json()
+
+    def release_network_address(self, network_ref, address):
+        if not self.check_capability('reserve-addresses'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'reserving addresses.')
+
+        self._request_url(
+            'DELETE', '/networks/' + network_ref + '/addresses/' + address)
+
     def route_network_address(self, network_ref):
         if not self.check_capability('route-addresses'):
             raise IncapableException(
