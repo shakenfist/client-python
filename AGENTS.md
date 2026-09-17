@@ -139,6 +139,11 @@ expect is in `docs/transient-capacity-retry.md`. Four invariants in
   The two look like they should be harmonised. They should not: a `406`
   overshoots by at most a second, a 15 second sleep by enough for a
   caller to notice.
+- The deadline bounds the sleeps, not the request which follows the
+  last of them. When less than `Retry-After` remains the sleep is
+  truncated and one more attempt is made, so a call can return a round
+  trip after its deadline. Raising instead would be a behaviour change,
+  not a tidy-up.
 - `TRANSIENT_RETRY_MINIMUM` exists so that `Retry-After: 0` cannot turn
   the retry into a busy loop against a server which is already out of
   capacity. `TRANSIENT_RETRY_MAXIMUM` is 60 because that is the whole
@@ -149,6 +154,14 @@ expect is in `docs/transient-capacity-retry.md`. Four invariants in
   deadline is already in the past. That is correct -- the strategy means
   the caller is not waiting for anything -- and is deliberately not
   special cased.
+
+The marker is a contract, not just a hint. Because the client replays
+the request byte for byte and gates on the marker rather than on an
+endpoint list, a server may set `"transient": true` only on a refusal
+which committed no part of the request. Today only the scheduler refusal
+is marked. Anything which appends or mutates -- `send_upload()`, whose
+natural refusal is also a `507` -- must be made replay safe before it is
+marked.
 
 Only the delta-seconds form of `Retry-After` is parsed. RFC 9110 also
 allows an HTTP-date; not implementing it is a decision, not an

@@ -46,13 +46,22 @@ particular:
   Only the integer seconds form of the header is understood; the HTTP
   date form falls back to the default of 15 seconds, which is what the
   Shaken Fist API sends anyway.
-- **The retry is bounded by the call's deadline**, which is the
-  `timeout` argument to `create_instance()` when you pass one, and
-  otherwise comes from the client's async strategy: 3600 seconds for
+- **The retry is bounded by the call's deadline, and by nothing else.**
+  There is no cap on attempts, so the deadline and the wait between
+  attempts together decide how many there are. A `create_instance()`
+  with no `timeout` on a default `ASYNC_BLOCK` client has an hour, which
+  at the server's fixed 15 seconds is up to ~240 POSTs and ~239 errored
+  instance records (see the last bullet) from one library call. Pass a
+  `timeout` you would be willing to wait.
+- **The deadline itself** is the `timeout` argument to
+  `create_instance()` when you pass one, and otherwise comes from the
+  client's async strategy: 3600 seconds for
   `ASYNC_BLOCK`, 60 for `ASYNC_PAUSE`, and none at all for
   `ASYNC_CONTINUE`, which means the caller is not waiting for anything
-  and so never retries. The final wait is shortened so it cannot
-  overshoot the deadline.
+  and so never retries. The final wait is shortened so that no sleep
+  overshoots the deadline -- though the attempt which follows it is a
+  request like any other, so the call itself can still return a round
+  trip after its deadline.
 - **`create_instance()` spends one budget on both halves of the call.**
   Its `timeout` bounds waiting out the refusal *and* the subsequent wait
   for the instance to leave `initial`/`creating`, so a caller that wants
@@ -79,6 +88,24 @@ particular:
   (instance names need not be unique, and the UUID is the server's to
   assign), and an instance list taken during a long wait shows the
   failures.
+
+  What those records do *not* hold is capacity. The server charges its
+  capacity ledger in the same database transaction that records a
+  placement, and a refusal rolls that transaction back, so an instance
+  which was never placed has nothing to release and the next attempt
+  faces the same cluster the last one did. Waiting is therefore not
+  self-defeating -- but the records do hold their allocated addresses
+  until the deletion is processed, so a long wait against a small
+  network can exhaust its address space before it runs out of budget.
+- **The server may only mark a refusal which had no partial effect.**
+  The client replays the request byte for byte on the strength of the
+  marker alone, and it does not restrict which endpoint may carry one.
+  So `"transient": true` is a promise by the server that nothing the
+  request asked for was committed before it was refused. Today only the
+  scheduler refusal is marked, and that promise holds there. Anything
+  which appends or mutates -- `send_upload()`, whose natural refusal is
+  also a `507` -- must not be marked without making the replay safe
+  first.
 
 Nothing else changes: a refusal which outlasts the deadline raises
 `InsufficientResourcesException` just as it would have without the flag.

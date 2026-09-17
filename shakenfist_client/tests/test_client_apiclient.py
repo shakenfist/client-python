@@ -1131,40 +1131,49 @@ class TransientCapacityRetryTestCase(testtools.TestCase):
         self.mock_sleep.assert_called_once_with(
             apiclient.TRANSIENT_RETRY_DEFAULT)
 
+    # The two loops below name the header value in their assertions rather
+    # than wrapping each case in subTest. subTest is inert here:
+    # unittest's implementation short circuits when self._outcome is None,
+    # and testtools' RunTest replaces run() and never sets it, so a
+    # failure would report neither which value broke nor run the
+    # remaining cases.
+    def _assert_one_sleep(self, expected, value):
+        self.assertEqual([mock.call(expected)], self.mock_sleep.call_args_list,
+                         'Retry-After: %r' % value)
+
     def test_a_garbage_header_falls_back_to_the_default(self):
         # Including the RFC 9110 HTTP-date form, which we do not parse.
         for value in ['tomorrow please', '', 'Wed, 21 Oct 2026 07:28:00 GMT',
                       '12.5']:
-            with self.subTest(value=value):
-                self.mock_actual.reset_mock()
-                self.mock_sleep.reset_mock()
-                self.mock_actual.side_effect = [
-                    _refusal(headers={'Retry-After': value}), 'success']
+            self.mock_actual.reset_mock()
+            self.mock_sleep.reset_mock()
+            self.mock_actual.side_effect = [
+                _refusal(headers={'Retry-After': value}), 'success']
 
-                client = self._client(retry_transient_capacity=True)
-                self.assertEqual(
-                    'success',
-                    client._request_url('POST', '/instances',
-                                        deadline=time.time() + 600))
-                self.mock_sleep.assert_called_once_with(
-                    apiclient.TRANSIENT_RETRY_DEFAULT)
+            client = self._client(retry_transient_capacity=True)
+            self.assertEqual(
+                'success',
+                client._request_url('POST', '/instances',
+                                    deadline=time.time() + 600),
+                'Retry-After: %r' % value)
+            self._assert_one_sleep(apiclient.TRANSIENT_RETRY_DEFAULT, value)
 
     def test_a_hostile_header_is_clamped(self):
         for value, expected in [('0', apiclient.TRANSIENT_RETRY_MINIMUM),
                                 ('-60', apiclient.TRANSIENT_RETRY_MINIMUM),
                                 ('86400', apiclient.TRANSIENT_RETRY_MAXIMUM)]:
-            with self.subTest(value=value):
-                self.mock_actual.reset_mock()
-                self.mock_sleep.reset_mock()
-                self.mock_actual.side_effect = [
-                    _refusal(headers={'Retry-After': value}), 'success']
+            self.mock_actual.reset_mock()
+            self.mock_sleep.reset_mock()
+            self.mock_actual.side_effect = [
+                _refusal(headers={'Retry-After': value}), 'success']
 
-                client = self._client(retry_transient_capacity=True)
-                self.assertEqual(
-                    'success',
-                    client._request_url('POST', '/instances',
-                                        deadline=time.time() + 600))
-                self.mock_sleep.assert_called_once_with(expected)
+            client = self._client(retry_transient_capacity=True)
+            self.assertEqual(
+                'success',
+                client._request_url('POST', '/instances',
+                                    deadline=time.time() + 600),
+                'Retry-After: %r' % value)
+            self._assert_one_sleep(expected, value)
 
     def test_an_expired_deadline_does_not_retry(self):
         self._forbid_sleep()
