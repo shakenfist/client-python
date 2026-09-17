@@ -123,6 +123,39 @@ of the master plan writes it once, for the server and client halves
 together; until then the `--help` text on `instance execute`, `upload`
 and `download` is what a user has.
 
+## Transient Capacity Refusals
+
+`Client(retry_transient_capacity=True)` waits out a `507` the server has
+marked as transient. What the server publishes and what a caller should
+expect is in `docs/transient-capacity-retry.md`. Four invariants in
+`_request_url()` read as tidy-up targets and are not:
+
+- The gate is the `"transient": true` marker in the body, never the
+  status code. An older server marks nothing and a proxy's HTML error
+  page parses as nothing; neither is a promise that waiting will help,
+  so both must keep raising immediately.
+- The `507` clause clamps its sleep to the remaining budget where the
+  `406` clause immediately above it sleeps a whole second regardless.
+  The two look like they should be harmonised. They should not: a `406`
+  overshoots by at most a second, a 15 second sleep by enough for a
+  caller to notice.
+- `TRANSIENT_RETRY_MINIMUM` exists so that `Retry-After: 0` cannot turn
+  the retry into a busy loop against a server which is already out of
+  capacity. `TRANSIENT_RETRY_MAXIMUM` is 60 because that is the whole
+  budget `_calculate_async_deadline()` gives `ASYNC_PAUSE`, so one sleep
+  can never exceed what the caller asked to wait in total.
+- An `ASYNC_CONTINUE` client passing no deadline of its own never
+  retries, because `_calculate_async_deadline()` returns `-1` and the
+  deadline is already in the past. That is correct -- the strategy means
+  the caller is not waiting for anything -- and is deliberately not
+  special cased.
+
+Only the delta-seconds form of `Retry-After` is parsed. RFC 9110 also
+allows an HTTP-date; not implementing it is a decision, not an
+oversight, because the server sends a fixed `15` and anything
+unparseable falls back to that same number. The flag is library-level:
+`main.py` does not set it, so `sf-client` behaviour is unchanged.
+
 ## Code Conventions
 
 - Python >= 3.7 compatibility (conservative for broad client support)

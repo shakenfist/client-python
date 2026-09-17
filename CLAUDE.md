@@ -61,6 +61,23 @@ or backport packages where necessary.
 
 ## Recent Changes
 
+### Transient Capacity Refusals (2026-09)
+
+The client half of phase 4 of shakenfist's
+`PLAN-transient-capacity-refusals.md`: `APIException` now carries the
+response headers, and `Client(retry_transient_capacity=True)` waits out a
+`507` whose body says `"transient": true`, sleeping for a `Retry-After`
+clamped to `[1, 60]` and bounded by the deadline `_request_url()` already
+had.
+
+The marker in the body is the whole gate -- never the status code, which
+an older server sends unmarked and a proxy sends with an HTML body. The
+`507` clause clamps its sleep to the remaining budget where the adjacent
+`406` clause deliberately does not, and an `ASYNC_CONTINUE` client never
+retries because its deadline is already in the past. The flag is off by
+default and `main.py` does not set it, so `sf-client` is unchanged. See
+`AGENTS.md` and `docs/transient-capacity-retry.md`.
+
 ### Namespace Capacity Claims (2026-08)
 
 Added the five `apiclient` verbs behind

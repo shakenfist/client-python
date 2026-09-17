@@ -181,8 +181,10 @@ STATUS_CODES_TO_ERRORS = {
 
 # How long to wait before retrying a 507 which the server marked as
 # transient but which carried no usable Retry-After header. The server
-# sends a fixed 15 (see PLAN-transient-capacity-refusals phase 4 decision
-# D31), so this only matters when a proxy has stripped the header.
+# sends a fixed 15 (see shakenfist's
+# docs/plans/PLAN-transient-capacity-refusals-phase-04-retry-after.md,
+# decision D31), so this only matters when a proxy has stripped the
+# header.
 TRANSIENT_RETRY_DEFAULT = 15
 
 # A Retry-After we are willing to honour is clamped into this range. The
@@ -535,9 +537,10 @@ class Client:
                     LOG.debug('Deadline exceeded waiting for capacity')
                     raise e
 
+                wait = min(retry_after, remaining)
                 LOG.debug('Transient capacity refusal, retrying in %s seconds'
-                          % min(retry_after, remaining))
-                time.sleep(min(retry_after, remaining))
+                          % wait)
+                time.sleep(wait)
 
     # The metadata calls are repetitive and handled here as a group
     def _get_metadata(self, object_plural, object_reference):
@@ -720,6 +723,12 @@ class Client:
 
         The default of None keeps the historical behaviour, where the wait
         is bounded by the client's async strategy.
+
+        A client built with ``retry_transient_capacity`` spends this same
+        budget waiting out a capacity refusal, before the instance
+        exists. If that exhausts it, the wait below returns an instance
+        still in a transitional state -- see the NOTE there and
+        ``docs/transient-capacity-retry.md``.
         """
         body = {
             # Values all instances care about

@@ -19,7 +19,7 @@ class ApiClientTestCase(testtools.TestCase):
 
         self.capabilities = mock.patch(
             'shakenfist_client.apiclient.Client._collect_capabilities')
-        self.capabilities = self.capabilities.start()
+        self.capabilities.start()
         self.addCleanup(self.capabilities.stop)
 
         self.sleep = mock.patch('time.sleep')
@@ -782,7 +782,7 @@ class ApiClientGetNodesTestCase(testtools.TestCase):
 
         self.capabilities = mock.patch(
             'shakenfist_client.apiclient.Client._collect_capabilities')
-        self.capabilities = self.capabilities.start()
+        self.capabilities.start()
         self.addCleanup(self.capabilities.stop)
 
     @mock.patch('shakenfist_client.apiclient.Client._request_url',
@@ -802,7 +802,7 @@ class ApiClientConfigurationLookupTestCase(testtools.TestCase):
 
         self.capabilities = mock.patch(
             'shakenfist_client.apiclient.Client._collect_capabilities')
-        self.capabilities = self.capabilities.start()
+        self.capabilities.start()
         self.addCleanup(self.capabilities.stop)
 
         # Ensure the config files on the test machine are not consulted
@@ -862,7 +862,7 @@ class InstanceCreateBudgetTestCase(testtools.TestCase):
 
         self.capabilities = mock.patch(
             'shakenfist_client.apiclient.Client._collect_capabilities')
-        self.capabilities = self.capabilities.start()
+        self.capabilities.start()
         self.addCleanup(self.capabilities.stop)
 
         self.sleep = mock.patch('time.sleep')
@@ -964,7 +964,7 @@ class RequestDeadlineTestCase(testtools.TestCase):
 
         self.capabilities = mock.patch(
             'shakenfist_client.apiclient.Client._collect_capabilities')
-        self.capabilities = self.capabilities.start()
+        self.capabilities.start()
         self.addCleanup(self.capabilities.stop)
 
         self.sleep = mock.patch('time.sleep')
@@ -1033,7 +1033,7 @@ class TransientCapacityRetryTestCase(testtools.TestCase):
 
         self.capabilities = mock.patch(
             'shakenfist_client.apiclient.Client._collect_capabilities')
-        self.capabilities = self.capabilities.start()
+        self.capabilities.start()
         self.addCleanup(self.capabilities.stop)
 
         self.sleep = mock.patch('time.sleep')
@@ -1135,34 +1135,36 @@ class TransientCapacityRetryTestCase(testtools.TestCase):
         # Including the RFC 9110 HTTP-date form, which we do not parse.
         for value in ['tomorrow please', '', 'Wed, 21 Oct 2026 07:28:00 GMT',
                       '12.5']:
-            self.mock_actual.reset_mock()
-            self.mock_sleep.reset_mock()
-            self.mock_actual.side_effect = [
-                _refusal(headers={'Retry-After': value}), 'success']
+            with self.subTest(value=value):
+                self.mock_actual.reset_mock()
+                self.mock_sleep.reset_mock()
+                self.mock_actual.side_effect = [
+                    _refusal(headers={'Retry-After': value}), 'success']
 
-            client = self._client(retry_transient_capacity=True)
-            self.assertEqual(
-                'success',
-                client._request_url('POST', '/instances',
-                                    deadline=time.time() + 600))
-            self.mock_sleep.assert_called_once_with(
-                apiclient.TRANSIENT_RETRY_DEFAULT)
+                client = self._client(retry_transient_capacity=True)
+                self.assertEqual(
+                    'success',
+                    client._request_url('POST', '/instances',
+                                        deadline=time.time() + 600))
+                self.mock_sleep.assert_called_once_with(
+                    apiclient.TRANSIENT_RETRY_DEFAULT)
 
     def test_a_hostile_header_is_clamped(self):
         for value, expected in [('0', apiclient.TRANSIENT_RETRY_MINIMUM),
                                 ('-60', apiclient.TRANSIENT_RETRY_MINIMUM),
                                 ('86400', apiclient.TRANSIENT_RETRY_MAXIMUM)]:
-            self.mock_actual.reset_mock()
-            self.mock_sleep.reset_mock()
-            self.mock_actual.side_effect = [
-                _refusal(headers={'Retry-After': value}), 'success']
+            with self.subTest(value=value):
+                self.mock_actual.reset_mock()
+                self.mock_sleep.reset_mock()
+                self.mock_actual.side_effect = [
+                    _refusal(headers={'Retry-After': value}), 'success']
 
-            client = self._client(retry_transient_capacity=True)
-            self.assertEqual(
-                'success',
-                client._request_url('POST', '/instances',
-                                    deadline=time.time() + 600))
-            self.mock_sleep.assert_called_once_with(expected)
+                client = self._client(retry_transient_capacity=True)
+                self.assertEqual(
+                    'success',
+                    client._request_url('POST', '/instances',
+                                        deadline=time.time() + 600))
+                self.mock_sleep.assert_called_once_with(expected)
 
     def test_an_expired_deadline_does_not_retry(self):
         self._forbid_sleep()
@@ -1232,6 +1234,60 @@ class TransientCapacityRetryTestCase(testtools.TestCase):
         self.assertEqual(1, self.mock_actual.call_count)
         self.mock_sleep.assert_not_called()
 
+    def _instance(self, state):
+        response = mock.MagicMock()
+        response.json.return_value = {'uuid': 'notreallyauuid',
+                                      'state': state}
+        return response
+
+    def test_create_instance_retries_a_transient_refusal(self):
+        # The end to end path, rather than _request_url() directly: a
+        # refused create is waited out and the instance comes back.
+        # test_the_post_is_bounded_by_the_same_deadline pins which budget
+        # that spends.
+        self.mock_actual.side_effect = [_refusal(), self._instance('created')]
+
+        client = self._client(retry_transient_capacity=True)
+        i = client.create_instance(
+            'foo', 1, 2048, ['netuuid1'], ['8@cirros'], 'sshkey', None,
+            timeout=600)
+
+        self.assertEqual('created', i['state'])
+        self.assertEqual(2, self.mock_actual.call_count)
+        self.mock_sleep.assert_called_once_with(
+            apiclient.TRANSIENT_RETRY_DEFAULT)
+
+    def test_create_instance_spends_one_budget_on_both_halves(self):
+        # The waiting out and the wait for creation share create_instance's
+        # single deadline, so a refusal which eats the budget leaves the
+        # await with nothing and the caller gets a transitional instance
+        # back rather than an exception. Documented in
+        # docs/transient-capacity-retry.md; asserted here because it is
+        # the surprising half of enabling the flag.
+        clock = [1000.0]
+        self.mock_sleep.side_effect = lambda seconds: clock.__setitem__(
+            0, clock[0] + seconds)
+        self.mock_actual.side_effect = [_refusal(), self._instance('creating')]
+
+        client = self._client(retry_transient_capacity=True)
+        with mock.patch('time.time', lambda: clock[0]):
+            with mock.patch.object(client, 'get_instance') as get_instance:
+                get_instance.return_value = {'uuid': 'notreallyauuid',
+                                             'state': 'creating'}
+                i = client.create_instance(
+                    'foo', 1, 2048, ['netuuid1'], ['8@cirros'], 'sshkey',
+                    None, timeout=apiclient.TRANSIENT_RETRY_DEFAULT)
+
+        self.assertEqual('creating', i['state'])
+        self.assertEqual(2, self.mock_actual.call_count)
+        # The state alone proves nothing -- an await with a budget of its
+        # own would return a transitional instance too, just 600 seconds
+        # later. What says the budget was shared is that the whole call
+        # ended within it: one 15 second wait, then a single poll.
+        self.assertEqual(1, get_instance.call_count)
+        self.assertLessEqual(clock[0], 1000.0 +
+                             apiclient.TRANSIENT_RETRY_DEFAULT + 1)
+
 
 # A structurally valid JWT: three base64url segments, the header being
 # base64url('{"alg":"none"}'). The redaction keys off the shape of the
@@ -1272,6 +1328,20 @@ class VDIConsoleProxyFileTestCase(testtools.TestCase):
     and main.py's logging filter never sees an exception the interpreter
     prints as a traceback. So these check the exception, not the logs.
     """
+
+    def setUp(self):
+        super().setUp()
+
+        # Client.__init__ calls this, and with base_url pointing at a host
+        # which does not resolve it raises. Every other class here patches
+        # it; this one used to run on a patch another class had leaked,
+        # because its addCleanup stopped a MagicMock rather than the
+        # patcher, so these tests only passed when something else ran
+        # first in the same worker.
+        self.capabilities = mock.patch(
+            'shakenfist_client.apiclient.Client._collect_capabilities')
+        self.capabilities.start()
+        self.addCleanup(self.capabilities.stop)
 
     def _client(self):
         return apiclient.Client(suppress_configuration_lookup=True,
@@ -1341,7 +1411,7 @@ class StatusCodeMappingTestCase(testtools.TestCase):
 
         self.capabilities = mock.patch(
             'shakenfist_client.apiclient.Client._collect_capabilities')
-        self.capabilities = self.capabilities.start()
+        self.capabilities.start()
         self.addCleanup(self.capabilities.stop)
 
     def _client(self):
@@ -1350,10 +1420,14 @@ class StatusCodeMappingTestCase(testtools.TestCase):
         client.cached_auth = 'Bearer notreallyatoken'
         return client
 
-    def _respond(self, client, status_code):
+    def _respond(self, client, status_code, headers=None):
         response = mock.MagicMock()
         response.status_code = status_code
         response.text = '{"error": "nope"}'
+        # A real dict, not the MagicMock attribute: an assertion about
+        # header propagation made against a MagicMock passes whether or
+        # not the headers were propagated at all.
+        response.headers = headers if headers is not None else {}
         client.session = mock.MagicMock()
         client.session.request.return_value = response
 
@@ -1382,6 +1456,45 @@ class StatusCodeMappingTestCase(testtools.TestCase):
             apiclient.APIException,
             client._actual_request_url, 'POST', '/auth/namespaces/ns/claims')
         self.assertEqual(418, e.status_code)
+
+    # The three raise sites which must carry the response headers. Every
+    # test in TransientCapacityRetryTestCase fabricates its own exception,
+    # so without these the wiring the whole retry rests on is untested:
+    # dropping headers=r.headers would leave that class green and make
+    # every refusal fall back to TRANSIENT_RETRY_DEFAULT.
+    def test_a_mapped_status_carries_the_response_headers(self):
+        client = self._client()
+        self._respond(client, 507, headers={'Retry-After': '7',
+                                            'X-Request-ID': 'abc'})
+
+        e = self.assertRaises(
+            apiclient.InsufficientResourcesException,
+            client._actual_request_url, 'POST', '/instances')
+        self.assertEqual('7', e.headers['Retry-After'])
+
+    def test_an_unmapped_status_carries_the_response_headers(self):
+        client = self._client()
+        self._respond(client, 418, headers={'Retry-After': '7'})
+
+        e = self.assertRaises(
+            apiclient.APIException,
+            client._actual_request_url, 'POST', '/instances')
+        self.assertEqual('7', e.headers['Retry-After'])
+
+    def test_an_authentication_failure_carries_the_response_headers(self):
+        # _authenticate() has its own raise site, and it calls
+        # requests.request() directly rather than going through a session.
+        client = self._client()
+        response = mock.MagicMock()
+        response.status_code = 401
+        response.text = '{"error": "nope"}'
+        response.headers = {'X-Request-ID': 'abc'}
+
+        with mock.patch('shakenfist_client.apiclient.requests.request',
+                        return_value=response):
+            e = self.assertRaises(apiclient.UnauthenticatedException,
+                                  client._authenticate)
+        self.assertEqual('abc', e.headers['X-Request-ID'])
 
 
 class _FakeClock:
@@ -2131,8 +2244,9 @@ class AgentOperationDeadlineTestCase(testtools.TestCase):
 class APIExceptionTestCase(testtools.TestCase):
     # Downstream repositories construct APIException with five positional
     # arguments and no headers, so that form must keep working even though
-    # this phase adds a headers keyword. See
-    # PLAN-transient-capacity-refusals-phase-04-retry-after.md step 4d.
+    # this phase adds a headers keyword. See shakenfist's
+    # docs/plans/PLAN-transient-capacity-refusals-phase-04-retry-after.md,
+    # step 4d.
     def test_old_five_positional_form_still_works(self):
         exc = apiclient.APIException('m', 'GET', 'u', 507, 't')
 
