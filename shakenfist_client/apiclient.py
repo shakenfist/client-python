@@ -196,6 +196,19 @@ TRANSIENT_RETRY_DEFAULT = 15
 TRANSIENT_RETRY_MINIMUM = 1
 TRANSIENT_RETRY_MAXIMUM = 60
 
+# How many times a single call will send the same refused request. A
+# deadline alone is not a bound a caller can reason about: ASYNC_BLOCK's
+# is an hour, which at the server's fixed 15 seconds is around 240
+# replays, and the server creates an instance object and allocates its
+# addresses before the scheduler runs, so each of those replays leaves a
+# record behind for the cluster to reap. Five is what a 60 second
+# ASYNC_PAUSE budget could already spend -- four waits and a final
+# attempt -- so no waiting strategy loses an attempt it used to have,
+# and the story this retry exists for (a neighbouring instance is being
+# torn down right now; phase 3 measured capacity returning 5.3-5.6
+# seconds after a domain is destroyed) does not need more.
+TRANSIENT_RETRY_MAXIMUM_ATTEMPTS = 5
+
 
 def _calculate_async_deadline(strategy):
     if strategy == ASYNC_CONTINUE:
@@ -459,6 +472,8 @@ class Client:
         if deadline is None:
             deadline = time.time() + _calculate_async_deadline(
                 self.async_strategy)
+
+        transient_attempts = 0
         while True:
             try:
                 try:
@@ -504,6 +519,18 @@ class Client:
                     # marker, so not a retry.
                     raise e
                 if not isinstance(body, dict) or not body.get('transient'):
+                    raise e
+
+                # Two bounds, not one, and they are not redundant: the
+                # deadline is what the caller asked to wait, the attempt
+                # cap is what replaying costs the cluster. Whichever is
+                # reached first raises the refusal the server actually
+                # sent, so a caller sees the same exception it would have
+                # seen with the flag off.
+                transient_attempts += 1
+                if transient_attempts >= TRANSIENT_RETRY_MAXIMUM_ATTEMPTS:
+                    LOG.debug('Transient capacity refusal, %d attempts spent'
+                              % transient_attempts)
                     raise e
 
                 # RFC 9110 allows Retry-After to be either delta-seconds or

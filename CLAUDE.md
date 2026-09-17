@@ -67,8 +67,12 @@ The client half of phase 4 of shakenfist's
 `PLAN-transient-capacity-refusals.md`: `APIException` now carries the
 response headers, and `Client(retry_transient_capacity=True)` waits out a
 `507` whose body says `"transient": true`, sleeping for a `Retry-After`
-clamped to `[1, 60]` and bounded by the deadline `_request_url()` already
-had.
+clamped to `[1, 60]` and bounded by two things: the deadline
+`_request_url()` already had, and `TRANSIENT_RETRY_MAXIMUM_ATTEMPTS`.
+Both bounds exist because they measure different costs -- the caller's
+patience, and the discarded instance record each replay leaves on the
+cluster -- and the cap is 5 because that is what a 60 second
+`ASYNC_PAUSE` budget could already spend.
 
 The marker in the body is the whole gate -- never the status code, which
 an older server sends unmarked and a proxy sends with an HTML body. The

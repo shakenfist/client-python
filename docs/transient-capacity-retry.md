@@ -46,13 +46,17 @@ particular:
   Only the integer seconds form of the header is understood; the HTTP
   date form falls back to the default of 15 seconds, which is what the
   Shaken Fist API sends anyway.
-- **The retry is bounded by the call's deadline, and by nothing else.**
-  There is no cap on attempts, so the deadline and the wait between
-  attempts together decide how many there are. A `create_instance()`
-  with no `timeout` on a default `ASYNC_BLOCK` client has an hour, which
-  at the server's fixed 15 seconds is up to ~240 POSTs and ~239 errored
-  instance records (see the last bullet) from one library call. Pass a
-  `timeout` you would be willing to wait.
+- **There are two bounds: five attempts, and the call's deadline.**
+  Whichever is reached first raises the refusal the server sent, so you
+  see the same exception you would have seen with the flag off. The
+  attempt cap is there because each replay costs the cluster a discarded
+  instance record (see the last bullet), and a deadline alone is a poor
+  bound on that: an `ASYNC_BLOCK` client with no `timeout` has an hour,
+  which at the server's fixed 15 seconds would be around 240 of them
+  from one library call. Five is what a 60 second `ASYNC_PAUSE` budget
+  could already spend, so it costs no waiting strategy an attempt. At
+  the server's 15 seconds it means a call waits at most about a minute
+  for capacity.
 - **The deadline itself** is the `timeout` argument to
   `create_instance()` when you pass one, and otherwise comes from the
   client's async strategy: 3600 seconds for
@@ -83,7 +87,8 @@ particular:
   scheduler runs, so a refusal moves that object to an `-error` state
   and queues it for deletion asynchronously. A replay is a new instance
   with a new UUID, not a retry of the old one, so N attempts leave N-1
-  errored instances behind for the cluster to reap. Two consequences
+  errored instances behind for the cluster to reap -- at most four,
+  given the attempt cap. Two consequences
   worth knowing: the replay cannot collide with its own earlier attempt
   (instance names need not be unique, and the UUID is the server's to
   assign), and an instance list taken during a long wait shows the

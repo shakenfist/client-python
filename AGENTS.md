@@ -127,7 +127,7 @@ and `download` is what a user has.
 
 `Client(retry_transient_capacity=True)` waits out a `507` the server has
 marked as transient. What the server publishes and what a caller should
-expect is in `docs/transient-capacity-retry.md`. Four invariants in
+expect is in `docs/transient-capacity-retry.md`. These invariants in
 `_request_url()` read as tidy-up targets and are not:
 
 - The gate is the `"transient": true` marker in the body, never the
@@ -139,6 +139,15 @@ expect is in `docs/transient-capacity-retry.md`. Four invariants in
   The two look like they should be harmonised. They should not: a `406`
   overshoots by at most a second, a 15 second sleep by enough for a
   caller to notice.
+- There are two bounds, and they are not redundant.
+  `TRANSIENT_RETRY_MAXIMUM_ATTEMPTS` is what replaying costs the
+  cluster, the deadline is what the caller asked to wait. Without the
+  cap an hour of `ASYNC_BLOCK` is ~240 replays of a request the server
+  creates and discards an instance record for each time; without the
+  deadline a caller's budget would not be honoured at all. The cap is 5
+  because that is what a 60 second `ASYNC_PAUSE` budget could already
+  spend, so adding it took no attempt away from any waiting strategy.
+  Whichever bound is reached first re-raises the server's own refusal.
 - The deadline bounds the sleeps, not the request which follows the
   last of them. When less than `Retry-After` remains the sleep is
   truncated and one more attempt is made, so a call can return a round

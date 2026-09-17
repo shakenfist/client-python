@@ -1204,7 +1204,7 @@ class TransientCapacityRetryTestCase(testtools.TestCase):
         self.assertGreater(slept, 4)
         self.assertLessEqual(slept, 5)
 
-    def test_the_deadline_bounds_a_refusal_which_never_stops(self):
+    def _never_stops(self, deadline):
         clock = [1000.0]
         self.mock_actual.side_effect = _refusal()
         self.mock_sleep.side_effect = lambda seconds: clock.__setitem__(
@@ -1214,12 +1214,30 @@ class TransientCapacityRetryTestCase(testtools.TestCase):
         with mock.patch('time.time', lambda: clock[0]):
             self.assertRaises(
                 apiclient.InsufficientResourcesException,
-                client._request_url, 'POST', '/instances', deadline=1060.0)
+                client._request_url, 'POST', '/instances', deadline=deadline)
 
-        # A 60 second budget and a 15 second wait each time: four waits,
-        # and then the fifth refusal is raised rather than waited out.
-        self.assertEqual(4, self.mock_sleep.call_count)
-        self.assertEqual(5, self.mock_actual.call_count)
+    def test_the_deadline_bounds_a_refusal_which_never_stops(self):
+        # A 45 second budget and a 15 second wait each time: three waits,
+        # and then the fourth refusal is raised rather than waited out.
+        # Deliberately short of TRANSIENT_RETRY_MAXIMUM_ATTEMPTS, so that
+        # this asserts the deadline and its sibling below asserts the cap,
+        # rather than both passing on whichever bound is tighter.
+        self._never_stops(1045.0)
+
+        self.assertEqual(3, self.mock_sleep.call_count)
+        self.assertEqual(4, self.mock_actual.call_count)
+        self.assertGreater(apiclient.TRANSIENT_RETRY_MAXIMUM_ATTEMPTS, 4)
+
+    def test_the_attempt_cap_bounds_a_refusal_which_never_stops(self):
+        # An hour of ASYNC_BLOCK is 240 fifteen second waits, and each
+        # replay costs the cluster a discarded instance record, so the
+        # attempt cap and not the deadline is what stops this.
+        self._never_stops(1000.0 + 3600)
+
+        self.assertEqual(apiclient.TRANSIENT_RETRY_MAXIMUM_ATTEMPTS,
+                         self.mock_actual.call_count)
+        self.assertEqual(apiclient.TRANSIENT_RETRY_MAXIMUM_ATTEMPTS - 1,
+                         self.mock_sleep.call_count)
 
     def test_an_async_continue_client_never_retries(self):
         # _calculate_async_deadline(ASYNC_CONTINUE) is -1, so a caller
