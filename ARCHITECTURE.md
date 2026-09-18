@@ -89,6 +89,17 @@ REST API:
   instance's console data. The timing parameters are gated on the
   `agentoperation-deadlines` capability and fail closed.
 
+- **Transient capacity retry**: `Client(retry_transient_capacity=True)`
+  waits out a `507` whose body carries `"transient": true`, sleeping for
+  a `Retry-After` clamped to `[TRANSIENT_RETRY_MINIMUM,
+  TRANSIENT_RETRY_MAXIMUM]` and bounded by the calling deadline
+  `_request_url()` was already given. Off by default, and unreachable
+  from the CLI. `APIException` carries the response headers
+  (`headers=`, keyword with a default so the five positional form
+  downstream repositories use keeps working) so the exception handler
+  can read that header at all. `docs/transient-capacity-retry.md`
+  describes what the server publishes and what the retry costs.
+
 ### CLI (`main.py`)
 
 Built with [Click](https://click.palletsprojects.com/):

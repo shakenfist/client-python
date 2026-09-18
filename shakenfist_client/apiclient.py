@@ -62,12 +62,13 @@ class TimeoutException(Exception):
 
 
 class APIException(Exception):
-    def __init__(self, message, method, url, status_code, text):
+    def __init__(self, message, method, url, status_code, text, headers=None):
         self.message = message
         self.method = method
         self.url = url
         self.status_code = status_code
         self.text = text
+        self.headers = headers or {}
 
 
 class RequestMalformedException(APIException):
@@ -178,6 +179,37 @@ STATUS_CODES_TO_ERRORS = {
 }
 
 
+# How long to wait before retrying a 507 which the server marked as
+# transient but which carried no usable Retry-After header. The server
+# sends a fixed 15 (see shakenfist's
+# docs/plans/PLAN-transient-capacity-refusals-phase-04-retry-after.md,
+# decision D31), so this only matters when a proxy has stripped the
+# header.
+TRANSIENT_RETRY_DEFAULT = 15
+
+# A Retry-After we are willing to honour is clamped into this range. The
+# lower bound stops a "Retry-After: 0" from turning the retry into a busy
+# loop against a server which is already out of capacity. The upper bound
+# means a single sleep can never exceed the entire 60 second budget
+# _calculate_async_deadline() gives ASYNC_PAUSE, so a hostile or broken
+# header cannot park a caller for longer than it asked to wait in total.
+TRANSIENT_RETRY_MINIMUM = 1
+TRANSIENT_RETRY_MAXIMUM = 60
+
+# How many times a single call will send the same refused request. A
+# deadline alone is not a bound a caller can reason about: ASYNC_BLOCK's
+# is an hour, which at the server's fixed 15 seconds is around 240
+# replays, and the server creates an instance object and allocates its
+# addresses before the scheduler runs, so each of those replays leaves a
+# record behind for the cluster to reap. Five is what a 60 second
+# ASYNC_PAUSE budget could already spend -- four waits and a final
+# attempt -- so no waiting strategy loses an attempt it used to have,
+# and the story this retry exists for (a neighbouring instance is being
+# torn down right now; phase 3 measured capacity returning 5.3-5.6
+# seconds after a domain is destroyed) does not need more.
+TRANSIENT_RETRY_MAXIMUM_ATTEMPTS = 5
+
+
 def _calculate_async_deadline(strategy):
     if strategy == ASYNC_CONTINUE:
         return -1
@@ -217,7 +249,7 @@ class Client:
     def __init__(self, base_url=None, verbose=False,
                  namespace=None, key=None, sync_request_timeout=300,
                  suppress_configuration_lookup=False, logger=None,
-                 async_strategy=ASYNC_BLOCK):
+                 async_strategy=ASYNC_BLOCK, retry_transient_capacity=False):
         global LOG
         if verbose:
             LOG.setLevel(logging.DEBUG)
@@ -291,6 +323,14 @@ class Client:
         self.namespace = namespace
         self.key = key
         self.async_strategy = async_strategy
+
+        # Opt in to waiting out a capacity refusal which the server has
+        # marked as transient. Off by default: a 507 is a refusal, and a
+        # caller which has not asked to wait should be told immediately
+        # rather than silently spending its deadline inside one call. See
+        # docs/transient-capacity-retry.md.
+        self.retry_transient_capacity = retry_transient_capacity
+
         LOG.debug('Client configured with apiurl of %s for namespace %s '
                   'and async strategy %s'
                   % (self.base_url, self.namespace, self.async_strategy))
@@ -384,14 +424,16 @@ class Client:
 
         if r.status_code in STATUS_CODES_TO_ERRORS:
             raise STATUS_CODES_TO_ERRORS[r.status_code](
-                'API request failed', method, url, r.status_code, r.text)
+                'API request failed', method, url, r.status_code, r.text,
+                headers=r.headers)
 
         acceptable = [200, 202]
         if not allow_redirects:
             acceptable.append(301)
         if r.status_code not in acceptable:
             raise APIException(
-                'API request failed', method, url, r.status_code, r.text)
+                'API request failed', method, url, r.status_code, r.text,
+                headers=r.headers)
         return r
 
     def _authenticate(self):
@@ -406,7 +448,7 @@ class Client:
                              timeout=self.sync_request_timeout)
         if r.status_code != 200:
             raise UnauthenticatedException('API unauthenticated', 'POST', auth_url,
-                                           r.status_code, r.text)
+                                           r.status_code, r.text, headers=r.headers)
         return 'Bearer %s' % r.json()['access_token']
 
     def _request_url(self, method, url, data=None, request_body_is_binary=False,
@@ -430,6 +472,8 @@ class Client:
         if deadline is None:
             deadline = time.time() + _calculate_async_deadline(
                 self.async_strategy)
+
+        transient_attempts = 0
         while True:
             try:
                 try:
@@ -456,6 +500,74 @@ class Client:
 
                 LOG.debug('Dependencies not ready, retrying')
                 time.sleep(1)
+
+            except InsufficientResourcesException as e:
+                # The API server returns a 507 when it could not find a
+                # home for the request. Some of those refusals are worth
+                # waiting out and some are not, so retry only when the
+                # caller opted in and the server said so itself. Never
+                # retry on the status code alone: an older server's 507
+                # carries no marker at all, and an unmarked 507 is not a
+                # promise that waiting will help.
+                if not self.retry_transient_capacity:
+                    raise e
+
+                try:
+                    body = json.loads(e.text)
+                except (TypeError, ValueError):
+                    # A proxy's HTML 507, or a truncated body. Not a
+                    # marker, so not a retry.
+                    raise e
+                if not isinstance(body, dict) or not body.get('transient'):
+                    raise e
+
+                # Two bounds, not one, and they are not redundant: the
+                # deadline is what the caller asked to wait, the attempt
+                # cap is what replaying costs the cluster. Whichever is
+                # reached first raises the refusal the server actually
+                # sent, so a caller sees the same exception it would have
+                # seen with the flag off.
+                transient_attempts += 1
+                if transient_attempts >= TRANSIENT_RETRY_MAXIMUM_ATTEMPTS:
+                    LOG.debug('Transient capacity refusal, %d attempts spent'
+                              % transient_attempts)
+                    raise e
+
+                # RFC 9110 allows Retry-After to be either delta-seconds or
+                # an HTTP-date. Only delta-seconds is implemented here, and
+                # that is deliberate rather than an oversight: our server
+                # only ever sends the integer 15, and anything we cannot
+                # parse -- including a date -- falls back to a default which
+                # is that same number.
+                try:
+                    retry_after = int(e.headers.get('Retry-After', ''))
+                except (TypeError, ValueError):
+                    retry_after = TRANSIENT_RETRY_DEFAULT
+                retry_after = max(TRANSIENT_RETRY_MINIMUM,
+                                  min(retry_after, TRANSIENT_RETRY_MAXIMUM))
+
+                # Unlike the 406 clause above, which checks the deadline and
+                # then sleeps a whole second regardless, this clamps its
+                # sleep to what is left of the budget. That difference is on
+                # purpose and should not be "fixed": a 406 overshoots the
+                # deadline by at most a second, whereas a 15 second sleep
+                # would overshoot by enough for a caller to notice.
+                #
+                # Note that _calculate_async_deadline(ASYNC_CONTINUE)
+                # returns -1, so a client using that strategy and not
+                # passing an explicit deadline has a deadline already in the
+                # past and never retries here. That is correct -- that
+                # strategy means the caller is not waiting for anything --
+                # and so it is not special cased.
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    LOG.debug('Deadline exceeded waiting for capacity')
+                    raise e
+
+                wait = min(retry_after, remaining)
+                LOG.debug('Transient capacity refusal, retrying in %s seconds'
+                          % wait)
+                time.sleep(wait)
 
     # The metadata calls are repetitive and handled here as a group
     def _get_metadata(self, object_plural, object_reference):
@@ -638,6 +750,12 @@ class Client:
 
         The default of None keeps the historical behaviour, where the wait
         is bounded by the client's async strategy.
+
+        A client built with ``retry_transient_capacity`` spends this same
+        budget waiting out a capacity refusal, before the instance
+        exists. If that exhausts it, the wait below returns an instance
+        still in a transitional state -- see the NOTE there and
+        ``docs/transient-capacity-retry.md``.
         """
         body = {
             # Values all instances care about

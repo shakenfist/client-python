@@ -19,7 +19,7 @@ class ApiClientTestCase(testtools.TestCase):
 
         self.capabilities = mock.patch(
             'shakenfist_client.apiclient.Client._collect_capabilities')
-        self.capabilities = self.capabilities.start()
+        self.capabilities.start()
         self.addCleanup(self.capabilities.stop)
 
         self.sleep = mock.patch('time.sleep')
@@ -827,7 +827,7 @@ class ApiClientGetNodesTestCase(testtools.TestCase):
 
         self.capabilities = mock.patch(
             'shakenfist_client.apiclient.Client._collect_capabilities')
-        self.capabilities = self.capabilities.start()
+        self.capabilities.start()
         self.addCleanup(self.capabilities.stop)
 
     @mock.patch('shakenfist_client.apiclient.Client._request_url',
@@ -847,7 +847,7 @@ class ApiClientConfigurationLookupTestCase(testtools.TestCase):
 
         self.capabilities = mock.patch(
             'shakenfist_client.apiclient.Client._collect_capabilities')
-        self.capabilities = self.capabilities.start()
+        self.capabilities.start()
         self.addCleanup(self.capabilities.stop)
 
         # Ensure the config files on the test machine are not consulted
@@ -907,7 +907,7 @@ class InstanceCreateBudgetTestCase(testtools.TestCase):
 
         self.capabilities = mock.patch(
             'shakenfist_client.apiclient.Client._collect_capabilities')
-        self.capabilities = self.capabilities.start()
+        self.capabilities.start()
         self.addCleanup(self.capabilities.stop)
 
         self.sleep = mock.patch('time.sleep')
@@ -1009,7 +1009,7 @@ class RequestDeadlineTestCase(testtools.TestCase):
 
         self.capabilities = mock.patch(
             'shakenfist_client.apiclient.Client._collect_capabilities')
-        self.capabilities = self.capabilities.start()
+        self.capabilities.start()
         self.addCleanup(self.capabilities.stop)
 
         self.sleep = mock.patch('time.sleep')
@@ -1052,6 +1052,315 @@ class RequestDeadlineTestCase(testtools.TestCase):
         self.assertEqual(2, self.mock_actual.call_count)
 
 
+TRANSIENT_BODY = json.dumps(
+    {'error': 'no node had capacity for this instance', 'status': 507,
+     'stage': 'capacity_guard', 'transient': True})
+DURABLE_BODY = json.dumps(
+    {'error': 'no node had capacity for this instance', 'status': 507})
+
+
+def _refusal(body=TRANSIENT_BODY, headers=None):
+    return apiclient.InsufficientResourcesException(
+        'API request failed', 'POST', '/instances', 507, body,
+        headers=headers or {})
+
+
+class TransientCapacityRetryTestCase(testtools.TestCase):
+    """The opt-in retry of a 507 the server marked as transient."""
+
+    def setUp(self):
+        super().setUp()
+
+        self.actual = mock.patch(
+            'shakenfist_client.apiclient.Client._actual_request_url')
+        self.mock_actual = self.actual.start()
+        self.addCleanup(self.actual.stop)
+
+        self.capabilities = mock.patch(
+            'shakenfist_client.apiclient.Client._collect_capabilities')
+        self.capabilities.start()
+        self.addCleanup(self.capabilities.stop)
+
+        self.sleep = mock.patch('time.sleep')
+        self.mock_sleep = self.sleep.start()
+        self.addCleanup(self.sleep.stop)
+
+    def _client(self, retry_transient_capacity=False):
+        client = apiclient.Client(
+            suppress_configuration_lookup=True,
+            base_url='http://localhost:13000',
+            async_strategy=apiclient.ASYNC_BLOCK,
+            retry_transient_capacity=retry_transient_capacity)
+        client.cached_auth = 'Bearer notreallyatoken'
+        return client
+
+    def _forbid_sleep(self):
+        # A test which asserts that no retry happens should fail rather
+        # than hang if one does: with time.sleep mocked out, a retry loop
+        # never advances the clock towards its deadline.
+        self.mock_sleep.side_effect = AssertionError(
+            'this refusal should not have been waited out')
+
+    def test_the_flag_defaults_to_off(self):
+        self.assertFalse(self._client().retry_transient_capacity)
+
+    def test_off_by_default_a_marked_refusal_raises_immediately(self):
+        # A caller which did not ask to wait is told about the refusal
+        # straight away, however transient the server says it is.
+        self._forbid_sleep()
+        self.mock_actual.side_effect = _refusal(
+            headers={'Retry-After': '15'})
+
+        client = self._client()
+        self.assertRaises(
+            apiclient.InsufficientResourcesException,
+            client._request_url, 'POST', '/instances',
+            deadline=time.time() + 600)
+
+        self.assertEqual(1, self.mock_actual.call_count)
+        self.mock_sleep.assert_not_called()
+
+    def test_on_an_unmarked_refusal_raises_immediately(self):
+        # An older server's 507 has no marker, and an unmarked 507 is not
+        # a promise that waiting will help.
+        self._forbid_sleep()
+        self.mock_actual.side_effect = _refusal(body=DURABLE_BODY)
+
+        client = self._client(retry_transient_capacity=True)
+        self.assertRaises(
+            apiclient.InsufficientResourcesException,
+            client._request_url, 'POST', '/instances',
+            deadline=time.time() + 600)
+
+        self.assertEqual(1, self.mock_actual.call_count)
+        self.mock_sleep.assert_not_called()
+
+    def test_on_an_unparseable_body_raises_immediately(self):
+        # A proxy's HTML 507 carries no marker either.
+        self._forbid_sleep()
+        self.mock_actual.side_effect = _refusal(
+            body='<html><body>Insufficient Storage</body></html>')
+
+        client = self._client(retry_transient_capacity=True)
+        self.assertRaises(
+            apiclient.InsufficientResourcesException,
+            client._request_url, 'POST', '/instances',
+            deadline=time.time() + 600)
+
+        self.assertEqual(1, self.mock_actual.call_count)
+        self.mock_sleep.assert_not_called()
+
+    def test_on_a_marked_refusal_retries_and_honours_the_header(self):
+        # Seven is deliberately not TRANSIENT_RETRY_DEFAULT, so this
+        # assertion can tell the header from the fallback.
+        self.mock_actual.side_effect = [
+            _refusal(headers={'Retry-After': '7'}), 'success']
+
+        client = self._client(retry_transient_capacity=True)
+        r = client._request_url('POST', '/instances',
+                                deadline=time.time() + 600)
+
+        self.assertEqual('success', r)
+        self.assertEqual(2, self.mock_actual.call_count)
+        self.mock_sleep.assert_called_once_with(7)
+        self.assertNotEqual(apiclient.TRANSIENT_RETRY_DEFAULT, 7)
+
+    def test_a_missing_header_falls_back_to_the_default(self):
+        self.mock_actual.side_effect = [_refusal(), 'success']
+
+        client = self._client(retry_transient_capacity=True)
+        self.assertEqual(
+            'success',
+            client._request_url('POST', '/instances',
+                                deadline=time.time() + 600))
+        self.mock_sleep.assert_called_once_with(
+            apiclient.TRANSIENT_RETRY_DEFAULT)
+
+    # The two loops below name the header value in their assertions rather
+    # than wrapping each case in subTest. subTest is inert here:
+    # unittest's implementation short circuits when self._outcome is None,
+    # and testtools' RunTest replaces run() and never sets it, so a
+    # failure would report neither which value broke nor run the
+    # remaining cases.
+    def _assert_one_sleep(self, expected, value):
+        self.assertEqual([mock.call(expected)], self.mock_sleep.call_args_list,
+                         'Retry-After: %r' % value)
+
+    def test_a_garbage_header_falls_back_to_the_default(self):
+        # Including the RFC 9110 HTTP-date form, which we do not parse.
+        for value in ['tomorrow please', '', 'Wed, 21 Oct 2026 07:28:00 GMT',
+                      '12.5']:
+            self.mock_actual.reset_mock()
+            self.mock_sleep.reset_mock()
+            self.mock_actual.side_effect = [
+                _refusal(headers={'Retry-After': value}), 'success']
+
+            client = self._client(retry_transient_capacity=True)
+            self.assertEqual(
+                'success',
+                client._request_url('POST', '/instances',
+                                    deadline=time.time() + 600),
+                'Retry-After: %r' % value)
+            self._assert_one_sleep(apiclient.TRANSIENT_RETRY_DEFAULT, value)
+
+    def test_a_hostile_header_is_clamped(self):
+        for value, expected in [('0', apiclient.TRANSIENT_RETRY_MINIMUM),
+                                ('-60', apiclient.TRANSIENT_RETRY_MINIMUM),
+                                ('86400', apiclient.TRANSIENT_RETRY_MAXIMUM)]:
+            self.mock_actual.reset_mock()
+            self.mock_sleep.reset_mock()
+            self.mock_actual.side_effect = [
+                _refusal(headers={'Retry-After': value}), 'success']
+
+            client = self._client(retry_transient_capacity=True)
+            self.assertEqual(
+                'success',
+                client._request_url('POST', '/instances',
+                                    deadline=time.time() + 600),
+                'Retry-After: %r' % value)
+            self._assert_one_sleep(expected, value)
+
+    def test_an_expired_deadline_does_not_retry(self):
+        self._forbid_sleep()
+        self.mock_actual.side_effect = _refusal(
+            headers={'Retry-After': '15'})
+
+        client = self._client(retry_transient_capacity=True)
+        self.assertRaises(
+            apiclient.InsufficientResourcesException,
+            client._request_url, 'POST', '/instances',
+            deadline=time.time() - 1)
+
+        self.assertEqual(1, self.mock_actual.call_count)
+        self.mock_sleep.assert_not_called()
+
+    def test_the_sleep_is_clamped_to_the_remaining_deadline(self):
+        # Unlike the 406 clause, a 507 wait never overshoots the budget.
+        self.mock_actual.side_effect = [
+            _refusal(headers={'Retry-After': '30'}), 'success']
+
+        client = self._client(retry_transient_capacity=True)
+        self.assertEqual(
+            'success',
+            client._request_url('POST', '/instances',
+                                deadline=time.time() + 5))
+
+        slept = self.mock_sleep.call_args[0][0]
+        self.assertGreater(slept, 4)
+        self.assertLessEqual(slept, 5)
+
+    def _never_stops(self, deadline):
+        clock = [1000.0]
+        self.mock_actual.side_effect = _refusal()
+        self.mock_sleep.side_effect = lambda seconds: clock.__setitem__(
+            0, clock[0] + seconds)
+
+        client = self._client(retry_transient_capacity=True)
+        with mock.patch('time.time', lambda: clock[0]):
+            self.assertRaises(
+                apiclient.InsufficientResourcesException,
+                client._request_url, 'POST', '/instances', deadline=deadline)
+
+    def test_the_deadline_bounds_a_refusal_which_never_stops(self):
+        # A 45 second budget and a 15 second wait each time: three waits,
+        # and then the fourth refusal is raised rather than waited out.
+        # Deliberately short of TRANSIENT_RETRY_MAXIMUM_ATTEMPTS, so that
+        # this asserts the deadline and its sibling below asserts the cap,
+        # rather than both passing on whichever bound is tighter.
+        self._never_stops(1045.0)
+
+        self.assertEqual(3, self.mock_sleep.call_count)
+        self.assertEqual(4, self.mock_actual.call_count)
+        self.assertGreater(apiclient.TRANSIENT_RETRY_MAXIMUM_ATTEMPTS, 4)
+
+    def test_the_attempt_cap_bounds_a_refusal_which_never_stops(self):
+        # An hour of ASYNC_BLOCK is 240 fifteen second waits, and each
+        # replay costs the cluster a discarded instance record, so the
+        # attempt cap and not the deadline is what stops this.
+        self._never_stops(1000.0 + 3600)
+
+        self.assertEqual(apiclient.TRANSIENT_RETRY_MAXIMUM_ATTEMPTS,
+                         self.mock_actual.call_count)
+        self.assertEqual(apiclient.TRANSIENT_RETRY_MAXIMUM_ATTEMPTS - 1,
+                         self.mock_sleep.call_count)
+
+    def test_an_async_continue_client_never_retries(self):
+        # _calculate_async_deadline(ASYNC_CONTINUE) is -1, so a caller
+        # which passes no deadline of its own has one already in the past.
+        # That is the documented behaviour, not an accident.
+        self._forbid_sleep()
+        self.mock_actual.side_effect = _refusal(
+            headers={'Retry-After': '15'})
+
+        client = apiclient.Client(
+            suppress_configuration_lookup=True,
+            base_url='http://localhost:13000',
+            async_strategy=apiclient.ASYNC_CONTINUE,
+            retry_transient_capacity=True)
+        client.cached_auth = 'Bearer notreallyatoken'
+
+        self.assertRaises(
+            apiclient.InsufficientResourcesException,
+            client._request_url, 'POST', '/instances')
+
+        self.assertEqual(1, self.mock_actual.call_count)
+        self.mock_sleep.assert_not_called()
+
+    def _instance(self, state):
+        response = mock.MagicMock()
+        response.json.return_value = {'uuid': 'notreallyauuid',
+                                      'state': state}
+        return response
+
+    def test_create_instance_retries_a_transient_refusal(self):
+        # The end to end path, rather than _request_url() directly: a
+        # refused create is waited out and the instance comes back.
+        # test_the_post_is_bounded_by_the_same_deadline pins which budget
+        # that spends.
+        self.mock_actual.side_effect = [_refusal(), self._instance('created')]
+
+        client = self._client(retry_transient_capacity=True)
+        i = client.create_instance(
+            'foo', 1, 2048, ['netuuid1'], ['8@cirros'], 'sshkey', None,
+            timeout=600)
+
+        self.assertEqual('created', i['state'])
+        self.assertEqual(2, self.mock_actual.call_count)
+        self.mock_sleep.assert_called_once_with(
+            apiclient.TRANSIENT_RETRY_DEFAULT)
+
+    def test_create_instance_spends_one_budget_on_both_halves(self):
+        # The waiting out and the wait for creation share create_instance's
+        # single deadline, so a refusal which eats the budget leaves the
+        # await with nothing and the caller gets a transitional instance
+        # back rather than an exception. Documented in
+        # docs/transient-capacity-retry.md; asserted here because it is
+        # the surprising half of enabling the flag.
+        clock = [1000.0]
+        self.mock_sleep.side_effect = lambda seconds: clock.__setitem__(
+            0, clock[0] + seconds)
+        self.mock_actual.side_effect = [_refusal(), self._instance('creating')]
+
+        client = self._client(retry_transient_capacity=True)
+        with mock.patch('time.time', lambda: clock[0]):
+            with mock.patch.object(client, 'get_instance') as get_instance:
+                get_instance.return_value = {'uuid': 'notreallyauuid',
+                                             'state': 'creating'}
+                i = client.create_instance(
+                    'foo', 1, 2048, ['netuuid1'], ['8@cirros'], 'sshkey',
+                    None, timeout=apiclient.TRANSIENT_RETRY_DEFAULT)
+
+        self.assertEqual('creating', i['state'])
+        self.assertEqual(2, self.mock_actual.call_count)
+        # The state alone proves nothing -- an await with a budget of its
+        # own would return a transitional instance too, just 600 seconds
+        # later. What says the budget was shared is that the whole call
+        # ended within it: one 15 second wait, then a single poll.
+        self.assertEqual(1, get_instance.call_count)
+        self.assertLessEqual(clock[0], 1000.0 +
+                             apiclient.TRANSIENT_RETRY_DEFAULT + 1)
+
+
 # A structurally valid JWT: three base64url segments, the header being
 # base64url('{"alg":"none"}'). The redaction keys off the shape of the
 # string rather than where it came from, so a real shape matters.
@@ -1091,6 +1400,20 @@ class VDIConsoleProxyFileTestCase(testtools.TestCase):
     and main.py's logging filter never sees an exception the interpreter
     prints as a traceback. So these check the exception, not the logs.
     """
+
+    def setUp(self):
+        super().setUp()
+
+        # Client.__init__ calls this, and with base_url pointing at a host
+        # which does not resolve it raises. Every other class here patches
+        # it; this one used to run on a patch another class had leaked,
+        # because its addCleanup stopped a MagicMock rather than the
+        # patcher, so these tests only passed when something else ran
+        # first in the same worker.
+        self.capabilities = mock.patch(
+            'shakenfist_client.apiclient.Client._collect_capabilities')
+        self.capabilities.start()
+        self.addCleanup(self.capabilities.stop)
 
     def _client(self):
         return apiclient.Client(suppress_configuration_lookup=True,
@@ -1160,7 +1483,7 @@ class StatusCodeMappingTestCase(testtools.TestCase):
 
         self.capabilities = mock.patch(
             'shakenfist_client.apiclient.Client._collect_capabilities')
-        self.capabilities = self.capabilities.start()
+        self.capabilities.start()
         self.addCleanup(self.capabilities.stop)
 
     def _client(self):
@@ -1169,10 +1492,14 @@ class StatusCodeMappingTestCase(testtools.TestCase):
         client.cached_auth = 'Bearer notreallyatoken'
         return client
 
-    def _respond(self, client, status_code):
+    def _respond(self, client, status_code, headers=None):
         response = mock.MagicMock()
         response.status_code = status_code
         response.text = '{"error": "nope"}'
+        # A real dict, not the MagicMock attribute: an assertion about
+        # header propagation made against a MagicMock passes whether or
+        # not the headers were propagated at all.
+        response.headers = headers if headers is not None else {}
         client.session = mock.MagicMock()
         client.session.request.return_value = response
 
@@ -1201,6 +1528,45 @@ class StatusCodeMappingTestCase(testtools.TestCase):
             apiclient.APIException,
             client._actual_request_url, 'POST', '/auth/namespaces/ns/claims')
         self.assertEqual(418, e.status_code)
+
+    # The three raise sites which must carry the response headers. Every
+    # test in TransientCapacityRetryTestCase fabricates its own exception,
+    # so without these the wiring the whole retry rests on is untested:
+    # dropping headers=r.headers would leave that class green and make
+    # every refusal fall back to TRANSIENT_RETRY_DEFAULT.
+    def test_a_mapped_status_carries_the_response_headers(self):
+        client = self._client()
+        self._respond(client, 507, headers={'Retry-After': '7',
+                                            'X-Request-ID': 'abc'})
+
+        e = self.assertRaises(
+            apiclient.InsufficientResourcesException,
+            client._actual_request_url, 'POST', '/instances')
+        self.assertEqual('7', e.headers['Retry-After'])
+
+    def test_an_unmapped_status_carries_the_response_headers(self):
+        client = self._client()
+        self._respond(client, 418, headers={'Retry-After': '7'})
+
+        e = self.assertRaises(
+            apiclient.APIException,
+            client._actual_request_url, 'POST', '/instances')
+        self.assertEqual('7', e.headers['Retry-After'])
+
+    def test_an_authentication_failure_carries_the_response_headers(self):
+        # _authenticate() has its own raise site, and it calls
+        # requests.request() directly rather than going through a session.
+        client = self._client()
+        response = mock.MagicMock()
+        response.status_code = 401
+        response.text = '{"error": "nope"}'
+        response.headers = {'X-Request-ID': 'abc'}
+
+        with mock.patch('shakenfist_client.apiclient.requests.request',
+                        return_value=response):
+            e = self.assertRaises(apiclient.UnauthenticatedException,
+                                  client._authenticate)
+        self.assertEqual('abc', e.headers['X-Request-ID'])
 
 
 class _FakeClock:
@@ -1945,3 +2311,31 @@ class AgentOperationDeadlineTestCase(testtools.TestCase):
         sent = self._sent_data()
         self.assertEqual(0, sent['progress_timeout_seconds'])
         self.assertNotIn('deadline_seconds', sent)
+
+
+class APIExceptionTestCase(testtools.TestCase):
+    # Downstream repositories construct APIException with five positional
+    # arguments and no headers, so that form must keep working even though
+    # this phase adds a headers keyword. See shakenfist's
+    # docs/plans/PLAN-transient-capacity-refusals-phase-04-retry-after.md,
+    # step 4d.
+    def test_old_five_positional_form_still_works(self):
+        exc = apiclient.APIException('m', 'GET', 'u', 507, 't')
+
+        self.assertEqual('m', exc.message)
+        self.assertEqual('GET', exc.method)
+        self.assertEqual('u', exc.url)
+        self.assertEqual(507, exc.status_code)
+        self.assertEqual('t', exc.text)
+        self.assertEqual({}, exc.headers)
+
+    def test_headers_keyword_is_stored(self):
+        headers = {'Retry-After': '15'}
+        exc = apiclient.APIException('m', 'GET', 'u', 507, 't', headers=headers)
+
+        self.assertEqual(headers, exc.headers)
+
+    def test_headers_defaults_to_empty_dict_not_none(self):
+        exc = apiclient.APIException('m', 'GET', 'u', 507, 't', headers=None)
+
+        self.assertEqual({}, exc.headers)
