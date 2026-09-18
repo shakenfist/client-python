@@ -593,6 +593,51 @@ class ApiClientTestCase(testtools.TestCase):
         self.assertEqual(legacy_list, result)
         self.assertEqual(1, self.mock_request.call_count)
 
+    def test_reserve_network_address(self):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = 'reserve-addresses'
+        client.reserve_network_address('netuuid', '10.0.2.3',
+                                       comment='kolla VIP')
+
+        self.mock_request.assert_called_with(
+            'POST', '/networks/netuuid/addresses/10.0.2.3',
+            data={'comment': 'kolla VIP'})
+
+    def test_reserve_network_address_without_a_comment(self):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = 'reserve-addresses'
+        client.reserve_network_address('netuuid', '10.0.2.3')
+
+        self.mock_request.assert_called_with(
+            'POST', '/networks/netuuid/addresses/10.0.2.3', data={})
+
+    def test_reserve_network_address_capability_gated(self):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = ''
+        self.assertRaises(
+            apiclient.IncapableException,
+            client.reserve_network_address, 'netuuid', '10.0.2.3')
+
+    def test_release_network_address(self):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = 'reserve-addresses'
+        client.release_network_address('netuuid', '10.0.2.3')
+
+        self.mock_request.assert_called_with(
+            'DELETE', '/networks/netuuid/addresses/10.0.2.3')
+
+    def test_release_network_address_capability_gated(self):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = ''
+        self.assertRaises(
+            apiclient.IncapableException,
+            client.release_network_address, 'netuuid', '10.0.2.3')
+
     def test_get_cluster_operation_chain_capability_gated(self):
         client = apiclient.Client(suppress_configuration_lookup=True,
                                   base_url='http://localhost:13000')

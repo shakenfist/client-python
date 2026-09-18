@@ -288,6 +288,37 @@ def network_addresses(ctx, network_ref=None):
         print(x)
 
 
+@network.command(name='reserve-address',
+                 help=('Reserve a specific address in a network, so that it is '
+                       'never allocated to an interface. Use this for an '
+                       'address something outside Shaken Fist owns, such as a '
+                       'VIP inside a guest.'))
+@click.argument('network_ref', type=click.STRING, shell_complete=util.get_networks)
+@click.argument('address', type=click.STRING)
+@click.option('--comment', type=click.STRING, default=None,
+              help='A note describing what the address is reserved for.')
+@click.pass_context
+def network_reserve_address(ctx, network_ref=None, address=None, comment=None):
+    reservation = ctx.obj['CLIENT'].reserve_network_address(
+        network_ref, address, comment=comment)
+    if ctx.obj['OUTPUT'] == 'json':
+        print(json.dumps(reservation, indent=4, sort_keys=True))
+        return
+
+    print(reservation['address'])
+
+
+@network.command(name='release-address',
+                 help=('Release an address reserved with reserve-address. '
+                       'Addresses in use by instances, gateways and the like '
+                       'are not released this way.'))
+@click.argument('network_ref', type=click.STRING, shell_complete=util.get_networks)
+@click.argument('address', type=click.STRING)
+@click.pass_context
+def network_release_address(ctx, network_ref=None, address=None):
+    ctx.obj['CLIENT'].release_network_address(network_ref, address)
+
+
 @network.command(name='add-routed', help='Add a routed address to the network')
 @click.argument('network_ref', type=click.STRING, shell_complete=util.get_networks)
 @click.pass_context
