@@ -78,7 +78,6 @@ jobs:
           },
         ]
     uses: shakenfist/actions/.github/workflows/smoke-cluster.yml@main
-    secrets: inherit
     with:
       component: client-python
       component_ref: ${{ github.sha }}
