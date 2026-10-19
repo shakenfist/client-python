@@ -52,9 +52,14 @@ Pushing a `v*` tag triggers `release.yml`. Its jobs, in order:
 
 1. `ci-gate` checks that `functional-tests.yml` succeeded on the tagged
    commit, in its merge queue run. A run started by hand, as
-   `pr-retest.yml` does with `workflow_dispatch`, does not count, so to
-   recover from a flaky queue run, use "Re-run failed jobs" on that
-   merge queue run itself. "Re-run all jobs" also works, because Check
+   `pr-retest.yml` does with `workflow_dispatch`, does not count. A
+   queue run that fails, flaky or not, ejects its entry, so the commit
+   it built never reaches `develop` and re-running that run cannot make
+   any tag pass: re-queue the pull request and tag the commit that
+   merges. Re-running a queue run helps only when the tagged commit's
+   run was re-run after it merged and that later attempt failed,
+   because the gate judges each run at its latest attempt; then use
+   "Re-run failed jobs" on it. "Re-run all jobs" also works, because Check
    paths compares against the `develop` commit recorded in the run's
    event payload rather than the branch, which by then already
    contains the queued commit. How the gate decides is documented with the
