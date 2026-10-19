@@ -48,6 +48,9 @@ from `~/.shakenfist`, or from `/etc/sf/shakenfist.json`.
 - [Waiting out a transient capacity refusal](https://github.com/shakenfist/client-python/blob/develop/docs/transient-capacity-retry.md)
   -- how the server marks a capacity refusal it expects to pass, and the
   opt-in client retry which waits for it
+- [Merging and releasing](https://github.com/shakenfist/client-python/blob/develop/docs/development.md)
+  -- what CI runs, merging through the merge queue, and how a release is
+  gated on CI
 - [ARCHITECTURE.md](https://github.com/shakenfist/client-python/blob/develop/ARCHITECTURE.md) -- project structure and key components
 - [AGENTS.md](https://github.com/shakenfist/client-python/blob/develop/AGENTS.md) -- guide for AI agents working on this codebase
 - [RELEASE-SETUP.md](https://github.com/shakenfist/client-python/blob/develop/RELEASE-SETUP.md) -- one-time release infrastructure setup

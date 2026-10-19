@@ -35,6 +35,20 @@ dependencies = [
 [project.scripts]
 sf-client = "shakenfist_client.main:cli"
 
+# The tests run from the checkout and must not ship. The exclude below
+# drops them as a package, but include-package-data defaults to true under
+# pyproject.toml and setuptools_scm's file finder offers every git-tracked
+# file as package data, so they would come straight back as data without
+# this. Nothing in this package reads a data file at runtime.
+[tool.setuptools]
+include-package-data = false
+
+# commandline/ has no __init__.py; namespaces (the default here) is what
+# finds it.
+[tool.setuptools.packages.find]
+include = ["shakenfist_client*"]
+exclude = ["shakenfist_client.tests*"]
+
 [tool.setuptools_scm]
 git_describe_command = "git describe --dirty --tags --match v* --first-parent"
 write_to = "shakenfist_client/_version.py"
