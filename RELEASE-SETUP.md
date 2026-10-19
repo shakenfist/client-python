@@ -83,6 +83,10 @@ The release gate counts a CI run only from the merge queue, or from a
 push to the default branch, which is `develop` here, so `develop`
 needs a queue. Add it only once `functional-tests.yml`'s aggregator
 jobs are on `develop`, or the queue waits for checks that never report.
+Releases are cut from `develop` only: the gate also requires the tagged
+commit to be on the default branch's first-parent history, so a
+`v*-releases` branch cannot be released from even with its own queue
+(see `docs/development.md`).
 
 1. Go to **Settings** > **Rules** > **Rulesets** > **New ruleset** >
    **New branch ruleset**

@@ -59,17 +59,20 @@ jobs:
         id: filter
         if: github.event_name != 'workflow_dispatch'
         with:
-          # On merge_group there is no pull request payload, so make the
-          # comparison base explicit rather than letting the action infer
-          # one. develop is the queue's target branch, which by definition
-          # does not yet contain the queued changes, so a wrong
-          # code_changed=false -- the outcome that would let "Can merge"
-          # go green having tested nothing -- is structurally impossible;
-          # if develop advances mid-queue the diff only grows, erring
-          # toward running the tests. On pull_request events the action
-          # ignores base and compares against the pull request's base
-          # branch.
-          base: develop
+          # On merge_group, compare against the base_sha fixed in the
+          # event payload, the commit of the queue's target branch this
+          # entry was built on, not against the branch itself. The
+          # branch moves: once the queue has merged this entry, develop
+          # contains the queued commit, so a "Re-run all jobs" of the
+          # run -- the release recovery in docs/development.md -- would
+          # diff against a base already holding HEAD, find nothing, and
+          # let "Can merge" go green having tested nothing. A re-run
+          # keeps its original payload, so it sees the same diff as the
+          # first attempt. On pull_request events the action ignores
+          # base and compares against the pull request's base branch;
+          # develop is only the fallback for an event with no
+          # merge_group payload.
+          base: ${{ github.event.merge_group.base_sha || 'develop' }}
           # By default a file matches if it matches ANY listed pattern,
           # which makes '**' match everything and silently defeats the
           # exclusions. 'every' requires a file to match ALL patterns,

@@ -53,8 +53,11 @@ Pushing a `v*` tag triggers `release.yml`. Its jobs, in order:
 1. `ci-gate` checks that `functional-tests.yml` succeeded on the tagged
    commit, in its merge queue run. A run started by hand, as
    `pr-retest.yml` does with `workflow_dispatch`, does not count, so to
-   recover from a flaky queue run, use "Re-run jobs" on that merge
-   queue run itself. How the gate decides is documented with the
+   recover from a flaky queue run, use "Re-run failed jobs" on that
+   merge queue run itself. "Re-run all jobs" also works, because Check
+   paths compares against the `develop` commit recorded in the run's
+   event payload rather than the branch, which by then already
+   contains the queued commit. How the gate decides is documented with the
    action, as
    [`require-ci-success`](https://github.com/shakenfist/actions/blob/main/docs/actions.md#require-ci-success).
    It has no override.
@@ -66,7 +69,11 @@ Pushing a `v*` tag triggers `release.yml`. Its jobs, in order:
    re-sign the tag with gitsign, and publish to PyPI with attestations.
 
 So tag a commit that is on `develop` and went through the merge queue,
-and wait for its `functional-tests.yml` run to finish first. A gate
+and wait for its `functional-tests.yml` run to finish first. Releases
+are cut from `develop` only. The gate counts CI only on the default
+branch's first-parent history, so a commit on a `v*-releases`
+maintenance branch cannot pass it, with or without a queue on that
+branch, until `require-ci-success` learns about such branches. A gate
 failure means nothing was signed or published, so every failure is
 recoverable: the template's
 [recovery table](https://github.com/shakenfist/development/blob/main/templates/release-automation/README.md#recovering-from-a-gate-failure)
