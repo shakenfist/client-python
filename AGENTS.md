@@ -201,4 +201,8 @@ tox -epy3                     # via tox
 - Ensure changes work with Python >= 3.7
 - Run `tox -eflake8` to check style
 - Run `stestr run` to verify tests pass
+- Changes merge to `develop` through the merge queue, never around it:
+  a release tag is only accepted on a commit whose queue run passed. A
+  new `functional-tests.yml` job goes in the `needs:` of "Can enqueue"
+  and "Can merge". See `docs/development.md`.
 - Update CLAUDE.md if architecture changes significantly

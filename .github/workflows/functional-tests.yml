@@ -4,6 +4,18 @@ name: Functional tests
 # which is available as GITHUB_WORKSPACE. You can find other environment
 # variables at https://docs.github.com/en/actions/learn-github-actions/environment-variables
 
+# Pull requests, merge queue entries and manual dispatches all run the
+# same jobs: the sanity checks, then a smoke-tier cluster. Both are gated
+# on the check_paths filter job below, so a change touching only the
+# documentation pays for neither.
+#
+# Merges go through a merge queue, so every commit that lands on develop
+# is the commit a merge_group run tested, even when its base moved after
+# the pull request run. That run is the one release.yml's CI gate
+# counts. "Can enqueue" and "Can merge" at the end of this file are the
+# checks the queue's ruleset requires, in the shape described at
+# https://boinkor.net/2023/11/neat-github-actions-patterns-for-github-merge-queues/
+
 permissions:
   contents: read
   pull-requests: write
@@ -13,16 +25,91 @@ on:
     branches:
       - develop
       - v*-releases
-    paths-ignore:
-      - 'docs/**'
-      - mkdocs.yml
+  merge_group:
+  # pr-retest.yml re-runs this workflow by dispatching it.
   workflow_dispatch:
 
 jobs:
+  # Detect changes touching only the documentation, so the sanity checks
+  # and the smoke cluster can skip. The smoke cluster in particular is a
+  # whole Shaken Fist deployment on the under-cloud the fleet shares, and
+  # neither job exercises a line of docs/.
+  #
+  # A filter job rather than a trigger-level paths-ignore, because "Can
+  # enqueue" and "Can merge" are required status checks: a required check
+  # in a paths-ignore'd workflow never reports on a filtered pull request,
+  # and a required check that never reports blocks the merge forever,
+  # while a skipped one satisfies it. With a filter job the workflow
+  # always reports and the heavy jobs skip on its output.
+  #
+  # The filter runs on merge_group as well as pull_request, so a
+  # docs-only queue entry skips the cluster too. On workflow_dispatch the
+  # filter step is skipped and code_changed defaults to true, so a manual
+  # run always tests.
+  check_paths:
+    name: "Check paths"
+    runs-on: [self-hosted, static]
+    timeout-minutes: 10
+    outputs:
+      code_changed: ${{ steps.filter.outputs.code || 'true' }}
+    steps:
+      - uses: actions/checkout@v7
+        if: github.event_name != 'workflow_dispatch'
+      - uses: dorny/paths-filter@v4
+        id: filter
+        if: github.event_name != 'workflow_dispatch'
+        with:
+          # On merge_group, compare against the base_sha fixed in the
+          # event payload, the commit of the queue's target branch this
+          # entry was built on, not against the branch itself. The
+          # branch moves: once the queue has merged this entry, develop
+          # contains the queued commit, so a "Re-run all jobs" of the
+          # run would diff against a base already holding HEAD, find
+          # nothing, and let "Can merge" go green having tested nothing,
+          # a run the release gate would then accept. A re-run
+          # keeps its original payload, so it sees the same diff as the
+          # first attempt. On pull_request events the action ignores
+          # base and compares against the pull request's base branch;
+          # develop is only the fallback for an event with no
+          # merge_group payload.
+          base: ${{ github.event.merge_group.base_sha || 'develop' }}
+          # By default a file matches if it matches ANY listed pattern,
+          # which makes '**' match everything and silently defeats the
+          # exclusions. 'every' requires a file to match ALL patterns,
+          # which is the correct semantics for an "everything except
+          # docs" filter.
+          predicate-quantifier: 'every'
+          filters: |
+            code:
+              - '**'
+              - '!docs/**'
+              - '!mkdocs.yml'
+      # Make the verdict visible in the log rather than inferred from
+      # which downstream jobs skipped.
+      - name: Report verdict
+        run: echo "code_changed=${{ steps.filter.outputs.code || 'true (defaulted)' }}"
+
   sanity_checks:
+    needs: check_paths
+    if: needs.check_paths.outputs.code_changed != 'false'
     runs-on: [self-hosted, vm]
+    # On a merge group, key on the base branch rather than github.ref,
+    # which is a new queue branch on every rebuild, so a superseded run
+    # is cancelled. That is safe because the queue is serial
+    # (max_entries_to_build: 1): any other first attempt of a
+    # merge_group run has already been abandoned. A re-run is not a
+    # queue build, though. It keeps its original event, so with the
+    # base-branch key a "Re-run jobs" on an old queue run would cancel
+    # the live queue entry or be cancelled by it. Re-runs therefore keep
+    # their own queue branch's group. The merge_group- prefix keeps a
+    # queue run out of a workflow_dispatch run's group on develop, whose
+    # github.ref is the same string.
     concurrency:
-      group: ${{ github.workflow }}-${{ github.ref }}-lint
+      group: >-
+        ${{ github.workflow }}-lint-${{
+        github.event_name == 'merge_group' && github.run_attempt == '1'
+        && format('merge_group-{0}', github.event.merge_group.base_ref)
+        || github.ref }}
       cancel-in-progress: true
 
     steps:
@@ -60,14 +147,24 @@ jobs:
 
   # A smoke-tier Shaken Fist cluster deployed via the reusable
   # smoke-cluster workflow in shakenfist/actions. The deploy builds the
-  # client wheel from THIS repository's PR checkout (and the server from
-  # shakenfist develop), then runs the standard smoke suite -- just enough
-  # of a cluster to determine a client change has not completely broken
-  # things. Full-depth cluster testing lives in the shakenfist repo's own
-  # CI. See remove-primary phase 8 in the shakenfist repo's docs/plans.
+  # client wheel from THIS repository's checkout at the triggering ref
+  # (the pull request's merge ref, or the queue branch on a merge group)
+  # and the server from shakenfist develop, then runs the standard smoke
+  # suite -- just enough of a cluster to determine a client change has
+  # not completely broken things. Full-depth cluster testing lives in the
+  # shakenfist repo's own CI. A merge group runs it too, because that run
+  # is the one a release counts.
+  #
+  # No concurrency group here: smoke-cluster.yml carries its own, keyed
+  # on the base branch on a merge group like sanity_checks' above, so a
+  # superseded queue run releases its cluster rather than holding the
+  # shared under-cloud. Its key does not have sanity_checks' re-run
+  # guard, so a "Re-run jobs" of this job on an old queue run shares a
+  # group with the live queue entry's smoke cluster.
   functional_matrix:
     name: "${{ matrix.os.description }}"
-    needs: sanity_checks
+    needs: [check_paths, sanity_checks]
+    if: needs.check_paths.outputs.code_changed != 'false'
     strategy:
       fail-fast: false
       matrix:
@@ -93,6 +190,9 @@ jobs:
     # lives in the shared workflow so it stays in step with the
     # rest of the fleet.
     needs: [sanity_checks]
+    # There is no pull request to review on merge_group or
+    # workflow_dispatch events.
+    if: github.event_name == 'pull_request'
     # A cross-repository reusable workflow cannot grant itself more
     # token scope than its caller has, so the permissions go here.
     permissions:
@@ -100,3 +200,68 @@ jobs:
       pull-requests: write
       issues: write
     uses: shakenfist/actions/.github/workflows/pr-auto-review.yml@main
+
+  # The two checks the merge queue's ruleset requires, each collecting
+  # this workflow's jobs into one result. "Can enqueue" reports on pull
+  # requests and "Can merge" on merge queue entries; each is skipped,
+  # which GitHub treats as success, on the other event. Every need must
+  # succeed, with one exception: when check_paths found a docs-only
+  # change, sanity_checks and functional_matrix are skipped by design and
+  # count as passed. check_paths itself must always succeed, so a filter
+  # that failed cannot pass for a docs-only verdict. The automated
+  # reviewer is advisory and deliberately not in needs: it must not be
+  # able to block a merge on an API hiccup.
+  can_enqueue:
+    name: "Can enqueue"
+    needs:
+      - check_paths
+      - sanity_checks
+      - functional_matrix
+    # always(), not !cancelled(): if the run is cancelled as a
+    # whole, this must still run and fail on the cancelled needs.
+    # A skipped check satisfies a required one, so a skip here
+    # would let an untested commit through.
+    if: ${{ always() && github.event_name != 'merge_group' }}
+    # The steps read only the needs context, so the token needs nothing.
+    permissions: {}
+    runs-on: [self-hosted, static]
+    timeout-minutes: 5
+    steps:
+      - name: Transform outcomes
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          CODE_CHANGED: ${{ needs.check_paths.outputs.code_changed }}
+        run: |
+          echo "ALL_SUCCESS=$(echo "${NEEDS_JSON}" | jq --arg code_changed "${CODE_CHANGED}" 'to_entries | map(.value.result == "success" or (.key != "check_paths" and $code_changed == "false" and .value.result == "skipped")) | all')" >> "${GITHUB_ENV}"
+      - name: Check outcomes
+        run: |
+          [ "${ALL_SUCCESS}" == true ]
+
+  can_merge:
+    name: "Can merge"
+    needs:
+      - check_paths
+      - sanity_checks
+      - functional_matrix
+    # always(), not !cancelled(): if the run is cancelled as a
+    # whole, this must still run and fail on the cancelled needs.
+    # A skipped check satisfies a required one, so a skip here
+    # would let an untested commit through.
+    if: ${{ always() && github.event_name == 'merge_group' }}
+    # The steps read only the needs context, so the token needs nothing.
+    permissions: {}
+    runs-on: [self-hosted, static]
+    timeout-minutes: 5
+    steps:
+      # This run is the one release.yml's CI gate counts, so a job that
+      # skipped here for any reason but a docs-only change would let an
+      # untested commit reach a release.
+      - name: Transform outcomes
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          CODE_CHANGED: ${{ needs.check_paths.outputs.code_changed }}
+        run: |
+          echo "ALL_SUCCESS=$(echo "${NEEDS_JSON}" | jq --arg code_changed "${CODE_CHANGED}" 'to_entries | map(.value.result == "success" or (.key != "check_paths" and $code_changed == "false" and .value.result == "skipped")) | all')" >> "${GITHUB_ENV}"
+      - name: Check outcomes
+        run: |
+          [ "${ALL_SUCCESS}" == true ]
