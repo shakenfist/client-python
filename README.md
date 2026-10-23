@@ -48,6 +48,9 @@ from `~/.shakenfist`, or from `/etc/sf/shakenfist.json`.
 - [Waiting out a transient capacity refusal](https://github.com/shakenfist/client-python/blob/develop/docs/transient-capacity-retry.md)
   -- how the server marks a capacity refusal it expects to pass, and the
   opt-in client retry which waits for it
+- [Pending operations on an object](https://github.com/shakenfist/client-python/blob/develop/docs/object-operations.md)
+  -- listing the cluster operations targeting an instance, network or
+  artifact, and waiting for one to settle
 - [Merging and releasing](https://github.com/shakenfist/client-python/blob/develop/docs/development.md)
   -- what CI runs, merging through the merge queue, and how a release is
   gated on CI

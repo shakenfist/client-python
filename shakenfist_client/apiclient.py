@@ -1062,6 +1062,8 @@ class Client:
         return r.json()
 
     def get_artifact(self, artifact_ref, namespace=None):
+        # Unlike instances and networks, the server advertises no capability
+        # for a namespace on an artifact lookup, so there is nothing to check.
         data = None
         if namespace:
             data = {'namespace': namespace}
@@ -1902,9 +1904,14 @@ class Client:
 
         ``timeout`` defaults to the client's async deadline (governed by
         ``async_strategy``); pass a positive number of seconds to override.
-        A negative timeout returns the current view without waiting. Raises
-        :class:`TimeoutException` if the object is still pending when the
-        timeout elapses.
+        A negative timeout returns the current view without waiting, and a
+        timeout of zero checks once and raises if the object is pending.
+        Raises :class:`TimeoutException` if the object is still pending when
+        the timeout elapses, :class:`InvalidException` if ``interval`` is not
+        positive, and :class:`IncapableException` if a view does not report
+        ``has_pending_operations`` at all. An object deleted while waiting
+        raises :class:`ResourceNotFoundException` rather than counting as
+        settled.
         """
         getters = {
             'instance': self.get_instance,
@@ -1919,6 +1926,10 @@ class Client:
             raise IncapableException(
                 'The API server version you are talking to does not support '
                 'reporting pending operations on objects.')
+        if interval <= 0:
+            raise InvalidException(
+                'interval must be a positive number of seconds, not %s'
+                % interval)
 
         if timeout is None:
             timeout = _calculate_async_deadline(self.async_strategy)
@@ -1929,7 +1940,13 @@ class Client:
         deadline = time.time() + timeout
         while True:
             view = getter(object_ref, namespace=namespace)
-            if not view.get('has_pending_operations'):
+            # A view without the field is not evidence that nothing is
+            # pending, so refuse rather than report the object settled.
+            if 'has_pending_operations' not in view:
+                raise IncapableException(
+                    '%s %s view does not report has_pending_operations'
+                    % (object_type, object_ref))
+            if not view['has_pending_operations']:
                 return view
 
             if time.time() > deadline:

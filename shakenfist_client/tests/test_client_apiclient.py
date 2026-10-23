@@ -772,8 +772,9 @@ class ApiClientTestCase(testtools.TestCase):
                 data={'namespace': 'gerkin'})
 
     def test_await_no_pending_operations_incapable(self):
-        # A settled object, so a missing capability check returns at once
-        # and fails on the request rather than polling.
+        # The mocked object is settled, so if the capability check were
+        # missing the call would return a view at once instead of raising,
+        # and both assertions below would fail.
         self.mock_request.return_value = mock.Mock(
             **{'json.return_value': {'has_pending_operations': False}})
         client = self._client_with('nothing-useful')
@@ -787,6 +788,66 @@ class ApiClientTestCase(testtools.TestCase):
         self.assertRaises(
             apiclient.InvalidException,
             client.await_no_pending_operations, 'blob', 'b', timeout=60)
+
+    def test_await_no_pending_operations_bad_interval(self):
+        client = self._client_with('object-pending-operations')
+        for interval in (0, -1):
+            self.assertRaises(
+                apiclient.InvalidException,
+                client.await_no_pending_operations, 'instance', 'i',
+                timeout=60, interval=interval)
+        self.mock_request.assert_not_called()
+
+    def test_await_no_pending_operations_view_without_field(self):
+        # A view which does not report the field must not count as settled.
+        self.mock_request.return_value = mock.Mock(
+            **{'json.return_value': {'uuid': 'a'}})
+        client = self._client_with('object-pending-operations')
+        self.assertRaises(
+            apiclient.IncapableException,
+            client.await_no_pending_operations, 'artifact', 'a', timeout=60)
+
+    def test_await_no_pending_operations_object_deleted(self):
+        # An object deleted while waiting raises rather than counting as
+        # settled.
+        self.mock_request.side_effect = [
+            mock.Mock(**{'json.return_value': {'has_pending_operations': True}}),
+            apiclient.ResourceNotFoundException(
+                'API request failed', 'GET',
+                'http://localhost:13000/instances/i', 404,
+                '{"error": "instance not found"}')]
+        client = self._client_with('object-pending-operations')
+        with mock.patch('shakenfist_client.apiclient.time.sleep'):
+            self.assertRaises(
+                apiclient.ResourceNotFoundException,
+                client.await_no_pending_operations, 'instance', 'i',
+                timeout=60)
+        self.assertEqual(2, self.mock_request.call_count)
+
+    def test_await_no_pending_operations_zero_timeout(self):
+        # A zero timeout checks once and raises if the object is pending.
+        self.mock_request.side_effect = [
+            mock.Mock(**{'json.return_value': {'has_pending_operations': True}})
+            for _ in range(10)]
+        client = self._client_with('object-pending-operations')
+        with mock.patch('shakenfist_client.apiclient.time.sleep'):
+            with mock.patch('shakenfist_client.apiclient.time.time',
+                            side_effect=[0, 1, 2, 3]):
+                self.assertRaises(
+                    apiclient.TimeoutException,
+                    client.await_no_pending_operations, 'instance', 'i',
+                    timeout=0)
+        self.assertEqual(1, self.mock_request.call_count)
+
+    def test_get_artifact_namespace(self):
+        self.mock_request.return_value = mock.Mock(
+            **{'json.return_value': {'uuid': 'a', 'blobs': {}}})
+        client = self._client_with('')
+        client.get_artifact('a')
+        self.mock_request.assert_called_with('GET', '/artifacts/a', data=None)
+        client.get_artifact('a', namespace='gerkin')
+        self.mock_request.assert_called_with(
+            'GET', '/artifacts/a', data={'namespace': 'gerkin'})
 
     def test_await_no_pending_operations_timeout(self):
         # A finite supply of responses, so a loop which never times out
