@@ -29,6 +29,14 @@ Each method needs its server capability (`instance-clusteroperations`,
 `network-clusteroperations` or `artifact-clusteroperations`) and
 raises `IncapableException` against a server which lacks it.
 
+The older `list_cluster_operations_for_target(target_object_type,
+target_uuid)` lists the same operations through
+`GET /clusteroperations`, for any object type, but only by UUID, with
+no namespace argument, and with finished operations always included.
+For an instance, network or artifact, prefer the per-object
+methods: they take a name or UUID, accept a namespace, and default to
+the operations which are still pending.
+
 ## Waiting for an object to settle
 
 The views returned by `get_instance()`, `get_network()` and
@@ -50,7 +58,8 @@ object's view every `interval` seconds (default 1) until
 
 - `timeout` defaults to the client's async deadline, set by
   `async_strategy`. A negative timeout returns the current view without
-  waiting; zero checks once and raises if the object is pending.
+  waiting; zero raises as soon as the deadline has passed, normally after
+  one check, if the object is pending.
 - It raises `TimeoutException` if the object is still pending when the
   timeout elapses, and `ResourceNotFoundException` if the object is
   deleted while it waits.

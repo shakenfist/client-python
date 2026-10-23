@@ -788,6 +788,7 @@ class ApiClientTestCase(testtools.TestCase):
         self.assertRaises(
             apiclient.InvalidException,
             client.await_no_pending_operations, 'blob', 'b', timeout=60)
+        self.mock_request.assert_not_called()
 
     def test_await_no_pending_operations_bad_interval(self):
         client = self._client_with('object-pending-operations')
@@ -806,6 +807,18 @@ class ApiClientTestCase(testtools.TestCase):
         self.assertRaises(
             apiclient.IncapableException,
             client.await_no_pending_operations, 'artifact', 'a', timeout=60)
+
+    def test_await_no_pending_operations_no_wait_view_without_field(self):
+        # A negative timeout returns without waiting, but still refuses a
+        # view which does not report the field.
+        self.mock_request.return_value = mock.Mock(
+            **{'json.return_value': {'uuid': 'i'}})
+        client = self._client_with('object-pending-operations')
+        client.async_strategy = apiclient.ASYNC_CONTINUE
+        self.assertRaises(
+            apiclient.IncapableException,
+            client.await_no_pending_operations, 'instance', 'i')
+        self.assertEqual(1, self.mock_request.call_count)
 
     def test_await_no_pending_operations_object_deleted(self):
         # An object deleted while waiting raises rather than counting as
@@ -864,6 +877,9 @@ class ApiClientTestCase(testtools.TestCase):
                     apiclient.TimeoutException,
                     client.await_no_pending_operations,
                     'network', 'n', timeout=2)
+        # Polled at times 0 and 1 within the deadline, then once more at 2
+        # before the check at 3 finds it passed.
+        self.assertEqual(3, self.mock_request.call_count)
 
     def test_await_no_pending_operations_default_timeout(self):
         self.mock_request.return_value = mock.Mock(
@@ -876,6 +892,7 @@ class ApiClientTestCase(testtools.TestCase):
         self.assertEqual(1, self.mock_request.call_count)
 
         client.async_strategy = apiclient.ASYNC_PAUSE
+        self.mock_request.reset_mock()
         self.mock_request.side_effect = [
             mock.Mock(**{'json.return_value': {'has_pending_operations': True}})
             for _ in range(10)]
@@ -885,6 +902,9 @@ class ApiClientTestCase(testtools.TestCase):
                 self.assertRaises(
                     apiclient.TimeoutException,
                     client.await_no_pending_operations, 'instance', 'i')
+        # The 60 second default deadline lets the poll at 59 through and
+        # stops at 61.
+        self.assertEqual(2, self.mock_request.call_count)
 
     def test_allocate_network(self):
         client = apiclient.Client(suppress_configuration_lookup=True,

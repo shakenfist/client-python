@@ -1905,7 +1905,8 @@ class Client:
         ``timeout`` defaults to the client's async deadline (governed by
         ``async_strategy``); pass a positive number of seconds to override.
         A negative timeout returns the current view without waiting, and a
-        timeout of zero checks once and raises if the object is pending.
+        timeout of zero raises as soon as the deadline has passed, normally
+        after one check, if the object is pending.
         Raises :class:`TimeoutException` if the object is still pending when
         the timeout elapses, :class:`InvalidException` if ``interval`` is not
         positive, and :class:`IncapableException` if a view does not report
@@ -1934,11 +1935,8 @@ class Client:
         if timeout is None:
             timeout = _calculate_async_deadline(self.async_strategy)
         getter = getters[object_type]
-        if timeout < 0:
-            return getter(object_ref, namespace=namespace)
 
-        deadline = time.time() + timeout
-        while True:
+        def fetch():
             view = getter(object_ref, namespace=namespace)
             # A view without the field is not evidence that nothing is
             # pending, so refuse rather than report the object settled.
@@ -1946,6 +1944,14 @@ class Client:
                 raise IncapableException(
                     '%s %s view does not report has_pending_operations'
                     % (object_type, object_ref))
+            return view
+
+        if timeout < 0:
+            return fetch()
+
+        deadline = time.time() + timeout
+        while True:
+            view = fetch()
             if not view['has_pending_operations']:
                 return view
 
