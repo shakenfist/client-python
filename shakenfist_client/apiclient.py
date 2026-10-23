@@ -884,6 +884,66 @@ class Client:
                               '/agentoperations', data={'all': all})
         return r.json()
 
+    def get_instance_clusteroperations(self, instance_ref, all=False, namespace=None):
+        """List the cluster operations targeting an instance, newest first.
+
+        Each operation carries an ``observational`` flag. By default only
+        operations which are still queued, in preflight or executing are
+        returned; ``all`` adds finished operations the server has not yet
+        removed.
+        """
+        if not self.check_capability('instance-clusteroperations'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'looking up the cluster operations for an instance.')
+
+        data = {'all': all}
+        if namespace:
+            data['namespace'] = namespace
+        r = self._request_url('GET', '/instances/' + instance_ref +
+                              '/clusteroperations', data=data)
+        return r.json()
+
+    def get_network_clusteroperations(self, network_ref, all=False, namespace=None):
+        """List the cluster operations targeting a network, newest first.
+
+        Each operation carries an ``observational`` flag. By default only
+        operations which are still queued, in preflight or executing are
+        returned; ``all`` adds finished operations the server has not yet
+        removed.
+        """
+        if not self.check_capability('network-clusteroperations'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'looking up the cluster operations for a network.')
+
+        data = {'all': all}
+        if namespace:
+            data['namespace'] = namespace
+        r = self._request_url('GET', '/networks/' + network_ref +
+                              '/clusteroperations', data=data)
+        return r.json()
+
+    def get_artifact_clusteroperations(self, artifact_ref, all=False, namespace=None):
+        """List the cluster operations targeting an artifact, newest first.
+
+        Each operation carries an ``observational`` flag. By default only
+        operations which are still queued, in preflight or executing are
+        returned; ``all`` adds finished operations the server has not yet
+        removed.
+        """
+        if not self.check_capability('artifact-clusteroperations'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'looking up the cluster operations for an artifact.')
+
+        data = {'all': all}
+        if namespace:
+            data['namespace'] = namespace
+        r = self._request_url('GET', '/artifacts/' + artifact_ref +
+                              '/clusteroperations', data=data)
+        return r.json()
+
     def update_label(self, label_name, blob_uuid):
         r = self._request_url(
             'POST', '/label/%s' % label_name, data={'blob_uuid': blob_uuid})
@@ -1001,8 +1061,13 @@ class Client:
                               })
         return r.json()
 
-    def get_artifact(self, artifact_ref):
-        r = self._request_url('GET', '/artifacts/' + artifact_ref)
+    def get_artifact(self, artifact_ref, namespace=None):
+        # Unlike instances and networks, the server advertises no capability
+        # for a namespace on an artifact lookup, so there is nothing to check.
+        data = None
+        if namespace:
+            data = {'namespace': namespace}
+        r = self._request_url('GET', '/artifacts/' + artifact_ref, data=data)
         return _correct_blob_indexes(r.json())
 
     def get_artifacts(self, node=None):
@@ -1828,6 +1893,74 @@ class Client:
             raise TimeoutException(
                 'not created within %d second timeout (last state: %s)'
                 % (timeout, i['state']))
+
+    def await_no_pending_operations(self, object_type, object_ref,
+                                    namespace=None, timeout=None, interval=1):
+        """Wait for an instance, network or artifact to have no pending operations.
+
+        Polls until the object's ``has_pending_operations`` is false and
+        returns the final view of the object. Observational operations, such
+        as a checksum verification, never make an object pending.
+
+        ``timeout`` defaults to the client's async deadline (governed by
+        ``async_strategy``); pass a positive number of seconds to override.
+        A negative timeout returns the current view without waiting, and a
+        timeout of zero raises as soon as the deadline has passed, normally
+        after one check, if the object is pending.
+        Raises :class:`TimeoutException` if the object is still pending when
+        the timeout elapses, :class:`InvalidException` if ``interval`` is not
+        positive, and :class:`IncapableException` if a view does not report
+        ``has_pending_operations`` at all. An object deleted while waiting
+        raises :class:`ResourceNotFoundException` rather than counting as
+        settled.
+        """
+        getters = {
+            'instance': self.get_instance,
+            'network': self.get_network,
+            'artifact': self.get_artifact
+        }
+        if object_type not in getters:
+            raise InvalidException(
+                'object_type must be one of instance, network or artifact, '
+                'not %s' % object_type)
+        if not self.check_capability('object-pending-operations'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'reporting pending operations on objects.')
+        if interval <= 0:
+            raise InvalidException(
+                'interval must be a positive number of seconds, not %s'
+                % interval)
+
+        if timeout is None:
+            timeout = _calculate_async_deadline(self.async_strategy)
+        getter = getters[object_type]
+
+        def fetch():
+            view = getter(object_ref, namespace=namespace)
+            # A view without the field is not evidence that nothing is
+            # pending, so refuse rather than report the object settled.
+            if 'has_pending_operations' not in view:
+                raise IncapableException(
+                    '%s %s view does not report has_pending_operations'
+                    % (object_type, object_ref))
+            return view
+
+        if timeout < 0:
+            return fetch()
+
+        deadline = time.time() + timeout
+        while True:
+            view = fetch()
+            if not view['has_pending_operations']:
+                return view
+
+            if time.time() > deadline:
+                raise TimeoutException(
+                    '%s %s still had pending operations after %s seconds'
+                    % (object_type, object_ref, timeout))
+
+            time.sleep(interval)
 
     def _instance_await_sanity_check(self, inst):
         if not inst:

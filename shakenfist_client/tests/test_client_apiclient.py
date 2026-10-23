@@ -693,6 +693,219 @@ class ApiClientTestCase(testtools.TestCase):
             data={'target_object_type': 'network',
                   'target_uuid': 'net-uuid'})
 
+    def _client_with(self, capability):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = capability
+        return client
+
+    def _check_clusteroperations_wrapper(self, object_type):
+        ops = [
+            {'operation_type': 'inst_op', 'uuid': 'op-1',
+             'state': 'executing', 'observational': False},
+            {'operation_type': 'inst_op', 'uuid': 'op-0',
+             'state': 'complete', 'observational': True},
+        ]
+        self.mock_request.return_value = mock.Mock(
+            **{'json.return_value': ops})
+
+        client = self._client_with('%s-clusteroperations' % object_type)
+        method = getattr(client, 'get_%s_clusteroperations' % object_type)
+        url = '/%ss/some-ref/clusteroperations' % object_type
+
+        self.assertEqual(ops, method('some-ref'))
+        self.mock_request.assert_called_with(
+            'GET', url, data={'all': False})
+
+        self.assertEqual(ops, method('some-ref', all=True))
+        self.mock_request.assert_called_with(
+            'GET', url, data={'all': True})
+
+        self.assertEqual(ops, method('some-ref', namespace='gerkin'))
+        self.mock_request.assert_called_with(
+            'GET', url, data={'all': False, 'namespace': 'gerkin'})
+
+        self.mock_request.reset_mock()
+        client.root_html = 'nothing-useful'
+        self.assertRaises(apiclient.IncapableException, method, 'some-ref')
+        self.mock_request.assert_not_called()
+
+    def test_get_instance_clusteroperations(self):
+        self._check_clusteroperations_wrapper('instance')
+
+    def test_get_network_clusteroperations(self):
+        self._check_clusteroperations_wrapper('network')
+
+    def test_get_artifact_clusteroperations(self):
+        self._check_clusteroperations_wrapper('artifact')
+
+    def test_await_no_pending_operations_polls_until_clear(self):
+        views = [{'uuid': 'i', 'has_pending_operations': True},
+                 {'uuid': 'i', 'has_pending_operations': True},
+                 {'uuid': 'i', 'has_pending_operations': False}]
+        self.mock_request.side_effect = [
+            mock.Mock(**{'json.return_value': v}) for v in views]
+
+        client = self._client_with('object-pending-operations')
+        with mock.patch('shakenfist_client.apiclient.time.sleep') as sleep:
+            result = client.await_no_pending_operations(
+                'instance', 'i', timeout=60, interval=3)
+
+        self.assertEqual(views[2], result)
+        self.assertEqual(3, self.mock_request.call_count)
+        self.assertEqual([mock.call(3), mock.call(3)], sleep.call_args_list)
+
+    def test_await_no_pending_operations_each_type(self):
+        for object_type in ('instance', 'network', 'artifact'):
+            self.mock_request.reset_mock()
+            self.mock_request.side_effect = None
+            self.mock_request.return_value = mock.Mock(
+                **{'json.return_value': {'has_pending_operations': False}})
+
+            client = self._client_with(
+                'object-pending-operations get-instance-namespace '
+                'get-network-namespace')
+            client.await_no_pending_operations(
+                object_type, 'ref', namespace='gerkin', timeout=60)
+            self.mock_request.assert_called_once_with(
+                'GET', '/%ss/ref' % object_type,
+                data={'namespace': 'gerkin'})
+
+    def test_await_no_pending_operations_incapable(self):
+        # The mocked object is settled, so if the capability check were
+        # missing the call would return a view at once instead of raising,
+        # and both assertions below would fail.
+        self.mock_request.return_value = mock.Mock(
+            **{'json.return_value': {'has_pending_operations': False}})
+        client = self._client_with('nothing-useful')
+        self.assertRaises(
+            apiclient.IncapableException,
+            client.await_no_pending_operations, 'instance', 'i', timeout=60)
+        self.mock_request.assert_not_called()
+
+    def test_await_no_pending_operations_bad_type(self):
+        client = self._client_with('object-pending-operations')
+        self.assertRaises(
+            apiclient.InvalidException,
+            client.await_no_pending_operations, 'blob', 'b', timeout=60)
+        self.mock_request.assert_not_called()
+
+    def test_await_no_pending_operations_bad_interval(self):
+        client = self._client_with('object-pending-operations')
+        for interval in (0, -1):
+            self.assertRaises(
+                apiclient.InvalidException,
+                client.await_no_pending_operations, 'instance', 'i',
+                timeout=60, interval=interval)
+        self.mock_request.assert_not_called()
+
+    def test_await_no_pending_operations_view_without_field(self):
+        # A view which does not report the field must not count as settled.
+        self.mock_request.return_value = mock.Mock(
+            **{'json.return_value': {'uuid': 'a'}})
+        client = self._client_with('object-pending-operations')
+        self.assertRaises(
+            apiclient.IncapableException,
+            client.await_no_pending_operations, 'artifact', 'a', timeout=60)
+
+    def test_await_no_pending_operations_no_wait_view_without_field(self):
+        # A negative timeout returns without waiting, but still refuses a
+        # view which does not report the field.
+        self.mock_request.return_value = mock.Mock(
+            **{'json.return_value': {'uuid': 'i'}})
+        client = self._client_with('object-pending-operations')
+        client.async_strategy = apiclient.ASYNC_CONTINUE
+        self.assertRaises(
+            apiclient.IncapableException,
+            client.await_no_pending_operations, 'instance', 'i')
+        self.assertEqual(1, self.mock_request.call_count)
+
+    def test_await_no_pending_operations_object_deleted(self):
+        # An object deleted while waiting raises rather than counting as
+        # settled.
+        self.mock_request.side_effect = [
+            mock.Mock(**{'json.return_value': {'has_pending_operations': True}}),
+            apiclient.ResourceNotFoundException(
+                'API request failed', 'GET',
+                'http://localhost:13000/instances/i', 404,
+                '{"error": "instance not found"}')]
+        client = self._client_with('object-pending-operations')
+        with mock.patch('shakenfist_client.apiclient.time.sleep'):
+            self.assertRaises(
+                apiclient.ResourceNotFoundException,
+                client.await_no_pending_operations, 'instance', 'i',
+                timeout=60)
+        self.assertEqual(2, self.mock_request.call_count)
+
+    def test_await_no_pending_operations_zero_timeout(self):
+        # A zero timeout checks once and raises if the object is pending.
+        self.mock_request.side_effect = [
+            mock.Mock(**{'json.return_value': {'has_pending_operations': True}})
+            for _ in range(10)]
+        client = self._client_with('object-pending-operations')
+        with mock.patch('shakenfist_client.apiclient.time.sleep'):
+            with mock.patch('shakenfist_client.apiclient.time.time',
+                            side_effect=[0, 1, 2, 3]):
+                self.assertRaises(
+                    apiclient.TimeoutException,
+                    client.await_no_pending_operations, 'instance', 'i',
+                    timeout=0)
+        self.assertEqual(1, self.mock_request.call_count)
+
+    def test_get_artifact_namespace(self):
+        self.mock_request.return_value = mock.Mock(
+            **{'json.return_value': {'uuid': 'a', 'blobs': {}}})
+        client = self._client_with('')
+        client.get_artifact('a')
+        self.mock_request.assert_called_with('GET', '/artifacts/a', data=None)
+        client.get_artifact('a', namespace='gerkin')
+        self.mock_request.assert_called_with(
+            'GET', '/artifacts/a', data={'namespace': 'gerkin'})
+
+    def test_await_no_pending_operations_timeout(self):
+        # A finite supply of responses, so a loop which never times out
+        # fails instead of hanging.
+        self.mock_request.side_effect = [
+            mock.Mock(**{'json.return_value': {'has_pending_operations': True}})
+            for _ in range(10)]
+
+        client = self._client_with('object-pending-operations')
+        with mock.patch('shakenfist_client.apiclient.time.sleep'):
+            with mock.patch('shakenfist_client.apiclient.time.time',
+                            side_effect=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]):
+                self.assertRaises(
+                    apiclient.TimeoutException,
+                    client.await_no_pending_operations,
+                    'network', 'n', timeout=2)
+        # Polled at times 0 and 1 within the deadline, then once more at 2
+        # before the check at 3 finds it passed.
+        self.assertEqual(3, self.mock_request.call_count)
+
+    def test_await_no_pending_operations_default_timeout(self):
+        self.mock_request.return_value = mock.Mock(
+            **{'json.return_value': {'has_pending_operations': True}})
+
+        client = self._client_with('object-pending-operations')
+        client.async_strategy = apiclient.ASYNC_CONTINUE
+        result = client.await_no_pending_operations('instance', 'i')
+        self.assertEqual({'has_pending_operations': True}, result)
+        self.assertEqual(1, self.mock_request.call_count)
+
+        client.async_strategy = apiclient.ASYNC_PAUSE
+        self.mock_request.reset_mock()
+        self.mock_request.side_effect = [
+            mock.Mock(**{'json.return_value': {'has_pending_operations': True}})
+            for _ in range(10)]
+        with mock.patch('shakenfist_client.apiclient.time.sleep'):
+            with mock.patch('shakenfist_client.apiclient.time.time',
+                            side_effect=[0, 59, 61, 62]):
+                self.assertRaises(
+                    apiclient.TimeoutException,
+                    client.await_no_pending_operations, 'instance', 'i')
+        # The 60 second default deadline lets the poll at 59 through and
+        # stops at 61.
+        self.assertEqual(2, self.mock_request.call_count)
+
     def test_allocate_network(self):
         client = apiclient.Client(suppress_configuration_lookup=True,
                                   base_url='http://localhost:13000')
