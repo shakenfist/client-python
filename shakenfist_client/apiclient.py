@@ -1870,7 +1870,7 @@ class Client:
                 'The API server version you are talking to does not support '
                 'listing cluster claims.')
         body = {}
-        if coverage_state:
+        if coverage_state is not None:
             body['coverage_state'] = coverage_state
         r = self._request_url('GET', '/admin/claims', body)
         return r.json()
