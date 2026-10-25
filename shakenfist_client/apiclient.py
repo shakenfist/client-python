@@ -1858,6 +1858,23 @@ class Client:
         r = self._request_url('GET', '/admin/resources')
         return r.json()
 
+    def get_cluster_claims(self, coverage_state=None):
+        """List every claim in the cluster, across all namespaces (admin only).
+
+        coverage_state may be 'active' or 'expired' to filter the result.
+        The server validates it, so an unknown value is a 400 rather than
+        something this client second-guesses.
+        """
+        if not self.check_capability('cluster-claims'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'listing cluster claims.')
+        body = {}
+        if coverage_state is not None:
+            body['coverage_state'] = coverage_state
+        r = self._request_url('GET', '/admin/claims', body)
+        return r.json()
+
     # The following methods are convenience wrappers around methods above.
     def await_instance_create(self, instance_uuid, timeout=600):
         """Wait for an instance to reach a terminal state.

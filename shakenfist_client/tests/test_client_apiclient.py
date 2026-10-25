@@ -301,6 +301,41 @@ class ApiClientTestCase(testtools.TestCase):
         self.mock_request.assert_called_with(
             'GET', '/auth/namespaces/testspace/claims')
 
+    def test_get_cluster_claims(self):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = 'cluster-claims'
+        client.get_cluster_claims()
+
+        self.mock_request.assert_called_with('GET', '/admin/claims', {})
+
+    def test_get_cluster_claims_coverage_state(self):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = 'cluster-claims'
+        client.get_cluster_claims(coverage_state='expired')
+
+        self.mock_request.assert_called_with(
+            'GET', '/admin/claims', {'coverage_state': 'expired'})
+
+    def test_get_cluster_claims_forwards_an_empty_filter(self):
+        # The server is the only validator, so a value the caller supplied
+        # reaches it even when it is falsy, and gets the server's 400.
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = 'cluster-claims'
+        client.get_cluster_claims(coverage_state='')
+
+        self.mock_request.assert_called_with(
+            'GET', '/admin/claims', {'coverage_state': ''})
+
+    def test_get_cluster_claims_capability_gated(self):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = ''
+        self.assertRaises(apiclient.IncapableException,
+                          client.get_cluster_claims)
+
     def test_get_namespace_claim(self):
         client = apiclient.Client(suppress_configuration_lookup=True,
                                   base_url='http://localhost:13000')
