@@ -72,7 +72,7 @@ brief gates that step.
 ## Scope
 
 **In scope.** Everything below works against a server at
-shakenfist `develop` today, and needs nothing from phase 7a.
+shakenfist `develop`.
 
 - `sf-client node capacity`, a per-node rendering of
   `/admin/resources`.
@@ -83,16 +83,13 @@ shakenfist `develop` today, and needs nothing from phase 7a.
 - Daemon states in `node show`.
 - A `docs/` page, and the `AGENTS.md`, `CLAUDE.md` and README
   touches that page needs.
+- The readers of phase 7a's surface, gated on its capability
+  tokens: the cluster claims ledger under `node capacity`, each
+  excluded node's reason in place of D4's sentence, and
+  `namespace claim list --all` and `--coverage`. These were 7a's
+  step 8 until 2026-10-27; see D7.
 
 **Out of scope.**
-
-- Everything gated on phase 7a: the cluster claims ledger, a
-  cross-namespace claim list, and the reason a hypervisor was
-  left out of `per_node`. 7a has not designed those response
-  shapes yet. Briefing a client step against an undesigned
-  contract is how a step ends up being done twice. D7 moves that
-  client work into 7a's own phase plan instead of a later phase
-  here.
 - A release. CI and the conductor track `develop`, so phase 8
   cuts one release covering phases 4b to 7b (4b's D7).
 - Shakenfist functional coverage of the new CLI commands. The
@@ -275,6 +272,17 @@ operation deadlines phase 6 carried shakenfist steps, and D4's
 line should be upgraded in place. The master plan's 7a and 7b
 stubs are corrected to say so.
 
+*Reversed on 2026-10-27.* 7a merged (shakenfist#4654) with that
+step deferred, because it renders into this phase's `node
+capacity`, which did not exist yet. Holding 7a open across a
+client phase would have left its status wrong for as long as this
+phase takes. D7's reason for moving the work is spent: 7a's
+shapes are now designed and on `develop`, so a step briefed
+against them cannot be done twice. The work is step 6 here, with
+7a's brief carried over, and step 4's back brief mock covers its
+output too, so Michael agrees the whole `node capacity` format
+once.
+
 **D8. Gated commands catch `IncapableException` themselves and
 exit 1 with the exception's message,** following `network.py:127`
 (finding 8). Moving it into `GroupCatchExceptions` would be the
@@ -291,11 +299,14 @@ under Future work.
 | 3 | low | sonnet | none | **Fix `node resources`** (`commandline/node.py:162-185`). Fetch the events list, and if it is empty print `No resources event found` and `sys.exit(1)` before indexing. Replace `event['extra']['resource']` with `event['extra'][resource]` in both the pretty and simple paths. Add one sentence to the help: this is the node's last raw measurement, and `node capacity` shows what the scheduler admits against. Tests in `tests/test_client_commandline_node.py`: an empty event list exits 1, and a real event renders every key in pretty and simple modes. Commit subject: "Fix sf-client node resources." |
 | 4 | high | opus | none | **`sf-client node capacity [NODE]`.** **Back brief before writing code (see Back brief).** Implement D1 to D5 in `commandline/node.py`. Fetch `get_cluster_resources()` and `get_nodes()`. Build `uuid -> name` from the node list and render unknown UUIDs as the UUID. If `NODE` is given, filter to it by name or UUID, and exit 1 if it is not in `per_node`, printing D4's sentence when it is a hypervisor. Pretty output has three PrettyTables. **CPU**: node, committed, measured, limit, hard max, available, schedulable, load 1/5/15, notes. **Memory**: node, committed, available, max, reserved, max per instance, notes. **Disk**: node, committed GB, limit GB, available GB, notes. Notes carry `no capacity row` (from `not cpu_committed_row_present`), `cpu clamped` / `memory clamped`, and `over limit` when available is negative. Mark the binding CPU figure with `*`, using the server's arithmetic: charge = `max(cpu_measured, cpu_committed)`, ceilings = `cpu_hard_max` and `cpu_limit` when not None (shakenfist `scheduler.py:1094-1151`, and shakenfist's `docs/operator_guide/scheduler.md` around line 398). Cite those in a comment saying the arithmetic is copied, and that a change there must change here. Print a totals line from `total`. If `total.capacity_degraded` is true, print a banner first saying the committed figures could not be read and read as zero. Then list hypervisors (from `get_nodes()`, `is_hypervisor`) absent from `per_node`, with D4's exact wording. Simple output is one CSV header and one row per node, every per_node key in a fixed order you define once as a module constant, with name, uuid and capacity_degraded columns. JSON output is `get_cluster_resources()` verbatim. Render a key missing from the payload as `n/a` and a `None` as `-` (D5), through one helper, since the whole view needs the rule. Catch `IncapableException` as in step 1. Tests: a fixture payload built from the field list in this plan's finding 4, covering a node with no capacity row, a clamped node, a negative headroom, a degraded total, a hypervisor absent from `per_node`, an unknown UUID, a payload missing a key, and the binding marker on measured, on committed and on limit. Commit subject: "Add sf-client node capacity." |
 | 5 | medium | sonnet | none | **Documentation.** Create `docs/cluster-capacity.md`, covering `node capacity` (what each column is, which ceiling binds and why there are two ledgers, what `no capacity row`, `clamped` and the degraded banner mean, and why some hypervisors are listed as not reported), `node resources` and how it differs, and `namespace events` / `namespace claim events`. Explain why calibrating a claim means reading the namespace's events rather than the claim's: a claim's events die with the claim (shakenfist `app.py:418-424`'s comment). Link shakenfist's `docs/operator_guide/scheduler.md` for the admission model instead of restating it. In `docs/namespace-claims.md`, add `peak_used_*` and the events command, and link the new page. Add the page to README's documentation list, matching the existing entries' absolute-URL form (`README.md:42-51`). In `AGENTS.md`, add a short section mirroring the claims one: the binding marker's arithmetic is a copy of the server's, the columns are never merged, absent hypervisors are listed and never dropped, and `n/a` versus `-` is a deliberate distinction. Keep it to invariants, with detail in the docs page. Add a `CLAUDE.md` Recent Changes entry in the style of the existing ones. Commit subject: "Document the capacity and events commands." |
-| 6 | medium | opus | none | **Push audit floor and close-out.** client-python has no `PUSH-AUDIT.md`. The `plan-push-audit-phase` shared block says a phase that lands in another repository is audited in the pull request that lands it, and that a repository without a runbook gets at least the five-item floor checklist. So apply that checklist to `develop...HEAD` and record a verdict, or a reason it does not apply, for each item in a *Push audit* section of this plan. Item 4 greps every sibling checkout under the parent directory for `node resources` and for any `per_node` consumer, and states the greps. Add the questions this phase raises: does any new command print a credential (expected no, since none are handled), and does any rendering path crash on an older server (exercise each command against a payload with every optional key removed). Then write the plan's *Outcome* section: what each step did, anything deferred and where it was recorded. Run `pre-commit run --all-files` and `stestr run`. Commit subject: "Close out scheduler reservations phase 7b." |
+| 6 | high | opus | none | **The readers of phase 7a's surface** (formerly 7a's step 8; see D7). The server shapes are shakenfist's `admin_resources_get_example` and `admin_claims_get_example` in `shakenfist/external_api/admin.py`, and the exclusion reasons are the closed set `EXCLUSION_REASONS` in `shakenfist/scheduler.py`. Implement the format agreed at step 4's back brief, which included this step's output: (a) add a cluster claims ledger table under `node capacity`'s pretty output (columns: dimension, total, claimed, unclaimed used, unallocated), plus the ledger's keys in simple mode, with `row_present` false rendering D5 `-` and `degraded` true adding a banner line. Gate on `cluster-capacity`; when the token is absent, print nothing for the ledger and say so in `--help`. (b) Where the server sends `excluded` (gate on `cluster-resources-excluded`), replace D4's sentence with each node's reason, keeping D4's wording as the fallback for an older server. (c) `namespace claim list` gains `--all` (NAMESPACE becomes optional, and exactly one of the two must be given) and `--coverage active\|expired`. The `--all` view adds a `namespace` column ahead of `CLAIM_COLUMNS` and keeps `state` and `coverage` as separate columns (the rule recorded above `CLAIM_COLUMNS`). Catch `IncapableException` per D8. Tests: `CliRunner` tests for each, including old-server payloads without the new keys or tokens. Update client-python `docs/cluster-capacity.md` (step 5's page) and `docs/namespace-claims.md`. Step 7's floor audit covers this step's code. Commit subject: "Show the claims ledger and exclusions." |
+| 7 | medium | opus | none | **Push audit floor and close-out.** client-python has no `PUSH-AUDIT.md`. The `plan-push-audit-phase` shared block says a phase that lands in another repository is audited in the pull request that lands it, and that a repository without a runbook gets at least the five-item floor checklist. So apply that checklist to `develop...HEAD` and record a verdict, or a reason it does not apply, for each item in a *Push audit* section of this plan. Item 4 greps every sibling checkout under the parent directory for `node resources` and for any `per_node` consumer, and states the greps. Add the questions this phase raises: does any new command print a credential (expected no, since none are handled), and does any rendering path crash on an older server (exercise each command against a payload with every optional key removed). Then write the plan's *Outcome* section: what each step did, anything deferred and where it was recorded. Run `pre-commit run --all-files` and `stestr run`. Commit subject: "Close out scheduler reservations phase 7b." |
 
 Steps 1 to 3 are independent and may run in any order. Step 4
 reuses step 2's missing-versus-None helper if it has landed, so
-run it after 2. Step 5 needs 1 to 4, and step 6 is last.
+run it after 2. Step 5 needs 1 to 4. Step 6 renders into step 4's
+command and edits step 5's page, so it follows both, and step 7
+is last.
 
 ## Risks and mitigations
 
@@ -312,7 +323,7 @@ run it after 2. Step 5 needs 1 to 4, and step 6 is last.
   is documented as curated. This is accepted rather than
   engineered away.
 - **Operators read `n/a` as zero.** Mitigation: the docs page
-  defines both sentinels, and step 6's older-server exercise
+  defines both sentinels, and step 7's older-server exercise
   checks they appear where expected.
 - **The UUID join silently mislabels.** Mitigation: an unknown
   UUID renders as itself, never as a guessed name, and it is
@@ -337,6 +348,17 @@ run it after 2. Step 5 needs 1 to 4, and step 6 is last.
       whose `root_html` lacks the token. A test covers it.
 - [ ] `namespace claim show` against a claim dict with no
       `peak_used_*` keys exits 0 and prints `n/a` three times.
+- [ ] `sf-client node capacity` against an `excluded` fixture
+      prints each node's reason instead of D4's sentence. Against
+      an older server's payload, with neither `cluster_capacity`,
+      `excluded` nor their tokens, it prints D4's sentence and no
+      ledger, and exits 0. `CliRunner` tests cover both.
+- [ ] The ledger renders every figure as `-` when `row_present`
+      is false, and adds the banner line when `degraded` is true.
+      A test covers each.
+- [ ] `namespace claim list` with both `NAMESPACE` and `--all`, or
+      with neither, exits non-zero with a usage message. A test
+      covers both.
 - [ ] `pre-commit run --all-files` and `stestr run` pass.
 - [ ] The *Push audit* section has a verdict for each of the five
       floor items.
@@ -356,7 +378,10 @@ that operators will script against and that phase 8's guide will
 quote. Before writing code, the step 4 sub-agent returns a mocked
 rendering of all three output modes against the fixture, with
 the binding marker, the notes, the degraded banner and the
-not-reported line all visible. The management session takes that
+not-reported line all visible. It also mocks step 6's additions
+against the same fixture: the cluster claims ledger table, its
+simple-mode keys, an excluded node's reason in place of the
+not-reported sentence, and one `claim list --all` table. The management session takes that
 to Michael. Agreeing a mock costs a message, and changing the
 format after phase 8's guide quotes it costs a docs revision and
 a script break.
