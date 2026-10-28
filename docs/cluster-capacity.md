@@ -160,8 +160,9 @@ the nodes are idle. Read it again before acting on these figures.
 
 A degraded read makes every committed figure zero and every node look
 like it has no capacity row, so the figures mean nothing until the read
-is repeated. No figure is marked `*` either: admission still tests each
-node's row, which the failed read could not see.
+is repeated. No figure is marked `*`, and no node is noted as having no
+capacity row: admission still tests each node's row, which the failed
+read could not see.
 
 ### Hypervisors that are not reported
 

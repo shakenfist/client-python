@@ -252,14 +252,21 @@ def _capacity_binding_cpu(n):
     change to that arithmetic on the server must change it here.
 
     A wrong marker sends an operator to the wrong ledger, which is worse than
-    none, so a payload missing any input marks nothing.
+    none, so a payload missing any input, or sending one that is not a
+    number, marks nothing.
     """
     if any(key not in n for key in _CAPACITY_BINDING_INPUTS):
         return set()
 
     if not n['cpu_committed_row_present'] or n['cpu_limit'] is None:
         # No row: nothing committed is charged, and hard max is the ceiling.
-        return {'cpu_measured', 'cpu_hard_max'}
+        binding = {'cpu_measured', 'cpu_hard_max'}
+        if not all(_capacity_is_number(n[key]) for key in binding):
+            return set()
+        return binding
+
+    if not all(_capacity_is_number(n[key]) for key in ('cpu_measured', 'cpu_committed', 'cpu_limit')):
+        return set()
 
     binding = {'cpu_limit'}
     charge = max(n['cpu_measured'], n['cpu_committed'])
@@ -285,11 +292,13 @@ def _capacity_is_negative(n, key):
     return _capacity_is_number(n.get(key)) and n[key] < 0
 
 
-def _capacity_notes(n, clamp_key=None, clamp_note=None, available_key=None):
+def _capacity_notes(n, degraded, clamp_key=None, clamp_note=None, available_key=None):
     notes = []
     # Compared with False rather than tested for falsehood: an older server
-    # which never sent the flag has not said that the row is missing.
-    if n.get('cpu_committed_row_present') is False:
+    # which never sent the flag has not said that the row is missing. A
+    # degraded read makes every node look rowless, which the banner explains,
+    # so the note would state the failed read's artefact as fact.
+    if n.get('cpu_committed_row_present') is False and not degraded:
         notes.append('no capacity row')
     if clamp_key and n.get(clamp_key):
         notes.append(clamp_note)
@@ -333,7 +342,7 @@ def _capacity_pretty_tables(per_node, order, names, degraded):
                    '%s / %s / %s' % (util.render_optional(n, 'cpu_load_1'),
                                      util.render_optional(n, 'cpu_load_5'),
                                      util.render_optional(n, 'cpu_load_15')),
-                   _capacity_notes(n, 'cpu_reservation_clamped', 'cpu clamped', 'cpu_available')])
+                   _capacity_notes(n, degraded, 'cpu_reservation_clamped', 'cpu clamped', 'cpu_available')])
     print(x)
     print()
 
@@ -349,7 +358,7 @@ def _capacity_pretty_tables(per_node, order, names, degraded):
                    util.render_optional(n, 'ram_max'),
                    util.render_optional(n, 'memory_reserved_mb'),
                    util.render_optional(n, 'ram_max_per_instance'),
-                   _capacity_notes(n, 'memory_reservation_clamped', 'memory clamped', 'ram_available')])
+                   _capacity_notes(n, degraded, 'memory_reservation_clamped', 'memory clamped', 'ram_available')])
     print(x)
     print()
 
@@ -363,7 +372,7 @@ def _capacity_pretty_tables(per_node, order, names, degraded):
                    util.render_optional(n, 'disk_committed_gb'),
                    util.render_optional(n, 'disk_limit_gb'),
                    util.render_optional(n, 'disk_available'),
-                   _capacity_notes(n, available_key='disk_available')])
+                   _capacity_notes(n, degraded, available_key='disk_available')])
     print(x)
 
 
@@ -411,8 +420,9 @@ def _capacity_exclusion_reason(entry):
         # A negative age means this machine's clock is behind the server's,
         # and is left out like any other figure that cannot be trusted.
         published = entry.get('metrics_timestamp')
-        if _capacity_is_number(published) and _capacity_now() >= published:
-            details.append('last published %d seconds ago' % (_capacity_now() - published))
+        now = _capacity_now()
+        if _capacity_is_number(published) and now >= published:
+            details.append('last published %d seconds ago' % (now - published))
     elif reason == CAPACITY_EXCLUSION_QUEUE_TOO_LONG:
         if entry.get('node_queue_waiting') is not None:
             details.append('%s waiting' % entry['node_queue_waiting'])

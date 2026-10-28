@@ -70,7 +70,11 @@ memory and disk tables with the figure the scheduler admits against marked
 resources`, which raised on every real event outside JSON mode. Keys an older
 server omits render `n/a` and a server `None` renders `-`
 (`util.render_optional()`). The binding marker copies the server's
-arithmetic. See `AGENTS.md` and `docs/cluster-capacity.md`.
+arithmetic. On a server with `cluster-resources-excluded`, each hypervisor the
+scheduler left out is listed with its reason, and with `cluster-capacity` the
+cluster claims ledger follows the tables. `namespace claim list --all` and
+`--coverage` list every namespace's claims (`cluster-claims`). See `AGENTS.md`
+and `docs/cluster-capacity.md`.
 
 ### Transient Capacity Refusals (2026-09)
 

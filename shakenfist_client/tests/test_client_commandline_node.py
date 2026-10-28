@@ -272,6 +272,11 @@ class NodeCapacityTestCase(testtools.TestCase):
     def _cpu_rows(self, output):
         return {row[0]: dict(zip(CPU_COLUMNS, row)) for row in _table_rows(output, CPU_HEADING)}
 
+    def test_binding_marker_needs_numbers(self):
+        for overrides in ({'cpu_measured': None}, {'cpu_committed': None}, {'cpu_limit': 'ninety'},
+                          {'cpu_committed_row_present': False, 'cpu_hard_max': None}):
+            self.assertEqual(set(), node_cmd._capacity_binding_cpu(capacity_node(**overrides)), overrides)
+
     def test_binding_marker_on_committed(self):
         row = self._cpu_rows(self._capacity().output)['sf-1']
         self.assertEqual(('24*', '18', '90*', '90.0'),
@@ -373,11 +378,12 @@ class NodeCapacityTestCase(testtools.TestCase):
         self.assertLess(2, lines.index(CPU_HEADING))
         # The failed read hides the rows admission still tests, so nothing
         # is marked.
-        self.assertEqual(('0', '18', '-', '90.0', 'no capacity row'),
+        self.assertEqual(('0', '18', '-', '90.0', ''),
                          tuple(self._cpu_rows(result.output)['sf-1'][k]
                                for k in ['committed', 'measured', 'limit', 'hard max', 'notes']))
         for row in self._cpu_rows(result.output).values():
             self.assertNotIn('*', ''.join(row.values()))
+        self.assertNotIn('no capacity row', result.output)
 
     def test_no_banner_when_not_degraded(self):
         self.assertNotIn('WARNING', self._capacity().output)
