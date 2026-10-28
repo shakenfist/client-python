@@ -7,6 +7,7 @@ import testtools
 from click.shell_completion import ShellComplete
 from click.testing import CliRunner
 
+from shakenfist_client import apiclient
 from shakenfist_client.commandline import namespace as namespace_cmd
 
 
@@ -122,7 +123,7 @@ class NamespaceClaimCommandTestCase(testtools.TestCase):
             catch_exceptions=False)
 
         self.assertEqual(0, result.exit_code)
-        self.assertIn('expires_at      : \n', result.output)
+        self.assertIn('expires_at         : \n', result.output)
         self.assertNotIn('None', result.output)
 
     def test_claim_expiry_renders_a_timestamp(self):
@@ -258,3 +259,204 @@ class ClaimCompletionTestCase(testtools.TestCase):
         self.assertEqual(['aaaa-claim', 'bbbb-claim'],
                          [c.value for c in completions])
         client.get_namespace_claims.assert_called_with('testspace')
+
+
+EVENTS = [
+    {'timestamp': 1755213600.0, 'fqdn': 'sf-1', 'duration': None,
+     'message': 'claim created', 'extra': {'a': 1}},
+    {'timestamp': 1755213700.0, 'fqdn': 'sf-2', 'duration': 1.5,
+     'message': 'claim updated'},
+]
+
+
+class NamespaceEventsCommandTestCase(testtools.TestCase):
+    """Tests for the events commands."""
+
+    def _invoke(self, args, output='pretty', incapable=False):
+        client = mock.MagicMock()
+        client.get_namespace_events.return_value = [dict(e) for e in EVENTS]
+        client.get_namespace_claim_events.return_value = [dict(e) for e in EVENTS]
+        if incapable:
+            client.get_namespace_events.side_effect = apiclient.IncapableException('no events')
+            client.get_namespace_claim_events.side_effect = apiclient.IncapableException('no events')
+
+        runner = CliRunner()
+        result = runner.invoke(
+            namespace_cmd.namespace, args,
+            obj={'CLIENT': client, 'OUTPUT': output},
+            catch_exceptions=False)
+        return result, client
+
+    def test_namespace_events_passes_filters(self):
+        result, client = self._invoke(['events', 'testspace', '-t', 'audit', '-l', '5'])
+
+        self.assertEqual(0, result.exit_code)
+        client.get_namespace_events.assert_called_with(
+            'testspace', event_type='audit', limit='5')
+
+    def test_claim_events_passes_filters(self):
+        result, client = self._invoke(['claim', 'events', 'testspace', 'a-claim', '-l', '5'])
+
+        self.assertEqual(0, result.exit_code)
+        client.get_namespace_claim_events.assert_called_with(
+            'testspace', 'a-claim', event_type=None, limit='5')
+
+    def test_pretty(self):
+        for args in (['events', 'testspace'], ['claim', 'events', 'testspace', 'a-claim']):
+            result, _ = self._invoke(args)
+            self.assertEqual(0, result.exit_code)
+            self.assertIn('timestamp', result.output)
+            self.assertIn('sf-1', result.output)
+            self.assertIn('claim updated', result.output)
+
+    def test_simple(self):
+        for args in (['events', 'testspace'], ['claim', 'events', 'testspace', 'a-claim']):
+            result, _ = self._invoke(args, output='simple')
+            lines = result.output.splitlines()
+            self.assertEqual('timestamp,node,duration,message,extra', lines[0])
+            self.assertEqual(3, len(lines))
+            self.assertIn(',sf-1,None,claim created,', lines[1])
+            self.assertTrue(lines[2].endswith(',sf-2,1.5,claim updated,'))
+
+    def test_json(self):
+        for args in (['events', 'testspace'], ['claim', 'events', 'testspace', 'a-claim']):
+            result, _ = self._invoke(args, output='json')
+            self.assertEqual(EVENTS, json.loads(result.output))
+
+    def test_incapable_exits_with_message(self):
+        for args in (['events', 'testspace'], ['claim', 'events', 'testspace', 'a-claim']):
+            result, _ = self._invoke(args, incapable=True)
+            self.assertEqual(1, result.exit_code)
+            self.assertIn('no events', result.output)
+
+
+class ClaimShowPeakTestCase(testtools.TestCase):
+    """Tests for the peak_used_* lines of ``sf-client namespace claim show``."""
+
+    def _show(self, claim, output='pretty'):
+        client = mock.MagicMock()
+        client.get_namespace_claim.return_value = claim
+        result = CliRunner().invoke(
+            namespace_cmd.namespace, ['claim', 'show', 'testspace', 'a-claim'],
+            obj={'CLIENT': client, 'OUTPUT': output}, catch_exceptions=False)
+        self.assertEqual(0, result.exit_code)
+        return result.output.splitlines()
+
+    def test_peak_values_follow_matching_used_line(self):
+        claim = dict(CLAIM, peak_used_cpus=30, peak_used_memory_mb=0,
+                     peak_used_disk_gb=500)
+        lines = self._show(claim, output='simple')
+        self.assertIn('peak_used_cpus:30', lines)
+        self.assertIn('peak_used_memory_mb:0', lines)
+        self.assertEqual('used_cpus:12', lines[lines.index('peak_used_cpus:30') - 1])
+        self.assertEqual('used_disk_gb:600', lines[lines.index('peak_used_disk_gb:500') - 1])
+
+    def test_missing_peak_keys_render_na(self):
+        lines = self._show(CLAIM, output='simple')
+        for key in ('peak_used_cpus', 'peak_used_memory_mb', 'peak_used_disk_gb'):
+            self.assertIn('%s:n/a' % key, lines)
+
+    def test_none_peak_keys_render_dash(self):
+        claim = dict(CLAIM, peak_used_cpus=None, peak_used_memory_mb=None,
+                     peak_used_disk_gb=None)
+        lines = self._show(claim, output='simple')
+        for key in ('peak_used_cpus', 'peak_used_memory_mb', 'peak_used_disk_gb'):
+            self.assertIn('%s:-' % key, lines)
+
+
+def _claim_uuid(n):
+    return '00000000-0000-4000-8000-%012d' % n
+
+
+def cluster_claims():
+    """Claims across namespaces, shaped like the server's admin_claims_get_example."""
+    return [
+        {'uuid': _claim_uuid(193), 'state': 'created', 'namespace': 'ci', 'limit_cpus': 40,
+         'limit_memory_mb': 81920, 'limit_disk_gb': 2000, 'used_cpus': 12, 'used_memory_mb': 24576,
+         'used_disk_gb': 600, 'coverage_state': 'active', 'expires_at': 1793491200.0},
+        {'uuid': _claim_uuid(194), 'state': 'deleted', 'namespace': 'ci', 'limit_cpus': 8,
+         'limit_memory_mb': 16384, 'limit_disk_gb': 200, 'used_cpus': 0, 'used_memory_mb': 0,
+         'used_disk_gb': 0, 'coverage_state': 'active', 'expires_at': None},
+        {'uuid': _claim_uuid(195), 'state': 'created', 'namespace': 'batch', 'limit_cpus': 16,
+         'limit_memory_mb': 32768, 'limit_disk_gb': 500, 'used_cpus': 0, 'used_memory_mb': 0,
+         'used_disk_gb': 0, 'coverage_state': 'expired', 'expires_at': 1792540800.0},
+    ]
+
+
+class ClaimListAllTestCase(testtools.TestCase):
+    """Tests for ``sf-client namespace claim list --all`` and ``--coverage``."""
+
+    def _list(self, args, output='pretty', incapable=False):
+        client = mock.MagicMock()
+        client.get_namespace_claims.return_value = [CLAIM]
+        client.get_cluster_claims.return_value = cluster_claims()
+        if incapable:
+            client.get_cluster_claims.side_effect = apiclient.IncapableException('no cluster claims')
+        result = CliRunner().invoke(
+            namespace_cmd.namespace, ['claim', 'list'] + args,
+            obj={'CLIENT': client, 'OUTPUT': output}, catch_exceptions=False)
+        return result, client
+
+    def test_all_leads_with_namespace_and_keeps_both_states(self):
+        result, client = self._list(['--all'], output='simple')
+        self.assertEqual(0, result.exit_code)
+        client.get_cluster_claims.assert_called_once_with(coverage_state=None)
+        client.get_namespace_claims.assert_not_called()
+        lines = result.output.splitlines()
+        self.assertEqual(','.join(['namespace'] + namespace_cmd.CLAIM_COLUMNS), lines[0])
+        self.assertEqual(['ci', _claim_uuid(193), 'created', 'active', '12 / 40', '24576 / 81920',
+                          '600 / 2000', str(datetime.datetime.fromtimestamp(1793491200.0))],
+                         lines[1].split(','))
+        self.assertEqual(['ci', _claim_uuid(194), 'deleted', 'active', '0 / 8', '0 / 16384', '0 / 200', ''],
+                         lines[2].split(','))
+        self.assertEqual(['batch', 'created', 'expired'], [lines[3].split(',')[i] for i in (0, 2, 3)])
+
+    def test_all_pretty_has_a_namespace_column(self):
+        result, _ = self._list(['--all'])
+        self.assertEqual(0, result.exit_code)
+        header = result.output.splitlines()[1]
+        self.assertEqual(['namespace'] + namespace_cmd.CLAIM_COLUMNS,
+                         [cell.strip() for cell in header.strip('|').split('|')])
+        self.assertEqual(['ci', 'ci', 'batch'],
+                         [line.strip('|').split('|')[0].strip() for line in result.output.splitlines()[3:6]])
+
+    def test_all_json_is_the_payload(self):
+        result, _ = self._list(['--all'], output='json')
+        self.assertEqual(cluster_claims(), json.loads(result.output))
+
+    def test_one_namespace_has_no_namespace_column(self):
+        result, client = self._list(['testspace'], output='simple')
+        self.assertEqual(0, result.exit_code)
+        client.get_namespace_claims.assert_called_once_with('testspace')
+        client.get_cluster_claims.assert_not_called()
+        self.assertEqual(','.join(namespace_cmd.CLAIM_COLUMNS), result.output.splitlines()[0])
+
+    def test_coverage_is_passed_to_the_server(self):
+        for coverage in ('active', 'expired'):
+            result, client = self._list(['--all', '--coverage', coverage])
+            self.assertEqual(0, result.exit_code)
+            client.get_cluster_claims.assert_called_once_with(coverage_state=coverage)
+
+    def test_unknown_coverage_is_a_usage_error(self):
+        result, client = self._list(['--all', '--coverage', 'dormant'])
+        self.assertEqual(2, result.exit_code)
+        client.get_cluster_claims.assert_not_called()
+
+    def test_coverage_without_all_is_a_usage_error(self):
+        result, client = self._list(['testspace', '--coverage', 'active'])
+        self.assertEqual(2, result.exit_code)
+        self.assertIn('--coverage needs --all', result.output)
+        client.get_namespace_claims.assert_not_called()
+
+    def test_exactly_one_of_namespace_and_all(self):
+        for args in ([], ['testspace', '--all']):
+            result, client = self._list(args)
+            self.assertEqual(2, result.exit_code, args)
+            self.assertIn('Give exactly one of NAMESPACE and --all.', result.output)
+            client.get_namespace_claims.assert_not_called()
+            client.get_cluster_claims.assert_not_called()
+
+    def test_incapable_exits_1(self):
+        result, _ = self._list(['--all'], incapable=True)
+        self.assertEqual(1, result.exit_code)
+        self.assertEqual('no cluster claims\n', result.output)

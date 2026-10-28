@@ -45,6 +45,9 @@ from `~/.shakenfist`, or from `/etc/sf/shakenfist.json`.
 - [Namespace capacity claims](https://github.com/shakenfist/client-python/blob/develop/docs/namespace-claims.md)
   -- claiming aggregate cluster capacity for a namespace, the two claim
   states, and what each refusal means
+- [Cluster capacity](https://github.com/shakenfist/client-python/blob/develop/docs/cluster-capacity.md)
+  -- reading what each hypervisor has committed and measured, which figure
+  the scheduler admits against, and namespace and claim events
 - [Waiting out a transient capacity refusal](https://github.com/shakenfist/client-python/blob/develop/docs/transient-capacity-retry.md)
   -- how the server marks a capacity refusal it expects to pass, and the
   opt-in client retry which waits for it

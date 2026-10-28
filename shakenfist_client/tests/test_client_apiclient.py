@@ -301,6 +301,49 @@ class ApiClientTestCase(testtools.TestCase):
         self.mock_request.assert_called_with(
             'GET', '/auth/namespaces/testspace/claims')
 
+    def test_get_namespace_events(self):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = 'namespace-events'
+        client.get_namespace_events('testspace')
+
+        self.mock_request.assert_called_with(
+            'GET', '/auth/namespaces/testspace/events', {})
+
+    def test_get_namespace_events_filtered(self):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = 'namespace-events events-by-type'
+        client.get_namespace_events('testspace', event_type='audit', limit=5)
+
+        self.mock_request.assert_called_with(
+            'GET', '/auth/namespaces/testspace/events',
+            {'event_type': 'audit', 'limit': 5})
+
+    def test_get_namespace_events_incapable(self):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = ''
+        self.assertRaises(apiclient.IncapableException,
+                          client.get_namespace_events, 'testspace')
+
+    def test_get_namespace_claim_events(self):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = 'namespace-claim-events'
+        client.get_namespace_claim_events('testspace', 'a-claim')
+
+        self.mock_request.assert_called_with(
+            'GET', '/auth/namespaces/testspace/claims/a-claim/events', {})
+
+    def test_get_namespace_claim_events_incapable(self):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        # The namespace token alone does not advertise the claim endpoint.
+        client.root_html = 'namespace-events'
+        self.assertRaises(apiclient.IncapableException,
+                          client.get_namespace_claim_events, 'testspace', 'a-claim')
+
     def test_get_cluster_claims(self):
         client = apiclient.Client(suppress_configuration_lookup=True,
                                   base_url='http://localhost:13000')

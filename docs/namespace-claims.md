@@ -64,8 +64,69 @@ the only thing that explains why a namespace's placements stopped being
 charged to a claim, which is why the CLI never collapses the two fields
 into a single status column.
 
+`show` also prints `peak_used_cpus`, `peak_used_memory_mb` and
+`peak_used_disk_gb` after the matching `used_*` line. Each is the largest
+value that counter has reached while the claim has existed, and nothing
+lowers it: releasing an instance drops `used_*` but not the peak. That is
+what lets you ask what a namespace actually held after the instances that
+held it have gone. A peak the server did not send at all (an older
+server) shows `n/a`, and one it sent with no value shows `-`.
+
+```
+used_cpus          : 12
+peak_used_cpus     : 30
+```
+
 The list view also shows the drawdown in each dimension as `used /
 limit`, so `12 / 40` is twelve of forty claimed vCPUs placed.
+
+### Every namespace's claims
+
+```bash
+sf-client namespace claim list --all
+sf-client namespace claim list --all --coverage expired
+```
+
+`--all` lists the claims of every namespace in the cluster, with a
+`namespace` column ahead of the usual ones. `state` and `coverage`
+stay separate columns here too. Give exactly one of a namespace and
+`--all`; giving both, or neither, is a usage error. This is real output
+(from the fixture the tests use; expiry times are local):
+
+```
++-----------+--------------------------------------+---------+----------+---------+---------------+------------+---------------------+
+| namespace |                 uuid                 |  state  | coverage |   cpus  |   memory mb   |  disk gb   |       expires       |
++-----------+--------------------------------------+---------+----------+---------+---------------+------------+---------------------+
+|     ci    | 00000000-0000-4000-8000-000000000193 | created |  active  | 12 / 40 | 24576 / 81920 | 600 / 2000 | 2026-11-01 11:00:00 |
+|     ci    | 00000000-0000-4000-8000-000000000194 | deleted |  active  |  0 / 8  |   0 / 16384   |  0 / 200   |                     |
+|   batch   | 00000000-0000-4000-8000-000000000195 | created | expired  |  0 / 16 |   0 / 32768   |  0 / 500   | 2026-10-21 11:00:00 |
++-----------+--------------------------------------+---------+----------+---------+---------------+------------+---------------------+
+```
+
+`--coverage active` or `--coverage expired` narrows the `--all`
+listing, and the filtering is done by the server. `--coverage expired`
+is the quick way to find claims which no longer cover anything and are
+waiting to be deleted by hand. A single namespace's listing cannot be
+filtered: the server always returns every claim it holds, so
+`--coverage` without `--all` is refused as a usage error.
+
+`--all` needs a server which advertises the `cluster-claims`
+capability. Against an older one it prints the client's refusal and
+exits 1.
+
+## Reading a claim's history
+
+```bash
+sf-client namespace events ci
+sf-client namespace claim events ci <claim-uuid>
+```
+
+A claim's own events are removed with the claim, so only the namespace's
+events show what its capacity did across claims, and a claim's deletion
+is recorded there. Read `namespace events` when calibrating the next
+claim. See [cluster-capacity.md](cluster-capacity.md) for both commands
+and for `sf-client node capacity`, which shows the node side of the same
+ledger.
 
 ## Changing a claim
 
@@ -118,7 +179,7 @@ namespace with no claim.
 
 ## Using the API directly
 
-The `Client` class exposes the same five verbs:
+The `Client` class exposes the same verbs:
 
 ```python
 from shakenfist_client import apiclient
@@ -127,6 +188,7 @@ c = apiclient.Client()
 claim = c.create_namespace_claim('ci', 40, 81920, 2000, 86400)
 
 c.get_namespace_claims('ci')
+c.get_cluster_claims(coverage_state='expired')  # every namespace
 c.get_namespace_claim('ci', claim['uuid'])
 c.update_namespace_claim('ci', claim['uuid'], expires_in_seconds=86400)
 c.delete_namespace_claim('ci', claim['uuid'])

@@ -6,6 +6,7 @@ import click
 from prettytable import PrettyTable
 
 from shakenfist_client import util
+from shakenfist_client.apiclient import IncapableException
 
 
 def longest_str(d):
@@ -248,6 +249,47 @@ def namespace_remove_trust(ctx, namespace=None, trusted_namespace=None):
         print(json.dumps(out, indent=4, sort_keys=True))
 
 
+def _show_events(ctx, fetch):
+    try:
+        events = fetch()
+    except IncapableException as e:
+        print(str(e))
+        sys.exit(1)
+
+    if ctx.obj['OUTPUT'] == 'pretty':
+        x = PrettyTable()
+        x.field_names = ['timestamp', 'node', 'duration', 'message', 'extra']
+        for e in events:
+            e['timestamp'] = datetime.datetime.fromtimestamp(e['timestamp'])
+            x.add_row([e['timestamp'], e['fqdn'], e['duration'], e['message'],
+                       e.get('extra', '')])
+        print(x)
+
+    elif ctx.obj['OUTPUT'] == 'simple':
+        print('timestamp,node,duration,message,extra')
+        for e in events:
+            e['timestamp'] = datetime.datetime.fromtimestamp(e['timestamp'])
+            print('%s,%s,%s,%s,%s'
+                  % (e['timestamp'], e['fqdn'], e['duration'], e['message'],
+                     e.get('extra', '')))
+
+    elif ctx.obj['OUTPUT'] == 'json':
+        print(json.dumps(events, indent=4, sort_keys=True))
+
+
+@namespace.command(name='events',
+                   help=('Display events for a namespace. A claim\'s deletion is recorded here, '
+                         'because a claim\'s own events are removed with it.\n\n'
+                         'NAMESPACE: The name of the namespace'))
+@click.argument('namespace', type=click.STRING, shell_complete=_get_namespaces)
+@click.option('-t', '--type', help='The event type to return')
+@click.option('-l', '--limit', help='The maximum number of events to return')
+@click.pass_context
+def namespace_events(ctx, namespace=None, type=None, limit=None):
+    _show_events(ctx, lambda: ctx.obj['CLIENT'].get_namespace_events(
+        namespace, event_type=type, limit=limit))
+
+
 @click.group(help='Namespace capacity claim commands')
 def claim():
     pass
@@ -302,23 +344,54 @@ CLAIM_COLUMNS = ['uuid', 'state', 'coverage', 'cpus', 'memory mb', 'disk gb',
 
 
 @claim.command(name='list',
-               help=('List the capacity claims held by a namespace.\n\n'
-                     'NAMESPACE: The name of the namespace'))
-@click.argument('namespace', type=click.STRING, shell_complete=_get_namespaces)
+               help=('List the capacity claims held by a namespace, or with --all by every '
+                     'namespace.\n\n'
+                     'NAMESPACE: The name of the namespace. Give exactly one of NAMESPACE and --all.\n\n'
+                     'Every claim is listed whatever its coverage state, because an expired claim '
+                     'still has to be deleted by hand. --coverage narrows the --all listing to active '
+                     'or expired claims; a namespace\'s own listing cannot be filtered, so it needs '
+                     '--all. The --all listing leads with a namespace column.'))
+@click.argument('namespace', type=click.STRING, required=False, shell_complete=_get_namespaces)
+@click.option('--all', 'all_namespaces', is_flag=True, default=False,
+              help='List the claims of every namespace in the cluster')
+@click.option('--coverage', type=click.Choice(['active', 'expired']), default=None,
+              help='With --all, only list claims in this coverage state')
 @click.pass_context
-def claim_list(ctx, namespace=None):
-    claims = ctx.obj['CLIENT'].get_namespace_claims(namespace)
+def claim_list(ctx, namespace=None, all_namespaces=False, coverage=None):
+    if (namespace is not None) == all_namespaces:
+        raise click.UsageError('Give exactly one of NAMESPACE and --all.', ctx=ctx)
+    # The cluster listing filters on coverage on the server. A namespace's
+    # own listing has no filter, and deliberately lists every claim, so
+    # --coverage there is refused rather than filtered here.
+    if coverage is not None and not all_namespaces:
+        raise click.UsageError('--coverage needs --all: a namespace\'s own claim listing cannot be '
+                               'filtered by coverage.', ctx=ctx)
+
+    columns = CLAIM_COLUMNS
+    if all_namespaces:
+        try:
+            claims = ctx.obj['CLIENT'].get_cluster_claims(coverage_state=coverage)
+        except IncapableException as e:
+            print(str(e))
+            sys.exit(1)
+        # The namespace leads, and state and coverage stay two columns, for
+        # the reason given above CLAIM_COLUMNS.
+        columns = ['namespace'] + CLAIM_COLUMNS
+        rows = [[c['namespace']] + row for c, row in zip(claims, _claim_rows(claims))]
+    else:
+        claims = ctx.obj['CLIENT'].get_namespace_claims(namespace)
+        rows = list(_claim_rows(claims))
 
     if ctx.obj['OUTPUT'] == 'pretty':
         x = PrettyTable()
-        x.field_names = CLAIM_COLUMNS
-        for row in _claim_rows(claims):
+        x.field_names = columns
+        for row in rows:
             x.add_row(row)
         print(x)
 
     elif ctx.obj['OUTPUT'] == 'simple':
-        print(','.join(CLAIM_COLUMNS))
-        for row in _claim_rows(claims):
+        print(','.join(columns))
+        for row in rows:
             print(','.join(str(f) for f in row))
 
     elif ctx.obj['OUTPUT'] == 'json':
@@ -339,14 +412,21 @@ def claim_show(ctx, namespace=None, claim_uuid=None):
         print(json.dumps(c, indent=4, sort_keys=True))
         return
 
-    format_string = '%-16s: %s'
+    format_string = '%-19s: %s'
     if ctx.obj['OUTPUT'] == 'simple':
         format_string = '%s:%s'
 
+    # The peak_used_* keys arrived in shakenfist 1b54cca3c9 with no
+    # capability token, unlike the fields around them, so an older server
+    # omits them. They are not indexed directly for that reason, which
+    # departs from the direct indexing _claim_expiry relies on.
     for key in ['uuid', 'namespace', 'state', 'coverage_state',
                 'limit_cpus', 'used_cpus', 'limit_memory_mb',
                 'used_memory_mb', 'limit_disk_gb', 'used_disk_gb']:
         print(format_string % (key, c[key]))
+        if key.startswith('used_'):
+            peak_key = 'peak_' + key
+            print(format_string % (peak_key, util.render_optional(c, peak_key)))
     print(format_string % ('expires_at', _claim_expiry(c)))
 
 
@@ -444,6 +524,20 @@ def claim_delete(ctx, namespace=None, claim_uuid=None):
     c = ctx.obj['CLIENT'].delete_namespace_claim(namespace, claim_uuid)
     if ctx.obj['OUTPUT'] == 'json':
         print(json.dumps(c, indent=4, sort_keys=True))
+
+
+@claim.command(name='events',
+               help=('Display events for a capacity claim.\n\n'
+                     'NAMESPACE: The name of the namespace\n\n'
+                     'CLAIM_UUID: The UUID of the claim'))
+@click.argument('namespace', type=click.STRING, shell_complete=_get_namespaces)
+@click.argument('claim_uuid', type=click.STRING, shell_complete=_get_claims)
+@click.option('-t', '--type', help='The event type to return')
+@click.option('-l', '--limit', help='The maximum number of events to return')
+@click.pass_context
+def claim_events(ctx, namespace=None, claim_uuid=None, type=None, limit=None):
+    _show_events(ctx, lambda: ctx.obj['CLIENT'].get_namespace_claim_events(
+        namespace, claim_uuid, event_type=type, limit=limit))
 
 
 namespace.add_command(claim)

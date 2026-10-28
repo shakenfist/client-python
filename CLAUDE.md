@@ -61,6 +61,21 @@ or backport packages where necessary.
 
 ## Recent Changes
 
+### Capacity and Claim Views (2026-10)
+
+Added `sf-client node capacity`, which renders `/admin/resources` as CPU,
+memory and disk tables with the figure the scheduler admits against marked
+`*`, plus `namespace events` and `namespace claim events`, `peak_used_*` in
+`namespace claim show`, daemon states in `node show`, and a fix for `node
+resources`, which raised on every real event outside JSON mode. Keys an older
+server omits render `n/a` and a server `None` renders `-`
+(`util.render_optional()`). The binding marker copies the server's
+arithmetic. On a server with `cluster-resources-excluded`, each hypervisor the
+scheduler left out is listed with its reason, and with `cluster-capacity` the
+cluster claims ledger follows the tables. `namespace claim list --all` and
+`--coverage` list every namespace's claims (`cluster-claims`). See `AGENTS.md`
+and `docs/cluster-capacity.md`.
+
 ### Transient Capacity Refusals (2026-09)
 
 The client half of phase 4 of shakenfist's
