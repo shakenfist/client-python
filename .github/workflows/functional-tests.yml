@@ -163,14 +163,19 @@ jobs:
   # is the one a release counts.
   #
   # No concurrency group here: smoke-cluster.yml carries its own, keyed
-  # on the base branch on a merge group like sanity_checks' above, with the
-  # same re-run guard, so a superseded queue run releases its cluster
-  # rather than holding the shared under-cloud, and a "Re-run jobs" of
-  # this job on an old queue run does not cancel the live queue entry's
-  # smoke cluster.
+  # on the base branch on a merge group like sanity_checks' above, with
+  # the same re-run guard (shakenfist/actions#185), so a superseded queue
+  # run releases its cluster rather than holding the shared under-cloud,
+  # and a "Re-run jobs" of this job on an old queue run does not cancel
+  # the live queue entry's smoke cluster.
   functional_matrix:
     name: "${{ matrix.os.description }}"
     needs: [check_paths, sanity_checks]
+    # A called workflow cannot hold more than its caller grants, so this
+    # is the ceiling for smoke-cluster.yml, which asks for contents: read
+    # only. Widen it here if that workflow ever needs more.
+    permissions:
+      contents: read
     if: needs.check_paths.outputs.code_changed != 'false'
     strategy:
       fail-fast: false
