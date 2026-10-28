@@ -277,9 +277,12 @@ def _capacity_cpu_cell(n, key, binding):
     return value
 
 
+def _capacity_is_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
 def _capacity_is_negative(n, key):
-    value = n.get(key)
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and value < 0
+    return _capacity_is_number(n.get(key)) and n[key] < 0
 
 
 def _capacity_notes(n, clamp_key=None, clamp_note=None, available_key=None):
@@ -307,7 +310,7 @@ def _capacity_not_reported(nodes, per_node):
                   key=lambda n: n['name'])
 
 
-def _capacity_pretty_tables(per_node, order, names):
+def _capacity_pretty_tables(per_node, order, names, degraded):
     print('CPU (vCPUs; * marks what the scheduler admits against):')
     x = PrettyTable()
     x.field_names = ['node', 'committed', 'measured', 'limit', 'hard max', 'available',
@@ -315,7 +318,11 @@ def _capacity_pretty_tables(per_node, order, names):
     x.align = 'l'
     for u in order:
         n = per_node[u]
-        binding = _capacity_binding_cpu(n)
+        # A degraded read leaves every node looking rowless, so the marker
+        # would name measured and hard max. Placement's pre-filter does fall
+        # back to those, but the guarded UPDATE still admits against the row
+        # this read could not see, so nothing is marked.
+        binding = set() if degraded else _capacity_binding_cpu(n)
         x.add_row([names.get(u, u),
                    _capacity_cpu_cell(n, 'cpu_committed', binding),
                    _capacity_cpu_cell(n, 'cpu_measured', binding),
@@ -365,10 +372,6 @@ def _capacity_now():
     return time.time()
 
 
-def _capacity_is_number(value):
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
-
-
 def _capacity_gated(resources, key, capable):
     """A key of /admin/resources which only a server with its capability sends.
 
@@ -405,8 +408,10 @@ def _capacity_exclusion_reason(entry):
     if reason == CAPACITY_EXCLUSION_STALE_METRICS:
         # The server sends when the node last published, not an age, because
         # it may have held the reading for as long as its metrics cache lives.
+        # A negative age means this machine's clock is behind the server's,
+        # and is left out like any other figure that cannot be trusted.
         published = entry.get('metrics_timestamp')
-        if _capacity_is_number(published):
+        if _capacity_is_number(published) and _capacity_now() >= published:
             details.append('last published %d seconds ago' % (_capacity_now() - published))
     elif reason == CAPACITY_EXCLUSION_QUEUE_TOO_LONG:
         if entry.get('node_queue_waiting') is not None:
@@ -487,7 +492,7 @@ def _capacity_pretty(resources, per_node, nodes, names, order, filtered, exclude
     if not filtered:
         _capacity_pretty_ledger_banner(ledger)
 
-    _capacity_pretty_tables(per_node, order, names)
+    _capacity_pretty_tables(per_node, order, names, bool(total.get('capacity_degraded')))
 
     # Everything after the tables is cluster-wide, so a view of one node
     # stops here.

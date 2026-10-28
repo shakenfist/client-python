@@ -160,7 +160,8 @@ the nodes are idle. Read it again before acting on these figures.
 
 A degraded read makes every committed figure zero and every node look
 like it has no capacity row, so the figures mean nothing until the read
-is repeated.
+is repeated. No figure is marked `*` either: admission still tests each
+node's row, which the failed read could not see.
 
 ### Hypervisors that are not reported
 
@@ -174,7 +175,7 @@ Each is listed with the reason the server gives:
 | Reason | Meaning |
 | --- | --- |
 | `queue too long` | The node's queue of waiting work is over the scheduler's threshold, so nothing more is placed on it until it drains. Shown with how many are waiting and the threshold |
-| `stale metrics` | The node's last published metrics are too old to place against. Shown with how long ago it last published, counted against this machine's clock, so a skewed clock skews the age |
+| `stale metrics` | The node's last published metrics are too old to place against. Shown with how long ago it last published, counted against this machine's clock, so a skewed clock skews the age. If this machine's clock is behind the server's, the age would be negative and is left out |
 | `no metrics` | The node has never published metrics, or its row is empty |
 | `metrics unreadable` | Reading the node's metrics failed |
 
@@ -323,7 +324,7 @@ the node has published none.
 ## node show: daemon states
 
 `node show` also lists each daemon's state under `Daemon states:`, sorted
-by name, with `-` for a daemon whose state is empty:
+by name, with `-` for a daemon the server sent no state for:
 
 ```
 Daemon states:

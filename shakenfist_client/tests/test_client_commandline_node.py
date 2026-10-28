@@ -371,9 +371,13 @@ class NodeCapacityTestCase(testtools.TestCase):
         lines = result.output.splitlines()
         self.assertTrue(lines[0].startswith('WARNING: the scheduler could not read the capacity counters.'))
         self.assertLess(2, lines.index(CPU_HEADING))
-        self.assertEqual(('0', '18*', '-', '90.0*', 'no capacity row'),
+        # The failed read hides the rows admission still tests, so nothing
+        # is marked.
+        self.assertEqual(('0', '18', '-', '90.0', 'no capacity row'),
                          tuple(self._cpu_rows(result.output)['sf-1'][k]
                                for k in ['committed', 'measured', 'limit', 'hard max', 'notes']))
+        for row in self._cpu_rows(result.output).values():
+            self.assertNotIn('*', ''.join(row.values()))
 
     def test_no_banner_when_not_degraded(self):
         self.assertNotIn('WARNING', self._capacity().output)
@@ -519,6 +523,12 @@ class NodeCapacityExclusionsAndLedgerTestCase(testtools.TestCase):
             with mock.patch.object(node_cmd, '_capacity_now', return_value=now):
                 self.assertEqual('stale metrics (last published %d seconds ago)' % age,
                                  node_cmd._capacity_exclusion_reason(entry))
+
+    def test_stale_age_from_the_future_is_left_out(self):
+        # This machine's clock is behind the server's.
+        entry = {'reason': 'stale metrics', 'metrics_timestamp': 1040.0}
+        with mock.patch.object(node_cmd, '_capacity_now', return_value=1000.0):
+            self.assertEqual('stale metrics', node_cmd._capacity_exclusion_reason(entry))
 
     def test_unknown_reason_is_rendered_as_sent(self):
         excluded = dict(capacity_excluded())
