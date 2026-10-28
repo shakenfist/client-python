@@ -16,9 +16,11 @@ name: Functional tests
 # checks the queue's ruleset requires, in the shape described at
 # https://boinkor.net/2023/11/neat-github-actions-patterns-for-github-merge-queues/
 
+# Only automated_reviewer writes to pull requests, and it grants itself
+# that scope. A merge_group token is not downgraded for forks the way a
+# pull_request one is, so the default here stays read-only.
 permissions:
   contents: read
-  pull-requests: write
 
 on:
   pull_request:
@@ -48,6 +50,11 @@ jobs:
   # run always tests.
   check_paths:
     name: "Check paths"
+    # On pull_request events paths-filter lists the changed files
+    # through the API, which needs read access to pull requests.
+    permissions:
+      contents: read
+      pull-requests: read
     runs-on: [self-hosted, static]
     timeout-minutes: 10
     outputs:
@@ -156,11 +163,11 @@ jobs:
   # is the one a release counts.
   #
   # No concurrency group here: smoke-cluster.yml carries its own, keyed
-  # on the base branch on a merge group like sanity_checks' above, so a
-  # superseded queue run releases its cluster rather than holding the
-  # shared under-cloud. Its key does not have sanity_checks' re-run
-  # guard, so a "Re-run jobs" of this job on an old queue run shares a
-  # group with the live queue entry's smoke cluster.
+  # on the base branch on a merge group like sanity_checks' above, with the
+  # same re-run guard, so a superseded queue run releases its cluster
+  # rather than holding the shared under-cloud, and a "Re-run jobs" of
+  # this job on an old queue run does not cancel the live queue entry's
+  # smoke cluster.
   functional_matrix:
     name: "${{ matrix.os.description }}"
     needs: [check_paths, sanity_checks]
