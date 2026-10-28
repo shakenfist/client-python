@@ -172,25 +172,29 @@ def node_events(ctx, node=None, type=None, limit=None):
         print(json.dumps(events, indent=4, sort_keys=True))
 
 
-@node.command(name='resources', help='Display resources for a node')
+@node.command(name='resources',
+              help='Display resources for a node. This is the node\'s last raw measurement; '
+                   '"node capacity" shows what the scheduler admits against.')
 @click.argument('node', type=click.STRING, shell_complete=_get_nodes)
 @click.pass_context
 def node_resources(ctx, node=None):
-    event = ctx.obj['CLIENT'].get_node_events(node, event_type='resources', limit=1)[0]
-    if not event:
+    events = ctx.obj['CLIENT'].get_node_events(node, event_type='resources', limit=1)
+    if not events:
         print('No resources event found')
+        sys.exit(1)
+    event = events[0]
 
     if ctx.obj['OUTPUT'] == 'pretty':
         x = PrettyTable()
         x.field_names = ['node', 'resource', 'value']
         for resource in event.get('extra'):
-            x.add_row([node, resource, event['extra']['resource']])
+            x.add_row([node, resource, event['extra'][resource]])
         print(x)
 
     elif ctx.obj['OUTPUT'] == 'simple':
         print('node,resource,value')
         for resource in event.get('extra'):
-            print('{},{},{}'.format(node, resource, event['extra']['resource']))
+            print('{},{},{}'.format(node, resource, event['extra'][resource]))
 
     elif ctx.obj['OUTPUT'] == 'json':
         print(json.dumps(event.get('extra'), indent=4, sort_keys=True))

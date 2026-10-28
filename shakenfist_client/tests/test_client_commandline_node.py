@@ -54,3 +54,32 @@ class NodeShowTestCase(testtools.TestCase):
         node = {k: v for k, v in NODE.items() if not k.startswith('daemon-')}
         lines = self._show(node, output='simple')
         self.assertEqual(['daemon,name,state'], [x for x in lines if x.startswith('daemon,')])
+
+
+class NodeResourcesTestCase(testtools.TestCase):
+    """Tests for ``sf-client node resources``."""
+
+    def _resources(self, events, output='pretty'):
+        client = mock.MagicMock()
+        client.get_node_events.return_value = events
+        return CliRunner().invoke(
+            node_cmd.node, ['resources', 'sf-1'],
+            obj={'CLIENT': client, 'OUTPUT': output}, catch_exceptions=False)
+
+    def test_empty_events_exits_1(self):
+        for output in ['pretty', 'simple', 'json']:
+            result = self._resources([], output=output)
+            self.assertEqual(1, result.exit_code)
+            self.assertIn('No resources event found', result.output)
+
+    def test_pretty_renders_every_key(self):
+        result = self._resources([{'extra': {'cpu_max': 16, 'memory_max': 64000}}])
+        self.assertEqual(0, result.exit_code)
+        self.assertRegex(result.output, r'cpu_max\s*\|\s*16\s*\|')
+        self.assertRegex(result.output, r'memory_max\s*\|\s*64000\s*\|')
+
+    def test_simple_renders_every_key(self):
+        result = self._resources([{'extra': {'cpu_max': 16, 'memory_max': 64000}}], output='simple')
+        self.assertEqual(0, result.exit_code)
+        self.assertEqual(['node,resource,value', 'sf-1,cpu_max,16', 'sf-1,memory_max,64000'],
+                         result.output.splitlines())
