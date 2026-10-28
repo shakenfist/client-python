@@ -84,6 +84,27 @@ code look like tidy-up targets and are not:
   `expired`) is the one an operator has to act on, so collapsing them
   into a single status hides it.
 
+## Node Capacity View
+
+What `sf-client node capacity` prints and how to read it is in
+`docs/cluster-capacity.md`. Four invariants here look like tidy-up
+targets and are not:
+
+- The binding marker (`_capacity_binding_cpu()` in
+  `commandline/node.py`) is a copy of the server's arithmetic in
+  `shakenfist/scheduler.py` (`_has_sufficient_cpu()`): the charge is
+  `max(measured, committed)`, and the ceiling is the row's limit, or hard
+  max only for a node with no row. A change there must be made here too.
+  A payload missing an input marks nothing.
+- Committed, measured, limit and hard max stay separate columns. Merging
+  them into "used" hides which ledger is binding.
+- A hypervisor absent from the server's `per_node` is listed under the
+  tables, never dropped, because the busiest node is the one most likely
+  to be missing.
+- `n/a` (key absent: an older server) and `-` (key sent as `None`) are
+  deliberately different, via `util.render_optional()`. Do not render
+  either as zero.
+
 ## Agent Operation Deadlines
 
 `deadline_seconds` and `progress_timeout_seconds` bound an in-guest

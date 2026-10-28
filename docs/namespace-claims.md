@@ -64,8 +64,35 @@ the only thing that explains why a namespace's placements stopped being
 charged to a claim, which is why the CLI never collapses the two fields
 into a single status column.
 
+`show` also prints `peak_used_cpus`, `peak_used_memory_mb` and
+`peak_used_disk_gb` after the matching `used_*` line. Each is the largest
+value that counter has reached while the claim has existed, and nothing
+lowers it: releasing an instance drops `used_*` but not the peak. That is
+what lets you ask what a namespace actually held after the instances that
+held it have gone. A peak the server did not send at all (an older
+server) shows `n/a`, and one it sent with no value shows `-`.
+
+```
+used_cpus          : 12
+peak_used_cpus     : 30
+```
+
 The list view also shows the drawdown in each dimension as `used /
 limit`, so `12 / 40` is twelve of forty claimed vCPUs placed.
+
+## Reading a claim's history
+
+```bash
+sf-client namespace events ci
+sf-client namespace claim events ci <claim-uuid>
+```
+
+A claim's own events are removed with the claim, so only the namespace's
+events show what its capacity did across claims, and a claim's deletion
+is recorded there. Read `namespace events` when calibrating the next
+claim. See [cluster-capacity.md](cluster-capacity.md) for both commands
+and for `sf-client node capacity`, which shows the node side of the same
+ledger.
 
 ## Changing a claim
 
