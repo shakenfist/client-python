@@ -212,11 +212,27 @@ CAPACITY_SIMPLE_KEYS = (
     'ram_available', 'disk_available', 'disk_limit_gb', 'disk_committed_gb',
     'instances_total', 'instances_active')
 
-# Why a hypervisor is missing from per_node, when the server does not say.
-# Either its queue was too long or its metrics were stale or absent, and
-# nothing in the response tells those apart, so this names both rather than
-# guessing one.
+# Why a hypervisor is missing from per_node, from a server too old to say.
+# Its response cannot tell a queue too long from metrics stale or absent, so
+# this names both rather than guessing one.
 CAPACITY_NOT_REPORTED = 'not reported by the scheduler (queue length or stale metrics)'
+
+# The two exclusion reasons which carry details. The server's reasons are a
+# closed set of exact strings (EXCLUSION_REASONS in shakenfist's
+# shakenfist/scheduler.py), but one this client does not know is printed as
+# sent rather than refused: the server is the authority on why.
+CAPACITY_EXCLUSION_QUEUE_TOO_LONG = 'queue too long'
+CAPACITY_EXCLUSION_STALE_METRICS = 'stale metrics'
+
+# The cluster claims ledger's keys in simple output, in the order the server
+# publishes them. As with CAPACITY_SIMPLE_KEYS, a key is only ever appended.
+CAPACITY_LEDGER_DIMENSIONS = (('cpus', 'cpus'), ('memory_mb', 'memory mb'), ('disk_gb', 'disk gb'))
+CAPACITY_LEDGER_KEYS = (
+    ('row_present', 'degraded', 'updated_at')
+    + tuple('%s_%s' % (figure, dim)
+            for figure in ('total', 'claimed', 'unclaimed_used')
+            for dim, _ in CAPACITY_LEDGER_DIMENSIONS)
+    + tuple('unallocated_%s' % dim for dim, _ in CAPACITY_LEDGER_DIMENSIONS))
 
 _CAPACITY_BINDING_INPUTS = (
     'cpu_measured', 'cpu_committed', 'cpu_committed_row_present', 'cpu_hard_max', 'cpu_limit')
@@ -344,22 +360,132 @@ def _capacity_pretty_tables(per_node, order, names):
     print(x)
 
 
-def _capacity_pretty_not_reported(resources, missing):
+def _capacity_now():
+    """Now, as the exclusion ages are computed against. Tests patch this."""
+    return time.time()
+
+
+def _capacity_is_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _capacity_gated(resources, key, capable):
+    """A key of /admin/resources which only a server with its capability sends.
+
+    None when the server does not advertise the capability, or did not send a
+    mapping under the key: either way this client renders what it rendered
+    before the key existed.
+    """
+    if not capable:
+        return None
+    value = resources.get(key)
+    if not isinstance(value, dict):
+        return None
+    return value
+
+
+def _capacity_bare_reason(entry):
+    """The reason string of one entry of `excluded`, as the server sent it."""
+    if not isinstance(entry, dict):
+        return entry
+    return util.render_optional(entry, 'reason')
+
+
+def _capacity_exclusion_reason(entry):
+    """One entry of `excluded`, as a reason and whichever details it carries.
+
+    A detail which is missing, or is not a number, is left out rather than
+    rendered: an age computed from nothing is worse than no age.
+    """
+    reason = str(_capacity_bare_reason(entry))
+    if not isinstance(entry, dict):
+        return reason
+
+    details = []
+    if reason == CAPACITY_EXCLUSION_STALE_METRICS:
+        # The server sends when the node last published, not an age, because
+        # it may have held the reading for as long as its metrics cache lives.
+        published = entry.get('metrics_timestamp')
+        if _capacity_is_number(published):
+            details.append('last published %d seconds ago' % (_capacity_now() - published))
+    elif reason == CAPACITY_EXCLUSION_QUEUE_TOO_LONG:
+        if entry.get('node_queue_waiting') is not None:
+            details.append('%s waiting' % entry['node_queue_waiting'])
+        if entry.get('unreasonable_threshold') is not None:
+            details.append('threshold %s' % entry['unreasonable_threshold'])
+
+    if details:
+        return '%s (%s)' % (reason, ', '.join(details))
+    return reason
+
+
+def _capacity_reported_reason(n, excluded):
+    """Why a hypervisor in the node list is missing, from a server which says.
+
+    A server which publishes `excluded` gives every active node its queue or
+    metrics reason, so a hypervisor with no entry is not one whose queue was
+    long or whose metrics were stale, and naming those causes would be a
+    false claim. It is most likely one which was not active when the
+    scheduler last read its metrics, so its state from the node list is
+    shown instead.
+    """
+    if n['uuid'] in excluded:
+        return _capacity_exclusion_reason(excluded[n['uuid']])
+    return 'no reason given (node state %s)' % util.render_optional(n, 'state')
+
+
+def _capacity_pretty_not_reported(excluded, missing):
     if not missing:
         return
     print()
-    print('Hypervisors %s:' % CAPACITY_NOT_REPORTED)
+    if excluded is None:
+        print('Hypervisors %s:' % CAPACITY_NOT_REPORTED)
+        for n in missing:
+            print('    %s' % n['name'])
+        return
+
+    # Names are padded to the longest in the list, so the reasons line up.
+    print('Hypervisors not reported by the scheduler:')
+    width = max(len(n['name']) for n in missing)
     for n in missing:
-        print('    %s' % n['name'])
+        print('    %-*s : %s' % (width, n['name'], _capacity_reported_reason(n, excluded)))
 
 
-def _capacity_pretty(resources, per_node, nodes, names, order, filtered):
+def _capacity_pretty_ledger_banner(ledger):
+    if ledger is not None and ledger.get('degraded'):
+        print('WARNING: the cluster claims ledger could not be read. Its figures are unknown, not')
+        print('zero. Read it again.')
+        print()
+
+
+def _capacity_pretty_ledger(ledger):
+    if ledger is None:
+        return
+    print()
+    print('Cluster claims ledger:')
+    x = PrettyTable()
+    x.field_names = ['dimension', 'total', 'claimed', 'unclaimed used', 'unallocated']
+    x.align = 'l'
+    for dim, label in CAPACITY_LEDGER_DIMENSIONS:
+        x.add_row([label] + [util.render_optional(ledger, '%s_%s' % (figure, dim))
+                             for figure in ('total', 'claimed', 'unclaimed_used', 'unallocated')])
+    print(x)
+    # Compared with False: a ledger which never sent the flag has not said
+    # that the row is missing.
+    if ledger.get('row_present') is False and not ledger.get('degraded'):
+        print('The reconciler has not written the cluster ledger yet, so unclaimed placements are')
+        print('not yet guarded against the cluster total.')
+
+
+def _capacity_pretty(resources, per_node, nodes, names, order, filtered, excluded, ledger):
     total = resources.get('total', {})
     if total.get('capacity_degraded'):
         print('WARNING: the scheduler could not read the capacity counters. Every committed figure')
         print('below reads as zero, and every limit as -, because of that failed read and not because')
         print('the nodes are idle. Read it again before acting on these figures.')
         print()
+    if not filtered:
+        _capacity_pretty_ledger_banner(ledger)
 
     _capacity_pretty_tables(per_node, order, names)
 
@@ -371,18 +497,33 @@ def _capacity_pretty(resources, per_node, nodes, names, order, filtered):
     print()
     print('Total available: %s vCPUs, %s MB RAM'
           % (util.render_optional(total, 'cpu_available'), util.render_optional(total, 'ram_available')))
-    _capacity_pretty_not_reported(resources, _capacity_not_reported(nodes, per_node))
+    _capacity_pretty_not_reported(excluded, _capacity_not_reported(nodes, per_node))
+    _capacity_pretty_ledger(ledger)
 
 
-def _capacity_simple_not_reported(resources, missing):
-    # The server gave no reason, so the reason column is n/a: never sent.
+def _capacity_simple_not_reported(excluded, missing):
+    # The reason column is the server's bare reason. An older server gives
+    # none, and neither does a newer one for a node it has no entry for, so
+    # both are n/a: never sent.
     print()
     print('not_reported,name,uuid,reason')
     for n in missing:
-        print('not_reported,%s,%s,n/a' % (n['name'], n['uuid']))
+        reason = 'n/a'
+        if excluded is not None and n['uuid'] in excluded:
+            reason = _capacity_bare_reason(excluded[n['uuid']])
+        print('not_reported,%s,%s,%s' % (n['name'], n['uuid'], reason))
 
 
-def _capacity_simple(resources, per_node, nodes, names, order, filtered):
+def _capacity_simple_ledger(ledger):
+    if ledger is None:
+        return
+    print()
+    print('cluster_capacity,key,value')
+    for key in CAPACITY_LEDGER_KEYS:
+        print('cluster_capacity,%s,%s' % (key, util.render_optional(ledger, key)))
+
+
+def _capacity_simple(resources, per_node, nodes, names, order, filtered, excluded, ledger):
     degraded = util.render_optional(resources.get('total', {}), 'capacity_degraded')
     print(','.join(('name', 'uuid', 'capacity_degraded') + CAPACITY_SIMPLE_KEYS))
     for u in order:
@@ -393,7 +534,8 @@ def _capacity_simple(resources, per_node, nodes, names, order, filtered):
     if filtered:
         return
 
-    _capacity_simple_not_reported(resources, _capacity_not_reported(nodes, per_node))
+    _capacity_simple_not_reported(excluded, _capacity_not_reported(nodes, per_node))
+    _capacity_simple_ledger(ledger)
 
 
 @node.command(name='capacity',
@@ -405,22 +547,32 @@ def _capacity_simple(resources, per_node, nodes, names, order, filtered):
                     'limit, or hard max for a node without a row) which the scheduler admits against. '
                     'n/a means this server does not send that figure, and - that it sent no value. '
                     'Only hypervisors are shown: a hypervisor the scheduler does not report is named '
-                    'under the tables, and every other node is omitted. Simple output carries every '
-                    'figure the server sends, one row per node, and JSON output is the server\'s own '
-                    'response, keyed by node UUID.'))
+                    'under the tables with the reason the server gives, and every other node is '
+                    'omitted. A server too old to give reasons gets one sentence naming both possible '
+                    'causes. The cluster claims ledger follows, for the whole cluster only; a server '
+                    'without the cluster-capacity capability has no ledger, and none is printed. '
+                    'Simple output carries every figure the server sends, one row per node, then the '
+                    'not reported hypervisors and the ledger as sections. JSON output is the server\'s '
+                    'own response, keyed by node UUID.'))
 @click.argument('node', type=click.STRING, required=False, shell_complete=_get_nodes)
 @click.pass_context
 def node_capacity(ctx, node=None):
+    client = ctx.obj['CLIENT']
     try:
-        resources = ctx.obj['CLIENT'].get_cluster_resources()
+        resources = client.get_cluster_resources()
     except IncapableException as e:
         print(str(e))
         sys.exit(1)
 
-    nodes = list(ctx.obj['CLIENT'].get_nodes())
+    nodes = list(client.get_nodes())
     names = {n['uuid']: n['name'] for n in nodes}
     per_node = resources.get('per_node', {})
     order = _capacity_order(per_node, names)
+
+    # Rendered only when the server advertises them. Without the tokens the
+    # view is exactly what it was before the server sent either key.
+    excluded = _capacity_gated(resources, 'excluded', client.check_capability('cluster-resources-excluded'))
+    ledger = _capacity_gated(resources, 'cluster_capacity', client.check_capability('cluster-capacity'))
 
     if node:
         order = [u for u in order if node in (u, names.get(u))]
@@ -428,10 +580,13 @@ def node_capacity(ctx, node=None):
             known = [n for n in nodes if node in (n['uuid'], n['name'])]
             if not known:
                 print('Node %s not found' % node)
-            elif known[0].get('is_hypervisor'):
-                print('%s: %s' % (known[0]['name'], CAPACITY_NOT_REPORTED))
-            else:
+            elif not known[0].get('is_hypervisor'):
                 print('%s is not a hypervisor, so the scheduler does not report it' % known[0]['name'])
+            elif excluded is not None:
+                print('%s: not reported by the scheduler: %s'
+                      % (known[0]['name'], _capacity_reported_reason(known[0], excluded)))
+            else:
+                print('%s: %s' % (known[0]['name'], CAPACITY_NOT_REPORTED))
             sys.exit(1)
 
     if ctx.obj['OUTPUT'] == 'json':
@@ -440,9 +595,9 @@ def node_capacity(ctx, node=None):
             resources['per_node'] = {u: per_node[u] for u in order}
         print(json.dumps(resources, indent=4, sort_keys=True))
     elif ctx.obj['OUTPUT'] == 'simple':
-        _capacity_simple(resources, per_node, nodes, names, order, bool(node))
+        _capacity_simple(resources, per_node, nodes, names, order, bool(node), excluded, ledger)
     else:
-        _capacity_pretty(resources, per_node, nodes, names, order, bool(node))
+        _capacity_pretty(resources, per_node, nodes, names, order, bool(node), excluded, ledger)
 
 
 # This command is primarily intended for a CI check to ensure we're not spinning

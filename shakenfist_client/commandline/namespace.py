@@ -344,23 +344,54 @@ CLAIM_COLUMNS = ['uuid', 'state', 'coverage', 'cpus', 'memory mb', 'disk gb',
 
 
 @claim.command(name='list',
-               help=('List the capacity claims held by a namespace.\n\n'
-                     'NAMESPACE: The name of the namespace'))
-@click.argument('namespace', type=click.STRING, shell_complete=_get_namespaces)
+               help=('List the capacity claims held by a namespace, or with --all by every '
+                     'namespace.\n\n'
+                     'NAMESPACE: The name of the namespace. Give exactly one of NAMESPACE and --all.\n\n'
+                     'Every claim is listed whatever its coverage state, because an expired claim '
+                     'still has to be deleted by hand. --coverage narrows the --all listing to active '
+                     'or expired claims; a namespace\'s own listing cannot be filtered, so it needs '
+                     '--all. The --all listing leads with a namespace column.'))
+@click.argument('namespace', type=click.STRING, required=False, shell_complete=_get_namespaces)
+@click.option('--all', 'all_namespaces', is_flag=True, default=False,
+              help='List the claims of every namespace in the cluster')
+@click.option('--coverage', type=click.Choice(['active', 'expired']), default=None,
+              help='With --all, only list claims in this coverage state')
 @click.pass_context
-def claim_list(ctx, namespace=None):
-    claims = ctx.obj['CLIENT'].get_namespace_claims(namespace)
+def claim_list(ctx, namespace=None, all_namespaces=False, coverage=None):
+    if (namespace is not None) == all_namespaces:
+        raise click.UsageError('Give exactly one of NAMESPACE and --all.', ctx=ctx)
+    # The cluster listing filters on coverage on the server. A namespace's
+    # own listing has no filter, and deliberately lists every claim, so
+    # --coverage there is refused rather than filtered here.
+    if coverage is not None and not all_namespaces:
+        raise click.UsageError('--coverage needs --all: a namespace\'s own claim listing cannot be '
+                               'filtered by coverage.', ctx=ctx)
+
+    columns = CLAIM_COLUMNS
+    if all_namespaces:
+        try:
+            claims = ctx.obj['CLIENT'].get_cluster_claims(coverage_state=coverage)
+        except IncapableException as e:
+            print(str(e))
+            sys.exit(1)
+        # The namespace leads, and state and coverage stay two columns, for
+        # the reason given above CLAIM_COLUMNS.
+        columns = ['namespace'] + CLAIM_COLUMNS
+        rows = [[c['namespace']] + row for c, row in zip(claims, _claim_rows(claims))]
+    else:
+        claims = ctx.obj['CLIENT'].get_namespace_claims(namespace)
+        rows = list(_claim_rows(claims))
 
     if ctx.obj['OUTPUT'] == 'pretty':
         x = PrettyTable()
-        x.field_names = CLAIM_COLUMNS
-        for row in _claim_rows(claims):
+        x.field_names = columns
+        for row in rows:
             x.add_row(row)
         print(x)
 
     elif ctx.obj['OUTPUT'] == 'simple':
-        print(','.join(CLAIM_COLUMNS))
-        for row in _claim_rows(claims):
+        print(','.join(columns))
+        for row in rows:
             print(','.join(str(f) for f in row))
 
     elif ctx.obj['OUTPUT'] == 'json':

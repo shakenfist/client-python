@@ -442,6 +442,23 @@ since the survey, so briefs locate code by symbol:
   because the server sets both from the same row. The check is
   kept as a defence.
 
+**Step 6.**
+- The mock was followed, with one change. Names in the
+  not-reported list are padded to the longest name, not a fixed
+  width, so that real node names line up.
+- Cases the mock left open:
+  - An unknown reason is printed as sent.
+  - A detail the server left out is not printed.
+  - An `excluded` uuid the node list does not know, or one that
+    is not a hypervisor, is left to JSON.
+  - `--coverage` without `--all` is a usage error, because the
+    per-namespace listing cannot filter.
+- A hypervisor with no `excluded` entry, on a server that has
+  the token, was briefed to fall back to the old two-cause
+  sentence. That would be false: the server gives every active
+  node its queue or metrics reason, so such a node was not
+  active. It now prints "no reason given (node state X)".
+
 ## Outcome
 
 Not started.

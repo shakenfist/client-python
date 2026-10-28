@@ -172,6 +172,56 @@ def capacity_resources():
     }
 
 
+# The clock the exclusion ages are computed against.
+CAPACITY_NOW = 1792886400.0
+
+# Every capability the capacity view reads, and the one an older server has.
+CAPACITY_TOKENS = ('cluster-resources', 'cluster-resources-excluded', 'cluster-capacity')
+OLDER_SERVER_TOKENS = ('cluster-resources',)
+
+
+def capacity_excluded():
+    """An excluded mapping, shaped like the server's admin_resources_get_example.
+
+    sf-6's metrics are 312 seconds stale at CAPACITY_NOW, and sf-7's queue is
+    too long. net-1 has no metrics, which the server reports whatever a node's
+    role, and the view omits because it is not a hypervisor.
+    """
+    return {
+        _uuid(6): {'reason': 'stale metrics', 'metrics_timestamp': 1792886087.53},
+        _uuid(7): {'reason': 'queue too long', 'node_queue_waiting': 31, 'unreasonable_threshold': 20},
+        _uuid(8): {'reason': 'no metrics'},
+    }
+
+
+def capacity_ledger(**overrides):
+    """A cluster_capacity mapping, shaped like the server's admin_resources_get_example."""
+    ledger = {
+        'row_present': True, 'degraded': False, 'updated_at': 1792886100.0,
+        'total_cpus': 180, 'total_memory_mb': 770048, 'total_disk_gb': 3800,
+        'claimed_cpus': 40, 'claimed_memory_mb': 81920, 'claimed_disk_gb': 2000,
+        'unclaimed_used_cpus': 12, 'unclaimed_used_memory_mb': 16384, 'unclaimed_used_disk_gb': 100,
+        'unallocated_cpus': 128, 'unallocated_memory_mb': 671744, 'unallocated_disk_gb': 1700,
+    }
+    ledger.update(overrides)
+    return ledger
+
+
+def capacity_unread_ledger(degraded):
+    """A ledger with every figure None: not written yet, or not readable."""
+    ledger = {key: None for key in capacity_ledger()}
+    ledger.update({'row_present': False, 'degraded': degraded})
+    return ledger
+
+
+def capacity_current_resources():
+    """capacity_resources() as a server with both newer keys sends it."""
+    resources = capacity_resources()
+    resources['excluded'] = capacity_excluded()
+    resources['cluster_capacity'] = capacity_ledger()
+    return resources
+
+
 def capacity_degraded_resources():
     """A degraded read: every node reports as having no capacity row."""
     unsized = {'cpu_committed_row_present': False, 'cpu_limit': None, 'cpu_committed': 0,
@@ -207,14 +257,17 @@ CPU_COLUMNS = ['node', 'committed', 'measured', 'limit', 'hard max', 'available'
 class NodeCapacityTestCase(testtools.TestCase):
     """Tests for ``sf-client node capacity``."""
 
-    def _capacity(self, resources=None, nodes=None, output='pretty', args=None):
+    def _capacity(self, resources=None, nodes=None, output='pretty', args=None,
+                  capabilities=OLDER_SERVER_TOKENS):
         client = mock.MagicMock()
         client.get_cluster_resources.return_value = (
             capacity_resources() if resources is None else resources)
         client.get_nodes.return_value = capacity_nodes() if nodes is None else nodes
-        return CliRunner().invoke(
-            node_cmd.node, ['capacity'] + (args or []),
-            obj={'CLIENT': client, 'OUTPUT': output}, catch_exceptions=False)
+        client.check_capability.side_effect = lambda token: token in capabilities
+        with mock.patch.object(node_cmd, '_capacity_now', return_value=CAPACITY_NOW):
+            return CliRunner().invoke(
+                node_cmd.node, ['capacity'] + (args or []),
+                obj={'CLIENT': client, 'OUTPUT': output}, catch_exceptions=False)
 
     def _cpu_rows(self, output):
         return {row[0]: dict(zip(CPU_COLUMNS, row)) for row in _table_rows(output, CPU_HEADING)}
@@ -399,3 +452,274 @@ class NodeCapacityTestCase(testtools.TestCase):
             catch_exceptions=False)
         self.assertEqual(1, result.exit_code)
         self.assertEqual('no resources for you\n', result.output)
+
+
+NOT_REPORTED_HEADING = 'Hypervisors not reported by the scheduler:'
+LEDGER_HEADING = 'Cluster claims ledger:'
+LEDGER_BANNER = 'WARNING: the cluster claims ledger could not be read. Its figures are unknown, not'
+LEDGER_UNWRITTEN = 'The reconciler has not written the cluster ledger yet, so unclaimed placements are'
+
+
+class NodeCapacityExclusionsAndLedgerTestCase(testtools.TestCase):
+    """Tests for the exclusion reasons and the claims ledger in ``node capacity``."""
+
+    def _capacity(self, resources=None, output='pretty', args=None, capabilities=CAPACITY_TOKENS,
+                  nodes=None):
+        client = mock.MagicMock()
+        client.get_cluster_resources.return_value = (
+            capacity_current_resources() if resources is None else resources)
+        client.get_nodes.return_value = capacity_nodes() if nodes is None else nodes
+        client.check_capability.side_effect = lambda token: token in capabilities
+        with mock.patch.object(node_cmd, '_capacity_now', return_value=CAPACITY_NOW):
+            return CliRunner().invoke(
+                node_cmd.node, ['capacity'] + (args or []),
+                obj={'CLIENT': client, 'OUTPUT': output}, catch_exceptions=False)
+
+    def _not_reported(self, output):
+        lines = output.splitlines()
+        start = lines.index(NOT_REPORTED_HEADING)
+        return lines[start + 1:lines.index('', start)]
+
+    def _simple_section(self, output, header):
+        lines = output.splitlines()
+        start = lines.index(header)
+        end = lines.index('', start) if '' in lines[start:] else len(lines)
+        return lines[start + 1:end]
+
+    def _with_excluded(self, excluded):
+        resources = capacity_current_resources()
+        resources['excluded'] = excluded
+        return resources
+
+    def _with_ledger(self, ledger):
+        resources = capacity_current_resources()
+        resources['cluster_capacity'] = ledger
+        return resources
+
+    def test_reasons_replace_the_sentence(self):
+        result = self._capacity()
+        self.assertEqual(0, result.exit_code)
+        self.assertEqual(['    sf-6 : stale metrics (last published 312 seconds ago)',
+                          '    sf-7 : queue too long (31 waiting, threshold 20)'],
+                         self._not_reported(result.output))
+        self.assertNotIn('queue length or stale metrics', result.output)
+        # net-1 has an entry, but it is not a hypervisor.
+        self.assertNotIn('net-1', result.output)
+
+    def test_every_hypervisor_is_printed_once(self):
+        output = self._capacity().output
+        printed = [r[0] for r in _table_rows(output, CPU_HEADING)]
+        printed += [line.split(':')[0].strip() for line in self._not_reported(output)]
+        hypervisors = {n['name'] for n in capacity_nodes() if n['is_hypervisor']}
+        self.assertEqual(sorted(hypervisors | {UNKNOWN_UUID}), sorted(printed))
+
+    def test_stale_age_is_counted_from_now(self):
+        entry = {'reason': 'stale metrics', 'metrics_timestamp': 1000.0}
+        for now, age in [(1000.0, 0), (1312.9, 312), (5000.0, 4000)]:
+            with mock.patch.object(node_cmd, '_capacity_now', return_value=now):
+                self.assertEqual('stale metrics (last published %d seconds ago)' % age,
+                                 node_cmd._capacity_exclusion_reason(entry))
+
+    def test_unknown_reason_is_rendered_as_sent(self):
+        excluded = dict(capacity_excluded())
+        excluded[_uuid(6)] = {'reason': 'cosmic rays', 'metrics_timestamp': 1.0}
+        resources = self._with_excluded(excluded)
+        result = self._capacity(resources=resources)
+        self.assertEqual(0, result.exit_code)
+        self.assertEqual('    sf-6 : cosmic rays', self._not_reported(result.output)[0])
+        simple = self._capacity(resources=resources, output='simple').output
+        self.assertIn('not_reported,sf-6,%s,cosmic rays' % _uuid(6), simple.splitlines())
+
+    def test_missing_details_are_left_out(self):
+        cases = [
+            ({'reason': 'stale metrics'}, 'stale metrics'),
+            ({'reason': 'stale metrics', 'metrics_timestamp': None}, 'stale metrics'),
+            ({'reason': 'stale metrics', 'metrics_timestamp': 'yesterday'}, 'stale metrics'),
+            ({'reason': 'queue too long'}, 'queue too long'),
+            ({'reason': 'queue too long', 'unreasonable_threshold': 20}, 'queue too long (threshold 20)'),
+            ({'reason': 'queue too long', 'node_queue_waiting': 31, 'unreasonable_threshold': None},
+             'queue too long (31 waiting)'),
+            ({'reason': 'no metrics'}, 'no metrics'),
+            ({'reason': 'metrics unreadable'}, 'metrics unreadable'),
+            ({}, 'n/a'),
+            # Not a mapping at all: the value is the reason.
+            ('metrics unreadable', 'metrics unreadable'),
+        ]
+        for entry, expected in cases:
+            excluded = dict(capacity_excluded())
+            excluded[_uuid(7)] = entry
+            result = self._capacity(resources=self._with_excluded(excluded))
+            self.assertEqual(0, result.exit_code, entry)
+            self.assertEqual('    sf-7 : %s' % expected, self._not_reported(result.output)[1], entry)
+            self.assertNotIn('None', result.output, entry)
+
+    def test_hypervisor_without_an_entry_shows_its_state(self):
+        # The server gives every active node a reason, so the old sentence's
+        # two causes would be a false claim here.
+        excluded = capacity_excluded()
+        del excluded[_uuid(7)]
+        resources = self._with_excluded(excluded)
+        nodes = capacity_nodes()
+        nodes[6]['state'] = 'error'
+        output = self._capacity(resources=resources, nodes=nodes).output
+        self.assertEqual(['    sf-6 : stale metrics (last published 312 seconds ago)',
+                          '    sf-7 : no reason given (node state error)'],
+                         self._not_reported(output))
+        self.assertNotIn('queue length or stale metrics', output)
+        simple = self._capacity(resources=resources, nodes=nodes, output='simple').output
+        self.assertEqual(['not_reported,sf-6,%s,stale metrics' % _uuid(6),
+                          'not_reported,sf-7,%s,n/a' % _uuid(7)],
+                         self._simple_section(simple, 'not_reported,name,uuid,reason'))
+        for output in ['pretty', 'simple', 'json']:
+            result = self._capacity(resources=resources, nodes=nodes, args=['sf-7'], output=output)
+            self.assertEqual(1, result.exit_code)
+            self.assertEqual('sf-7: not reported by the scheduler: no reason given (node state error)\n',
+                             result.output)
+
+    def test_hypervisor_without_an_entry_or_a_state(self):
+        excluded = capacity_excluded()
+        del excluded[_uuid(7)]
+        nodes = capacity_nodes()
+        del nodes[6]['state']
+        resources = self._with_excluded(excluded)
+        self.assertEqual('    sf-7 : no reason given (node state n/a)',
+                         self._not_reported(self._capacity(resources=resources, nodes=nodes).output)[1])
+        result = self._capacity(resources=resources, nodes=nodes, args=['sf-7'])
+        self.assertEqual('sf-7: not reported by the scheduler: no reason given (node state n/a)\n',
+                         result.output)
+
+    def test_names_are_padded_to_the_longest(self):
+        nodes = capacity_nodes()
+        nodes[6]['name'] = 'sf-primary'
+        self.assertEqual(['    sf-6       : stale metrics (last published 312 seconds ago)',
+                          '    sf-primary : queue too long (31 waiting, threshold 20)'],
+                         self._not_reported(self._capacity(nodes=nodes).output))
+
+    def test_entries_for_unknown_and_non_hypervisor_nodes_are_omitted(self):
+        excluded = dict(capacity_excluded())
+        excluded[_uuid(42)] = {'reason': 'no metrics'}
+        result = self._capacity(resources=self._with_excluded(excluded))
+        self.assertEqual(0, result.exit_code)
+        self.assertNotIn(_uuid(42), result.output)
+        self.assertEqual(2, len(self._not_reported(result.output)))
+        simple = self._capacity(resources=self._with_excluded(excluded), output='simple').output
+        self.assertNotIn(_uuid(42), simple)
+        self.assertNotIn(_uuid(8), simple)
+
+    def test_filter_to_excluded_hypervisor_exits_1_with_its_reason(self):
+        for output in ['pretty', 'simple', 'json']:
+            result = self._capacity(args=['sf-7'], output=output)
+            self.assertEqual(1, result.exit_code)
+            self.assertEqual('sf-7: not reported by the scheduler: queue too long (31 waiting, threshold 20)\n',
+                             result.output)
+
+    def test_excluded_is_ignored_without_its_token(self):
+        tokens = ('cluster-resources', 'cluster-capacity')
+        output = self._capacity(capabilities=tokens).output
+        self.assertIn('Hypervisors not reported by the scheduler (queue length or stale metrics):',
+                      output.splitlines())
+        self.assertNotIn(NOT_REPORTED_HEADING, output.splitlines())
+        self.assertNotIn('stale metrics (last', output)
+        simple = self._capacity(capabilities=tokens, output='simple').output
+        self.assertIn('not_reported,sf-6,%s,n/a' % _uuid(6), simple.splitlines())
+        result = self._capacity(capabilities=tokens, args=['sf-7'])
+        self.assertEqual('sf-7: not reported by the scheduler (queue length or stale metrics)\n',
+                         result.output)
+
+    def test_ledger_is_ignored_without_its_token(self):
+        tokens = ('cluster-resources', 'cluster-resources-excluded')
+        resources = self._with_ledger(capacity_unread_ledger(degraded=True))
+        output = self._capacity(resources=resources, capabilities=tokens).output
+        self.assertNotIn(LEDGER_HEADING, output)
+        self.assertNotIn(LEDGER_BANNER, output)
+        simple = self._capacity(resources=resources, capabilities=tokens, output='simple').output
+        self.assertNotIn('cluster_capacity', simple)
+
+    def test_older_server_gets_exactly_the_old_view(self):
+        for output in ['pretty', 'simple']:
+            old = self._capacity(resources=capacity_resources(), output=output,
+                                 capabilities=OLDER_SERVER_TOKENS)
+            self.assertEqual(0, old.exit_code)
+            self.assertNotIn(LEDGER_HEADING, old.output)
+            self.assertNotIn('cluster_capacity', old.output)
+            # The newer keys without their tokens, and the tokens without the
+            # keys, both render the older server's view.
+            self.assertEqual(old.output, self._capacity(output=output, capabilities=OLDER_SERVER_TOKENS).output)
+            self.assertEqual(old.output, self._capacity(resources=capacity_resources(), output=output).output)
+
+    def test_ledger_table(self):
+        lines = self._capacity().output.splitlines()
+        self.assertLess(lines.index(NOT_REPORTED_HEADING), lines.index(LEDGER_HEADING))
+        self.assertEqual([['cpus', '180', '40', '12', '128'],
+                          ['memory mb', '770048', '81920', '16384', '671744'],
+                          ['disk gb', '3800', '2000', '100', '1700']],
+                         _table_rows('\n'.join(lines), LEDGER_HEADING))
+        self.assertNotIn(LEDGER_BANNER, lines)
+        self.assertNotIn(LEDGER_UNWRITTEN, lines)
+
+    def test_ledger_follows_the_totals_when_every_hypervisor_reports(self):
+        nodes = [n for n in capacity_nodes() if n['name'] not in ('sf-6', 'sf-7')]
+        lines = self._capacity(nodes=nodes).output.splitlines()
+        self.assertNotIn(NOT_REPORTED_HEADING, lines)
+        self.assertEqual(['', LEDGER_HEADING], lines[lines.index(LEDGER_HEADING) - 1:lines.index(LEDGER_HEADING) + 1])
+
+    def test_unwritten_ledger_renders_dashes_and_says_why(self):
+        lines = self._capacity(resources=self._with_ledger(capacity_unread_ledger(degraded=False))).output.splitlines()
+        rows = _table_rows('\n'.join(lines), LEDGER_HEADING)
+        self.assertEqual([['cpus', '-', '-', '-', '-'], ['memory mb', '-', '-', '-', '-'],
+                          ['disk gb', '-', '-', '-', '-']], rows)
+        self.assertEqual([LEDGER_UNWRITTEN, 'not yet guarded against the cluster total.'], lines[-2:])
+        self.assertNotIn(LEDGER_BANNER, lines)
+
+    def test_degraded_ledger_banner_comes_first(self):
+        result = self._capacity(resources=self._with_ledger(capacity_unread_ledger(degraded=True)))
+        self.assertEqual(0, result.exit_code)
+        lines = result.output.splitlines()
+        self.assertEqual([LEDGER_BANNER, 'zero. Read it again.', '', CPU_HEADING], lines[:4])
+        self.assertEqual(['cpus', '-', '-', '-', '-'], _table_rows(result.output, LEDGER_HEADING)[0])
+        self.assertNotIn(LEDGER_UNWRITTEN, lines)
+
+    def test_both_banners_capacity_first(self):
+        resources = capacity_degraded_resources()
+        resources['cluster_capacity'] = capacity_unread_ledger(degraded=True)
+        lines = self._capacity(resources=resources).output.splitlines()
+        self.assertTrue(lines[0].startswith('WARNING: the scheduler could not read the capacity counters.'))
+        self.assertEqual(LEDGER_BANNER, lines[4])
+
+    def test_one_node_has_no_ledger_and_no_ledger_banner(self):
+        resources = self._with_ledger(capacity_unread_ledger(degraded=True))
+        for output in ['pretty', 'simple']:
+            result = self._capacity(resources=resources, args=['sf-2'], output=output)
+            self.assertEqual(0, result.exit_code)
+            self.assertNotIn('ledger', result.output)
+            self.assertNotIn('cluster_capacity', result.output)
+
+    def test_simple_sections(self):
+        result = self._capacity(output='simple')
+        self.assertEqual(0, result.exit_code)
+        self.assertEqual(['not_reported,sf-6,%s,stale metrics' % _uuid(6),
+                          'not_reported,sf-7,%s,queue too long' % _uuid(7)],
+                         self._simple_section(result.output, 'not_reported,name,uuid,reason'))
+        ledger = self._simple_section(result.output, 'cluster_capacity,key,value')
+        self.assertEqual(['cluster_capacity,%s' % key for key in node_cmd.CAPACITY_LEDGER_KEYS],
+                         [line.rsplit(',', 1)[0] for line in ledger])
+        self.assertEqual(['cluster_capacity,row_present,True', 'cluster_capacity,degraded,False',
+                          'cluster_capacity,updated_at,1792886100.0', 'cluster_capacity,total_cpus,180'],
+                         ledger[:4])
+        self.assertEqual('cluster_capacity,unallocated_disk_gb,1700', ledger[-1])
+
+    def test_simple_ledger_keys_are_the_servers(self):
+        self.assertEqual(sorted(capacity_ledger()), sorted(node_cmd.CAPACITY_LEDGER_KEYS))
+
+    def test_simple_unwritten_and_missing_ledger_figures(self):
+        ledger = capacity_unread_ledger(degraded=False)
+        del ledger['unallocated_disk_gb']
+        lines = self._simple_section(self._capacity(resources=self._with_ledger(ledger), output='simple').output,
+                                     'cluster_capacity,key,value')
+        self.assertEqual('cluster_capacity,row_present,False', lines[0])
+        self.assertEqual('cluster_capacity,total_cpus,-', lines[3])
+        self.assertEqual('cluster_capacity,unallocated_disk_gb,n/a', lines[-1])
+
+    def test_json_is_the_payload_verbatim(self):
+        result = self._capacity(output='json')
+        self.assertEqual(capacity_current_resources(), json.loads(result.output))
