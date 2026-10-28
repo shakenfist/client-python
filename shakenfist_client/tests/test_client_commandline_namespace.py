@@ -7,6 +7,7 @@ import testtools
 from click.shell_completion import ShellComplete
 from click.testing import CliRunner
 
+from shakenfist_client import apiclient
 from shakenfist_client.commandline import namespace as namespace_cmd
 
 
@@ -258,3 +259,72 @@ class ClaimCompletionTestCase(testtools.TestCase):
         self.assertEqual(['aaaa-claim', 'bbbb-claim'],
                          [c.value for c in completions])
         client.get_namespace_claims.assert_called_with('testspace')
+
+
+EVENTS = [
+    {'timestamp': 1755213600.0, 'fqdn': 'sf-1', 'duration': None,
+     'message': 'claim created', 'extra': {'a': 1}},
+    {'timestamp': 1755213700.0, 'fqdn': 'sf-2', 'duration': 1.5,
+     'message': 'claim updated'},
+]
+
+
+class NamespaceEventsCommandTestCase(testtools.TestCase):
+    """Tests for the events commands."""
+
+    def _invoke(self, args, output='pretty', incapable=False):
+        client = mock.MagicMock()
+        client.get_namespace_events.return_value = [dict(e) for e in EVENTS]
+        client.get_namespace_claim_events.return_value = [dict(e) for e in EVENTS]
+        if incapable:
+            client.get_namespace_events.side_effect = apiclient.IncapableException('no events')
+            client.get_namespace_claim_events.side_effect = apiclient.IncapableException('no events')
+
+        runner = CliRunner()
+        result = runner.invoke(
+            namespace_cmd.namespace, args,
+            obj={'CLIENT': client, 'OUTPUT': output},
+            catch_exceptions=False)
+        return result, client
+
+    def test_namespace_events_passes_filters(self):
+        result, client = self._invoke(['events', 'testspace', '-t', 'audit', '-l', '5'])
+
+        self.assertEqual(0, result.exit_code)
+        client.get_namespace_events.assert_called_with(
+            'testspace', event_type='audit', limit='5')
+
+    def test_claim_events_passes_filters(self):
+        result, client = self._invoke(['claim', 'events', 'testspace', 'a-claim', '-l', '5'])
+
+        self.assertEqual(0, result.exit_code)
+        client.get_namespace_claim_events.assert_called_with(
+            'testspace', 'a-claim', event_type=None, limit='5')
+
+    def test_pretty(self):
+        for args in (['events', 'testspace'], ['claim', 'events', 'testspace', 'a-claim']):
+            result, _ = self._invoke(args)
+            self.assertEqual(0, result.exit_code)
+            self.assertIn('timestamp', result.output)
+            self.assertIn('sf-1', result.output)
+            self.assertIn('claim updated', result.output)
+
+    def test_simple(self):
+        for args in (['events', 'testspace'], ['claim', 'events', 'testspace', 'a-claim']):
+            result, _ = self._invoke(args, output='simple')
+            lines = result.output.splitlines()
+            self.assertEqual('timestamp,node,duration,message,extra', lines[0])
+            self.assertEqual(3, len(lines))
+            self.assertIn(',sf-1,None,claim created,', lines[1])
+            self.assertTrue(lines[2].endswith(',sf-2,1.5,claim updated,'))
+
+    def test_json(self):
+        for args in (['events', 'testspace'], ['claim', 'events', 'testspace', 'a-claim']):
+            result, _ = self._invoke(args, output='json')
+            self.assertEqual(EVENTS, json.loads(result.output))
+
+    def test_incapable_exits_with_message(self):
+        for args in (['events', 'testspace'], ['claim', 'events', 'testspace', 'a-claim']):
+            result, _ = self._invoke(args, incapable=True)
+            self.assertEqual(1, result.exit_code)
+            self.assertIn('no events', result.output)

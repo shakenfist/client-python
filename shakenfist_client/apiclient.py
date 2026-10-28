@@ -688,6 +688,21 @@ class Client:
     def get_node_events(self, node, event_type=None, limit=None):
         return self._get_events('nodes', node, event_type, limit)
 
+    def get_namespace_events(self, namespace, event_type=None, limit=None):
+        if not self.check_capability('namespace-events'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'lookup of events for a namespace.')
+        return self._get_events('auth/namespaces', namespace, event_type, limit)
+
+    def get_namespace_claim_events(self, namespace, claim_uuid, event_type=None, limit=None):
+        if not self.check_capability('namespace-claim-events'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'lookup of events for a namespace claim.')
+        return self._get_events('auth/namespaces/' + namespace + '/claims',
+                                claim_uuid, event_type, limit)
+
     # Other calls
     def get_instances(self, all=False):
         r = self._request_url('GET', '/instances', data={'all': all})

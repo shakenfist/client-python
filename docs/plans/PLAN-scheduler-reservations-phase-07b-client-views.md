@@ -381,8 +381,8 @@ the binding marker, the notes, the degraded banner and the
 not-reported line all visible. It also mocks step 6's additions
 against the same fixture: the cluster claims ledger table, its
 simple-mode keys, an excluded node's reason in place of the
-not-reported sentence, and one `claim list --all` table. The management session takes that
-to Michael. Agreeing a mock costs a message, and changing the
+not-reported sentence, and one `claim list --all` table. The
+management session takes that to Michael. Agreeing a mock costs a message, and changing the
 format after phase 8's guide quotes it costs a docs revision and
 a script break.
 
@@ -398,6 +398,31 @@ a script break.
 - **sfui.** The web UI has no capacity view either. It is out of
   scope for a client-python phase, and is noted here so it is not
   forgotten.
+
+## Execution notes
+
+Implementation began on 2026-10-28 (Australia/Sydney).
+
+**Back brief answers.**
+- Steps run one at a time in this worktree, 1 to 7, because every
+  step runs `pre-commit` in the same tree.
+- Step 4's gate stays: its mock, covering step 6's additions too,
+  goes to Michael before any code is written.
+- This session may push the branch and open the pull request once
+  the definition of done passes.
+
+**Premises re-checked before briefing.** The findings still hold,
+including both `node resources` bugs. Line references have moved
+since the survey, so briefs locate code by symbol:
+- client-python, after #438 and other merges:
+  `get_cluster_resources` is at `apiclient.py:1853`, `claim_show`
+  at `namespace.py:335`, `node_show` at `node.py:26`, `node_events`
+  at `:139` and `node_resources` at `:165`.
+- shakenfist, after #4654: `summarize_resources()` starts at
+  `scheduler.py:1138`, and the CPU binding arithmetic the binding
+  marker copies is at about `:1255-1290`. References above to
+  `:1094-1151` and `:1150-1151` mean that code.
+- The unit tests live in `shakenfist_client/tests/`, not `tests/`.
 
 ## Outcome
 

@@ -6,6 +6,7 @@ import click
 from prettytable import PrettyTable
 
 from shakenfist_client import util
+from shakenfist_client.apiclient import IncapableException
 
 
 def longest_str(d):
@@ -248,6 +249,47 @@ def namespace_remove_trust(ctx, namespace=None, trusted_namespace=None):
         print(json.dumps(out, indent=4, sort_keys=True))
 
 
+def _show_events(ctx, fetch):
+    try:
+        events = fetch()
+    except IncapableException as e:
+        print(str(e))
+        sys.exit(1)
+
+    if ctx.obj['OUTPUT'] == 'pretty':
+        x = PrettyTable()
+        x.field_names = ['timestamp', 'node', 'duration', 'message', 'extra']
+        for e in events:
+            e['timestamp'] = datetime.datetime.fromtimestamp(e['timestamp'])
+            x.add_row([e['timestamp'], e['fqdn'], e['duration'], e['message'],
+                       e.get('extra', '')])
+        print(x)
+
+    elif ctx.obj['OUTPUT'] == 'simple':
+        print('timestamp,node,duration,message,extra')
+        for e in events:
+            e['timestamp'] = datetime.datetime.fromtimestamp(e['timestamp'])
+            print('%s,%s,%s,%s,%s'
+                  % (e['timestamp'], e['fqdn'], e['duration'], e['message'],
+                     e.get('extra', '')))
+
+    elif ctx.obj['OUTPUT'] == 'json':
+        print(json.dumps(events, indent=4, sort_keys=True))
+
+
+@namespace.command(name='events',
+                   help=('Display events for a namespace. A claim\'s deletion is recorded here, '
+                         'because a claim\'s own events are removed with it.\n\n'
+                         'NAMESPACE: The name of the namespace'))
+@click.argument('namespace', type=click.STRING, shell_complete=_get_namespaces)
+@click.option('-t', '--type', help='The event type to return')
+@click.option('-l', '--limit', help='The maximum number of events to return')
+@click.pass_context
+def namespace_events(ctx, namespace=None, type=None, limit=None):
+    _show_events(ctx, lambda: ctx.obj['CLIENT'].get_namespace_events(
+        namespace, event_type=type, limit=limit))
+
+
 @click.group(help='Namespace capacity claim commands')
 def claim():
     pass
@@ -444,6 +486,20 @@ def claim_delete(ctx, namespace=None, claim_uuid=None):
     c = ctx.obj['CLIENT'].delete_namespace_claim(namespace, claim_uuid)
     if ctx.obj['OUTPUT'] == 'json':
         print(json.dumps(c, indent=4, sort_keys=True))
+
+
+@claim.command(name='events',
+               help=('Display events for a capacity claim.\n\n'
+                     'NAMESPACE: The name of the namespace\n\n'
+                     'CLAIM_UUID: The UUID of the claim'))
+@click.argument('namespace', type=click.STRING, shell_complete=_get_namespaces)
+@click.argument('claim_uuid', type=click.STRING, shell_complete=_get_claims)
+@click.option('-t', '--type', help='The event type to return')
+@click.option('-l', '--limit', help='The maximum number of events to return')
+@click.pass_context
+def claim_events(ctx, namespace=None, claim_uuid=None, type=None, limit=None):
+    _show_events(ctx, lambda: ctx.obj['CLIENT'].get_namespace_claim_events(
+        namespace, claim_uuid, event_type=type, limit=limit))
 
 
 namespace.add_command(claim)
