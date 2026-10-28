@@ -36,6 +36,20 @@ def sanitize_terminal_bytes(data):
     return data
 
 
+def render_optional(d, key):
+    """Render d[key] for display, distinguishing absent from empty.
+
+    A key missing from the dict renders as 'n/a': an older server never sent
+    it. A key present with a value of None renders as '-': the server sent it
+    and has nothing to report. Anything else renders as the value itself.
+    """
+    if key not in d:
+        return 'n/a'
+    if d[key] is None:
+        return '-'
+    return d[key]
+
+
 def filter_dict(d, allowed_keys):
     out = {}
     for key in allowed_keys:

@@ -60,13 +60,26 @@ def node_show(ctx, node=None):
     print(format_string % ('network node', n['is_network_node']))
     print(format_string % ('cluster maintainer', n['is_cluster_maintainer']))
 
+    daemon_states = {}
+    for key in n:
+        if key.startswith('daemon-') and key.endswith('-state'):
+            daemon_states[key[len('daemon-'):-len('-state')]] = n[key]
+
     print()
     if ctx.obj['OUTPUT'] == 'pretty':
         format_string = '    %-8s: %s'
+        print('Daemon states:')
+        for name in sorted(daemon_states):
+            print(format_string % (name, util.render_optional(daemon_states, name)))
+        print()
         print('Metadata:')
         for key in metadata:
             print(format_string % (key, metadata[key]))
     else:
+        print('daemon,name,state')
+        for name in sorted(daemon_states):
+            print(f'daemon,{name},{util.render_optional(daemon_states, name)}')
+        print()
         print('metadata,key,value')
         for key in metadata:
             print(f'metadata,{key},{metadata[key]}')

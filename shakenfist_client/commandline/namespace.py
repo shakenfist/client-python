@@ -381,14 +381,21 @@ def claim_show(ctx, namespace=None, claim_uuid=None):
         print(json.dumps(c, indent=4, sort_keys=True))
         return
 
-    format_string = '%-16s: %s'
+    format_string = '%-19s: %s'
     if ctx.obj['OUTPUT'] == 'simple':
         format_string = '%s:%s'
 
+    # The peak_used_* keys arrived in shakenfist 1b54cca3c9 with no
+    # capability token, unlike the fields around them, so an older server
+    # omits them. They are not indexed directly for that reason, which
+    # departs from the direct indexing _claim_expiry relies on.
     for key in ['uuid', 'namespace', 'state', 'coverage_state',
                 'limit_cpus', 'used_cpus', 'limit_memory_mb',
                 'used_memory_mb', 'limit_disk_gb', 'used_disk_gb']:
         print(format_string % (key, c[key]))
+        if key.startswith('used_'):
+            peak_key = 'peak_' + key
+            print(format_string % (peak_key, util.render_optional(c, peak_key)))
     print(format_string % ('expires_at', _claim_expiry(c)))
 
 

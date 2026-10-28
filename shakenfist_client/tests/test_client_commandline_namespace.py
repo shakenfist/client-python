@@ -123,7 +123,7 @@ class NamespaceClaimCommandTestCase(testtools.TestCase):
             catch_exceptions=False)
 
         self.assertEqual(0, result.exit_code)
-        self.assertIn('expires_at      : \n', result.output)
+        self.assertIn('expires_at         : \n', result.output)
         self.assertNotIn('None', result.output)
 
     def test_claim_expiry_renders_a_timestamp(self):
@@ -328,3 +328,37 @@ class NamespaceEventsCommandTestCase(testtools.TestCase):
             result, _ = self._invoke(args, incapable=True)
             self.assertEqual(1, result.exit_code)
             self.assertIn('no events', result.output)
+
+
+class ClaimShowPeakTestCase(testtools.TestCase):
+    """Tests for the peak_used_* lines of ``sf-client namespace claim show``."""
+
+    def _show(self, claim, output='pretty'):
+        client = mock.MagicMock()
+        client.get_namespace_claim.return_value = claim
+        result = CliRunner().invoke(
+            namespace_cmd.namespace, ['claim', 'show', 'testspace', 'a-claim'],
+            obj={'CLIENT': client, 'OUTPUT': output}, catch_exceptions=False)
+        self.assertEqual(0, result.exit_code)
+        return result.output.splitlines()
+
+    def test_peak_values_follow_matching_used_line(self):
+        claim = dict(CLAIM, peak_used_cpus=30, peak_used_memory_mb=0,
+                     peak_used_disk_gb=500)
+        lines = self._show(claim, output='simple')
+        self.assertIn('peak_used_cpus:30', lines)
+        self.assertIn('peak_used_memory_mb:0', lines)
+        self.assertEqual('used_cpus:12', lines[lines.index('peak_used_cpus:30') - 1])
+        self.assertEqual('used_disk_gb:600', lines[lines.index('peak_used_disk_gb:500') - 1])
+
+    def test_missing_peak_keys_render_na(self):
+        lines = self._show(CLAIM, output='simple')
+        for key in ('peak_used_cpus', 'peak_used_memory_mb', 'peak_used_disk_gb'):
+            self.assertIn('%s:n/a' % key, lines)
+
+    def test_none_peak_keys_render_dash(self):
+        claim = dict(CLAIM, peak_used_cpus=None, peak_used_memory_mb=None,
+                     peak_used_disk_gb=None)
+        lines = self._show(claim, output='simple')
+        for key in ('peak_used_cpus', 'peak_used_memory_mb', 'peak_used_disk_gb'):
+            self.assertIn('%s:-' % key, lines)
