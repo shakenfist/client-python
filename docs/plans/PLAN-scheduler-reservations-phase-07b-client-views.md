@@ -333,41 +333,46 @@ is last.
 
 ## Definition of done
 
-- [ ] `grep -c "get_cluster_resources" shakenfist_client/commandline/*.py`
+- [x] `grep -c "get_cluster_resources" shakenfist_client/commandline/*.py`
       is at least 1. It is 0 at `d789e0b`.
-- [ ] `sf-client node resources <node>` exits 0 with a real event,
+- [x] `sf-client node resources <node>` exits 0 with a real event,
       and 1 with none, in pretty and simple modes. This is checked
       by `CliRunner` tests that fail at `d789e0b`. Revert step 3's
       fix locally and the new tests go red.
-- [ ] `sf-client node capacity` against step 4's fixture prints
+- [x] `sf-client node capacity` against step 4's fixture prints
       every hypervisor in the node list, either in a table or on
       the not-reported line. A test asserts that the set of names
       printed equals the set of hypervisors.
-- [ ] No pretty table has a column that merges committed and
+- [x] No pretty table has a column that merges committed and
       measured. Read the step 4 code; this cannot be grepped.
-- [ ] `namespace events` and `namespace claim events` exit 1 with
+- [x] `namespace events` and `namespace claim events` exit 1 with
       the capability message, not a traceback, against a client
       whose `root_html` lacks the token. A test covers it.
-- [ ] `namespace claim show` against a claim dict with no
+- [x] `namespace claim show` against a claim dict with no
       `peak_used_*` keys exits 0 and prints `n/a` three times.
-- [ ] `sf-client node capacity` against an `excluded` fixture
+- [x] `sf-client node capacity` against an `excluded` fixture
       prints each node's reason instead of D4's sentence. Against
       an older server's payload, with neither `cluster_capacity`,
       `excluded` nor their tokens, it prints D4's sentence and no
       ledger, and exits 0. `CliRunner` tests cover both.
-- [ ] The ledger renders every figure as `-` when `row_present`
+- [x] The ledger renders every figure as `-` when `row_present`
       is false, and adds the banner line when `degraded` is true.
       A test covers each.
-- [ ] `namespace claim list` with both `NAMESPACE` and `--all`, or
+- [x] `namespace claim list` with both `NAMESPACE` and `--all`, or
       with neither, exits non-zero with a usage message. A test
       covers both.
-- [ ] `pre-commit run --all-files` and `stestr run` pass.
-- [ ] The *Push audit* section has a verdict for each of the five
+- [x] `pre-commit run --all-files` and `stestr run` pass.
+- [x] The *Push audit* section has a verdict for each of the five
       floor items.
 - [ ] shakenfist's master plan row for 7b carries
       `client-python <sha> (#pr)` in its `Merged` cell. This is
       done at the next shakenfist phase close-out, not in this
       pull request, per `plan-phase-landing`.
+
+Checked by the management session on 2026-10-28: each item's named
+test passes, step 3's two bugs restored on a copy turn all three
+`node resources` tests red, and `pre-commit` and `tox -e py3` pass
+(332 tests). The last item waits for the merge.
 
 ## Back brief
 
@@ -459,6 +464,184 @@ since the survey, so briefs locate code by symbol:
   node its queue or metrics reason, so such a node was not
   active. It now prints "no reason given (node state X)".
 
+## Push audit
+
+client-python has no `PUSH-AUDIT.md`, so this is the
+`plan-push-audit-phase` floor checklist plus this phase's own
+questions. It was run on 2026-10-28 over
+`git diff origin/develop...HEAD`: 14 files, +2448/-17. The
+local `develop` ref was stale at `d789e0b` (#432), and the
+branch is based on `origin/develop` at `05d04eb` (#438), so
+`develop...HEAD` would also have audited #433 to #438, which
+merged separately. Nothing was fetched. The definition of
+done's references to `d789e0b` are left alone on purpose,
+because they name a point before the phase.
+
+**1. Recorded landings.** Not yet applicable. The phase lands
+as one pull request, and its merge commit is recorded once it
+merges. Until then, the range is the branch's eight commits,
+`0c6340d..37a70ea`. shakenfist's master plan row gets
+`client-python <sha> (#pr)` at the next shakenfist close-out,
+as the definition of done says.
+
+**2. Unattended runners.** Does not apply. The diff adds no
+cron job, timer, scheduled workflow or self-update, and changes
+nothing under `.github/`. Every change is an interactive
+`sf-client` command or an `apiclient` verb.
+
+**3. Secrets and private hosts.** Pass. A grep of the diff's
+added lines for credential words, key headers, IPv4 addresses
+and home-lab hostnames finds only the capability tokens' names
+and `192.168.1.1`. That address is a generic RFC 1918
+placeholder in the `NODE` test fixture, not an address from any
+network.
+
+**4. Removed or renamed surface.** Pass. The diff removes or
+renames no command, option, `apiclient` verb or key. These are
+the output changes:
+- `node resources` used to crash in pretty and simple modes; it
+  now renders, and exits 1 with no event.
+- `node show` simple output gains a `daemon,name,state` section
+  before `metadata,key,value`.
+- The `claim show` pretty label column grows from 16 to 19
+  characters.
+- `claim list`'s `NAMESPACE` becomes optional, but only
+  alongside `--all`.
+
+The greps ran from the parent directory over every sibling
+checkout, excluding `.git`, `.tox`, `.ansible`, `node_modules`,
+`target`, `.venv` and `__pycache__`:
+
+    grep -rIl -F 'node resources' .
+    grep -rIl -F 'per_node' .
+    grep -rIn -E 'sf-client[^|]*node resources' .
+    grep -rIl -E 'admin/resources|get_cluster_resources|ci_headroom' actions
+
+Each repository has several worktrees, and all of them were
+grepped. Counts below are files in the primary checkout, with
+the worktrees in brackets where they differ.
+- `node resources`:
+  - shakenfist: 4 (and 4 in each of five worktrees). These are
+    the server's own event message, docs and plan text.
+  - private-ci: 2 (and 2 in each of four worktrees). These are
+    plan prose saying the command crashed, which this phase
+    fixes.
+  - No script anywhere invokes it. The third grep finds only
+    that private-ci prose.
+- `per_node`:
+  - shakenfist: 65 per checkout, all server code, docs and
+    tests.
+  - private-ci: 8 (4 to 8 in its worktrees). This is the
+    conductor's `nodefit.py` and `ledger.py`. They read
+    `get_cluster_resources()` through `apiclient`, which is
+    unchanged.
+  - Hits in other repositories are unrelated identifiers, such
+    as `*_per_node` test names and deployment variables.
+  - actions: none. `ci_headroom_collect.sh` names
+    `/admin/resources` in a comment but reads Loki, not
+    `sf-client`.
+
+No consumer of `sf-client` output, or of anything renamed, is
+affected.
+
+**5. Fail-closed publishing.** Pass. The only publisher is
+`release.yml`, which runs on `v*` tags. This phase cuts no
+release (Scope, out of scope), and changes no workflow,
+packaging or version metadata.
+
+**Does any new command print a credential?** No. None of the
+new or changed commands reads or handles a credential:
+- `node capacity`, `node show` and `node resources` print node
+  names, uuids, states and capacity figures.
+- The claim commands print claim fields and limits.
+- The two events commands print event rows: timestamp, fqdn,
+  duration, message and extra.
+
+**Does any rendering path crash on an older server?** No
+reachable one. Every new or changed command was driven through
+`CliRunner` with the existing fixtures, stripped of every
+optional key, under `.tox/py3/bin/python -B`: 78 runs, 70 pass.
+
+| Command | Payloads | Result |
+|---------|----------|--------|
+| `node capacity`: pretty, simple, json, and `NODE` for a reported and an unreported node | Every `per_node` key removed and `total` empty, under four conditions: old tokens; new tokens with `excluded` and `cluster_capacity` absent; both present but empty; an empty payload. Nodes cut to uuid, name and `is_hypervisor` | 36 pass. Exit 0, or 1 for an unreported node |
+| `node show` | No `daemon-*-state`, no `is_database_node`, no node metadata capability | 3 pass |
+| `node resources` | No event | 3 pass, exit 1 |
+| `node resources` | `extra` None or absent | json passes; pretty and simple raise TypeError (4 fail) |
+| `namespace claim show`, `claim list NAMESPACE`, `claim list --all` | No `peak_used_*`, no `updated_at`; `--all` without the token | 12 pass (`n/a` shown; no token exits 1) |
+| `namespace events`, `namespace claim events` | Optional fields None; no token | 12 pass (no token exits 1) |
+| `namespace events`, `namespace claim events` | `duration` absent | json passes; pretty and simple raise KeyError (4 fail) |
+
+The eight failures are **unreachable**. No server, old or new,
+sends either payload:
+- The server serialises event rows with
+  `row.model_dump(mode='json')` (shakenfist
+  `external_api/base.py:2384`), which emits `duration` and
+  `extra` even when they are None.
+- The only resources event is written with `extra=retval`, a
+  dict (`daemons/resources/main.py:695`).
+
+Both patterns predate this phase. `node events` on `develop`
+indexes `e['duration']`, and the `event.get('extra')` loop in
+`node resources` was there before step 3. The two new events
+commands copy `node events` on purpose (step 1's brief). Both
+failures are recorded and declined, with no fix and no issue.
+
 ## Outcome
 
-Not started.
+Steps, with their commits:
+- Planning: `0c6340d` planned the phase, and `df45c8d` folded in
+  phase 7a's deferred client readers as step 6 (D7 reversed).
+- Step 1, `03c5530`: `get_namespace_events()` and
+  `get_namespace_claim_events()`, each gated on its token, plus
+  `namespace events` and `namespace claim events`, which exit 1
+  on a missing capability.
+- Step 2, `3812802`: `peak_used_*` in `claim show` through the
+  new `util.render_optional()`, which renders a missing key as
+  `n/a` and a None as `-`. Daemon states in `node show`.
+- Step 3, `a228295`: `node resources` fixed. It exits 1 with no
+  event, and reads each key by the loop variable.
+- Step 4, `595e7d6`: `node capacity [NODE]`, with three tables,
+  the binding marker copied from the server's arithmetic, notes,
+  the degraded banner, the not-reported hypervisors, and simple
+  and JSON forms. The format was approved by Michael as a mock
+  before any code was written.
+- Step 5, `17ce3f1`: `docs/cluster-capacity.md`, plus
+  `docs/namespace-claims.md`, README, AGENTS.md and CLAUDE.md.
+- Step 6, `37a70ea`: the exclusion reasons and the cluster claims
+  ledger in `node capacity`, gated on their tokens, and
+  `claim list --all` and `--coverage`.
+- Step 7: this push audit and close-out.
+
+Deferred, and where each is recorded:
+- `IncapableException` in `GroupCatchExceptions` (D8): Future
+  work.
+- A per-node `/admin/resources` form: Future work.
+- An sfui capacity view: Future work.
+- A release: Scope says phase 8 cuts one covering 4b to 7b.
+- shakenfist's master plan `Merged` cell: the definition of done
+  says it is filled at the next shakenfist close-out.
+- The two unreachable crash classes: declined in the Push audit
+  above.
+
+Nothing deferred was found unrecorded.
+
+Departures recorded in the Execution notes:
+- The CPU ceiling is `cpu_limit` with a row and `cpu_hard_max`
+  without one, not both. D2 and step 4 were corrected at source.
+- Simple mode keeps its not-reported and ledger sections, as
+  approved at the mock, rather than D3's single flat table.
+- JSON with `NODE` keeps the payload's shape and cuts
+  `per_node` to that node.
+- Step 4 killed five of six mutants. The `row_present` survivor
+  cannot be told apart in a real payload, and the check stays as
+  a defence.
+- Not-reported names are padded to the longest name, not a fixed
+  width.
+- An unknown exclusion reason is printed as sent, and a detail
+  the server left out is not printed.
+- `excluded` uuids that are unknown, or are not hypervisors, are
+  left to JSON.
+- `--coverage` without `--all` is a usage error.
+- A hypervisor with no `excluded` entry prints "no reason given
+  (node state X)", not the old two-cause sentence.
