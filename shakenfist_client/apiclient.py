@@ -1780,6 +1780,54 @@ class Client:
             '/auth/namespaces/' + namespace + '/claims/' + claim_uuid)
         return r.json()
 
+    def check_placement(self, shapes):
+        """Ask whether a set of requested instance shapes would fit now.
+
+        shapes is a list of mappings, each describing one instance the caller
+        is thinking about creating: cpus and memory (in megabytes) are
+        required, and disk (in gigabytes), disk_spec (the disk list an
+        instance create takes, summed by the server), count (how many of that
+        shape, defaulting to one) and affinity are optional. disk and
+        disk_spec are alternatives and sending both is refused rather than
+        reconciled. The list is passed through as the caller built it: the
+        server is the only validator of a shape, and a second opinion here
+        could only disagree with it.
+
+        The set is answered as a set. Each shape is placed in its own right
+        and charged to the node it would land on before the next is
+        considered, so a set is never told that two of its members fit in one
+        node's worth of room, and placement is all or nothing.
+
+        Returns the parsed answer, which always carries fits. A set which
+        does not fit is a successful call returning fits False, the pipeline
+        stage which refused in stage, and the index of the shape being walked
+        in shape -- never an exception. That index counts the expanded
+        request order, so a shape asked for with a count of three
+        contributes three consecutive indexes and the index lines up with
+        the shapes array a successful answer carries. The server answers a
+        refusal with a 200 rather than a 507 precisely so a caller can tell
+        "the cluster is full" from "the query failed", and raising here would
+        discard the distinction the endpoint exists to draw. A 507 remains
+        what a create gets.
+
+        A cluster administrator is additionally told, in shapes, which node
+        each shape would land on and the ordered candidate list it was chosen
+        from -- that node first, then its fallbacks -- in the order the
+        shapes were asked about. Every other caller is answered at set level,
+        so a caller must not require that key to be present.
+
+        Nothing is created, nothing is reserved and no capacity is held. The
+        answer describes the cluster at the moment it was asked, and the room
+        it found may be gone by the next request.
+        """
+        if not self.check_capability('placement-query'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'placement queries.')
+
+        r = self._request_url('POST', '/placement', data={'shapes': shapes})
+        return r.json()
+
     def get_existing_locks(self):
         r = self._request_url('GET', '/admin/locks')
         return r.json()

@@ -441,6 +441,97 @@ class ApiClientTestCase(testtools.TestCase):
         self.mock_request.assert_called_with(
             'DELETE', '/auth/namespaces/testspace/claims/notreallyauuid')
 
+    def test_check_placement(self):
+        answer = {
+            'fits': True,
+            'shapes': [
+                {'node': 'node-1', 'candidates': ['node-1', 'node-3']},
+                {'node': 'node-3', 'candidates': ['node-3']},
+            ],
+        }
+        self.mock_request.return_value = mock.Mock(
+            **{'json.return_value': answer})
+
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = 'placement-query'
+        result = client.check_placement(
+            [{'cpus': 2, 'memory': 2048, 'disk': 20},
+             {'cpus': 4, 'memory': 4096, 'disk': 40}])
+
+        self.assertEqual(answer, result)
+        self.mock_request.assert_called_with(
+            'POST', '/placement',
+            data={'shapes': [{'cpus': 2, 'memory': 2048, 'disk': 20},
+                             {'cpus': 4, 'memory': 4096, 'disk': 40}]})
+
+    def test_check_placement_sends_shapes_unaltered(self):
+        # The server is the only validator of a shape, and the only thing
+        # which sums a disk_spec or expands a count. Reshaping a shape here
+        # is how a client and a cluster come to disagree about how large a
+        # request is, so every key the caller supplied goes out as supplied.
+        shapes = [
+            {'cpus': 8, 'memory': 16384, 'count': 3,
+             'disk_spec': [{'size': 50, 'base': 'debian:11'},
+                           {'size': 10}],
+             'affinity': {'require_without_tag': ['runner']}},
+        ]
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = 'placement-query'
+        client.check_placement(shapes)
+
+        self.mock_request.assert_called_with(
+            'POST', '/placement', data={'shapes': shapes})
+
+    def test_check_placement_a_set_which_does_not_fit_is_an_answer(self):
+        # The whole point of the endpoint's 200: a refused set is a
+        # successful call which returns the refusal, so a caller can tell a
+        # full cluster from a failed query. Raising here would throw away
+        # the distinction, and this method's only consumer scores the stage
+        # name against what a real create later met.
+        answer = {'fits': False, 'stage': 'sufficient_idle_memory',
+                  'shape': 1}
+        self.mock_request.return_value = mock.Mock(
+            **{'json.return_value': answer})
+
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = 'placement-query'
+        result = client.check_placement([{'cpus': 2, 'memory': 2048}])
+
+        self.assertEqual(answer, result)
+        self.assertFalse(result['fits'])
+        self.assertEqual('sufficient_idle_memory', result['stage'])
+        self.assertEqual(1, result['shape'])
+
+    def test_check_placement_accepts_a_set_level_answer(self):
+        # Per-node detail is administrative, so a caller without it is
+        # answered with fits alone. The method must not require the shapes
+        # key to be there.
+        self.mock_request.return_value = mock.Mock(
+            **{'json.return_value': {'fits': True}})
+
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = 'placement-query'
+        result = client.check_placement([{'cpus': 2, 'memory': 2048}])
+
+        self.assertEqual({'fits': True}, result)
+
+    def test_check_placement_capability_gated(self):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = ''
+        self.assertRaises(
+            apiclient.IncapableException,
+            client.check_placement, [{'cpus': 2, 'memory': 2048}])
+
+        # A server which predates the endpoint answers the request with a
+        # 404, which says nothing a caller can act on. So no request is
+        # sent at all.
+        self.assertEqual(0, self.mock_request.call_count)
+
     def test_get_namespace_metadata(self):
         client = apiclient.Client(suppress_configuration_lookup=True,
                                   base_url='http://localhost:13000')
