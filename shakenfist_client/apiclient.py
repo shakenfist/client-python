@@ -1787,7 +1787,11 @@ class Client:
         is thinking about creating: cpus and memory (in megabytes) are
         required, and disk (in gigabytes), disk_spec (the disk list an
         instance create takes, summed by the server), count (how many of that
-        shape, defaulting to one) and affinity are optional. disk and
+        shape, defaulting to one) and affinity are optional. Note that
+        disk_spec is the list create_instance() sends as disk: the key is
+        named differently here because disk is the gigabyte total, so a
+        caller assembling a query from a create body it already holds has
+        to move the list across rather than pass it as disk. disk and
         disk_spec are alternatives and sending both is refused rather than
         reconciled. The list is passed through as the caller built it: the
         server is the only validator of a shape, and a second opinion here

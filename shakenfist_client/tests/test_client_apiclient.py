@@ -1,3 +1,4 @@
+import copy
 import json
 import time
 from unittest import mock
@@ -470,19 +471,46 @@ class ApiClientTestCase(testtools.TestCase):
         # which sums a disk_spec or expands a count. Reshaping a shape here
         # is how a client and a cluster come to disagree about how large a
         # request is, so every key the caller supplied goes out as supplied.
+        # The sizes are strings on purpose. create_instance() coerces
+        # its caller's disk dicts with int(), and a shape whose values
+        # are already canonical cannot tell that apart from passing them
+        # through: int(50) is 50. A string size makes a coercion visible,
+        # so the assertions below can see one.
         shapes = [
             {'cpus': 8, 'memory': 16384, 'count': 3,
-             'disk_spec': [{'size': 50, 'base': 'debian:11'},
-                           {'size': 10}],
+             'disk_spec': [{'size': '50', 'base': 'debian:11'},
+                           {'size': '10'}],
              'affinity': {'require_without_tag': ['runner']}},
         ]
         client = apiclient.Client(suppress_configuration_lookup=True,
                                   base_url='http://localhost:13000')
         client.root_html = 'placement-query'
+        # Snapshotted before the call, because mock records the call by
+        # reference: asserting against the same list object the method was
+        # handed would put any in-place edit on both sides of the
+        # comparison and pass. create_instance edits its caller's disk
+        # dicts that way, so the failure mode has precedent here.
+        expected = copy.deepcopy(shapes)
         client.check_placement(shapes)
 
         self.mock_request.assert_called_with(
-            'POST', '/placement', data={'shapes': shapes})
+            'POST', '/placement', data={'shapes': expected})
+
+        # This is the assertion that pins "unaltered".
+        self.assertEqual(expected, shapes)
+
+    def test_check_placement_sends_an_empty_set_to_the_server(self):
+        # An empty set is refused, and refused by the server: it answers
+        # 400 'no shapes specified'. The client does not shortcut it,
+        # because a caller-side guard would be a second opinion about what
+        # a valid query is, and the two would drift.
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = 'placement-query'
+        client.check_placement([])
+
+        self.mock_request.assert_called_with(
+            'POST', '/placement', data={'shapes': []})
 
     def test_check_placement_a_set_which_does_not_fit_is_an_answer(self):
         # The whole point of the endpoint's 200: a refused set is a

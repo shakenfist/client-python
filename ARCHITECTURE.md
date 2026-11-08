@@ -89,6 +89,19 @@ REST API:
   instance's console data. The timing parameters are gated on the
   `agentoperation-deadlines` capability and fail closed.
 
+- **Placement queries**: `check_placement()` asks the server whether a
+  set of prospective instance shapes would fit the cluster now (`POST
+  /placement`), gated on the `placement-query` capability and failing
+  closed without sending a request. Shapes are passed through as the
+  caller built them -- the server is the only authority on how large a
+  request is -- and a set which does not fit is a 200 carrying `fits:
+  False`, the refusing pipeline `stage` and the expanded-order `shape`
+  index, not an exception: the endpoint exists so that a caller can tell
+  a full cluster from a failed query. Nothing is reserved, and per-node
+  detail is returned only to an administrator. There is no CLI verb yet,
+  so there is no `docs/` page either; both arrive with the phase that
+  adds the verb.
+
 - **Transient capacity retry**: `Client(retry_transient_capacity=True)`
   waits out a `507` whose body carries `"transient": true`, sleeping for
   a `Retry-After` clamped to `[TRANSIENT_RETRY_MINIMUM,
