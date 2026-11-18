@@ -460,3 +460,127 @@ class ClaimListAllTestCase(testtools.TestCase):
         result, _ = self._list(['--all'], incapable=True)
         self.assertEqual(1, result.exit_code)
         self.assertEqual('no cluster claims\n', result.output)
+
+
+class NamespaceShowKeysTestCase(testtools.TestCase):
+    """Tests for the key listing in ``sf-client namespace show``."""
+
+    HEADER = 'keyname,name,expiry,scopes'
+    NS = {'name': 'testspace', 'state': 'created', 'keys': ['live']}
+    DETAIL = [
+        {'namespace': 'testspace', 'key_name': 'live', 'uuid': 'u1',
+         'expiry': None, 'scopes': ['cluster-admin']},
+        {'namespace': 'testspace', 'key_name': 'old', 'uuid': 'u2',
+         'expiry': 1755300000.0, 'scopes': []}]
+
+    def _invoke(self, output, capable=True, detail=None):
+        client = mock.MagicMock()
+        client.get_namespace.return_value = dict(self.NS)
+        client.check_capability.return_value = capable
+        if capable:
+            client.get_namespace_keys.return_value = (
+                self.DETAIL if detail is None else detail)
+        else:
+            # The gate is the library's now, so this is what an older
+            # cluster actually does to the command.
+            client.get_namespace_keys.side_effect = apiclient.IncapableException(
+                'Cluster does not support reading namespace key metadata')
+
+        result = CliRunner().invoke(
+            namespace_cmd.namespace, ['show', 'testspace'],
+            obj={'CLIENT': client, 'OUTPUT': output}, catch_exceptions=False)
+        return result, client
+
+    def test_pretty_shows_expired_keys_and_scopes(self):
+        result, client = self._invoke('pretty')
+        # The capability gate is the library's, so what the command owes
+        # is the call itself; refusing it is tested in the apiclient suite.
+        client.get_namespace_keys.assert_called_once_with('testspace')
+        self.assertIn('old', result.output)
+        self.assertIn('cluster-admin', result.output)
+        self.assertNotIn('provenance', result.output)
+
+    def test_pretty_marks_an_expired_key(self):
+        result, _ = self._invoke('pretty')
+        self.assertIn('(expired)', result.output)
+        # The live key never expires, so only one row is marked.
+        self.assertEqual(1, result.output.count('(expired)'))
+
+    def test_pretty_shows_provenance_when_served(self):
+        detail = [dict(self.DETAIL[0], provenance={'sub': 'abc'})]
+        result, _ = self._invoke('pretty', detail=detail)
+        self.assertIn('provenance', result.output)
+        self.assertIn('"sub": "abc"', result.output)
+
+    def test_pretty_falls_back_without_capability(self):
+        # The library refuses, and the command treats that as a reason to
+        # print what the namespace record does carry rather than as an
+        # error, which is the whole point of keeping the bare list.
+        result, client = self._invoke('pretty', capable=False)
+        client.get_namespace_keys.assert_called_once_with('testspace')
+        self.assertIn('Key Names:', result.output)
+        self.assertIn('live', result.output)
+        self.assertNotIn('Keys:', result.output)
+
+    def test_machine_readable_rows(self):
+        result, _ = self._invoke('simple')
+        self.assertIn('keyname,live,,cluster-admin\n', result.output)
+        self.assertIn('keyname,old,', result.output)
+
+    def test_machine_readable_omits_provenance(self):
+        detail = [dict(self.DETAIL[0], provenance={'sub': 'abc', 'jti': 'd'})]
+        result, _ = self._invoke('simple', detail=detail)
+
+        self.assertIn('keyname,live,,cluster-admin\n', result.output)
+        # Assert the shape rather than the absence of a short substring,
+        # which a field or namespace named 'subnet' would break.
+        self.assertNotIn('"sub":', result.output)
+        rows = [line for line in result.output.splitlines()
+                if line.startswith('keyname,') and line != self.HEADER]
+        self.assertNotEqual([], rows)
+        for row in rows:
+            self.assertEqual(4, len(row.split(',')), row)
+
+    def test_a_missing_expiry_is_not_rendered_as_never(self):
+        # Both fields are part of the capability this listing is gated
+        # on, so a server which stopped sending one is a fault to
+        # surface rather than something to render as an empty cell --
+        # which in this table would read as "never expires".
+        detail = [{'namespace': 'testspace', 'key_name': 'live',
+                   'uuid': 'u1', 'scopes': []}]
+        self.assertRaises(KeyError, self._invoke, 'pretty', detail=detail)
+
+    def test_a_null_provenance_renders_empty_not_null(self):
+        detail = [dict(self.DETAIL[0], provenance=None)]
+        result, _ = self._invoke('pretty', detail=detail)
+        self.assertIn('provenance', result.output)
+        self.assertNotIn('null', result.output)
+
+    def test_machine_readable_names_its_columns(self):
+        result, _ = self._invoke('simple')
+        self.assertIn(self.HEADER + '\n', result.output)
+
+    def test_machine_readable_expiry_is_the_raw_timestamp(self):
+        # A script compares this with the current time, so it is the
+        # number the server sent and not a rendered date.
+        result, _ = self._invoke('simple')
+        self.assertIn('keyname,old,1755300000.0,', result.output)
+
+    def test_an_empty_detail_list_does_not_fall_back(self):
+        # A cluster which answered with no keys is not a cluster which
+        # could not answer, so the namespace record's names must not
+        # reappear underneath.
+        result, _ = self._invoke('pretty', detail=[])
+        self.assertIn('Keys:', result.output)
+        self.assertNotIn('Key Names:', result.output)
+        self.assertNotIn('live', result.output)
+
+    def test_machine_readable_falls_back_without_capability(self):
+        result, _ = self._invoke('simple', capable=False)
+        self.assertIn('keyname,live\n', result.output)
+
+    def test_json_adds_key_details_only_with_capability(self):
+        result, _ = self._invoke('json')
+        self.assertEqual(self.DETAIL, json.loads(result.output)['key_details'])
+        result, _ = self._invoke('json', capable=False)
+        self.assertNotIn('key_details', json.loads(result.output))
