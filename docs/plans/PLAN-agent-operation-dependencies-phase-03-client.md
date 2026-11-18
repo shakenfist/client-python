@@ -585,9 +585,14 @@ ticked.
 - The commit that adds `abort` to the frozenset touches **no**
   file that mentions `depends_on` or `runs_after`. Check: `git
   show --stat <sha>` lists only `apiclient.py` and
-  `tests/test_client_apiclient.py`, and `git show <sha> | grep -c
-  'depends_on\|runs_after'` is 0. This is the falsifiable form of
-  decision 2.
+  `tests/test_client_apiclient.py`, and `git diff <sha>^ <sha> |
+  grep -c 'depends_on\|runs_after'` is 0. This is the falsifiable
+  form of decision 2. **Corrected during execution:** the check
+  first read `git show <sha>`, which includes the commit message,
+  and that message has to name `depends_on` to explain why
+  `abort` exists at all -- so the criterion could never pass on a
+  commit which justified itself. The diff is what the criterion
+  is about.
 - That commit is an ancestor of the commit that adds the
   submission parameters. Check: `git merge-base --is-ancestor
   <abort sha> <parameters sha>`.
@@ -720,7 +725,15 @@ Departures from the plan, as they happened:
    nothing. The timing parameters keep `is not None` because zero is
    a real budget there.
 
-4. **Step 3's edges moved into `_add_agentop_dependencies()`.** The
+4. **A definition of done check was unrunnable as written.** The
+   criterion proving that the terminal state arrived alone piped
+   `git show` -- which includes the commit message -- into a grep
+   for the edge parameter names. The message names `depends_on`
+   because that is why `abort` exists, so the check reported 1
+   where it demanded 0 while the diff was clean. Corrected at
+   source to read the diff.
+
+5. **Step 3's edges moved into `_add_agentop_dependencies()`.** The
    first implementation inlined the gate and the normalisation in
    all three methods, which is three copies of the same ten lines
    and the thing step 4's single-implementation criterion exists to
