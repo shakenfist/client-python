@@ -609,9 +609,16 @@ ticked.
 - Each of the three creating methods raises `IncapableException`
   when edges are passed to an incapable server, and raises
   nothing when they are not passed. Check: the unit tests, plus
-  `grep -n 'agentoperation-dependencies'
-  shakenfist_client/apiclient.py` shows the token named in each of
-  the three methods.
+  `grep -n '_add_agentop_dependencies'
+  shakenfist_client/apiclient.py` shows one definition and three
+  callers, with the capability token named in that helper.
+  **Corrected during execution.** This criterion first required
+  the token to appear in each of the three methods, which this
+  repository's own idiom argues against: `_add_agentop_timing()`
+  already holds the timing parameters' capability decision, so
+  the dependency helper belongs beside it, where the two
+  divergent answers to "what does an incapable server mean" read
+  side by side instead of in three near-identical comments.
 - Passing `depends_on=None` and passing `depends_on=[]` both reach
   no capability check and send no key. Asserted by two tests, not
   by inspection.
@@ -672,6 +679,55 @@ ticked.
   Check: the `client-python` merge commit's committer date
   precedes the `shakenfist` branch's first push, stated in the
   pull request body.
+
+## Execution notes
+
+Implemented 2026-11-18 (AEDT) with the `implement-phase` skill, one
+sub-agent per step at the row's model and effort, each step reviewed
+and committed by the management session.
+
+The back brief was answered before step 1: decision 4's division and
+`await_agent_chain()`'s signature and messages were both confirmed
+as written, the two repositories run in the plan's order rather than
+in parallel, and this session may open the `client-python` pull
+request.
+
+Departures from the plan, as they happened:
+
+1. **Step 1 covers more than the row claimed.**
+   `TERMINAL_FAILURE_STATES` is iterated by four tests, not the two
+   the row names: `test_await_agentop_terminal_failure_raises_on_first_poll`
+   and `test_await_agentop_async_continue_terminal_failure_still_raises`,
+   and also the `await_agent_command()` and `await_agent_fetch()`
+   equivalents which drive the real chain rather than a mocked one.
+   So the tuple entry bought four tests' worth of `abort` coverage.
+
+2. **Step 2 gained two things in review.** The constructor built
+   `{'op_uuid': 'None'}` when handed an operation view with no
+   `uuid`, which the cluster would have refused a request later and
+   further from the mistake; it now refuses that itself. More
+   consequentially, neither helper canonicalised the UUID. The
+   server's `op_uuid` is a pydantic `UUID4`, so `external_view()`
+   hands back the canonical lower case form -- an upper case UUID
+   sent through as typed would have come back looking to step 4's
+   comparison like an edge the database tier had dropped, raising
+   against a perfectly healthy cluster. Both are covered by tests.
+
+3. **Step 3's gate tests truthiness, not `is not None`.** The step's
+   brief asked for `is not None` while also requiring that an empty
+   list reach no capability check and send no key; only truthiness
+   satisfies both, and an empty list is a caller who declared
+   nothing. The timing parameters keep `is not None` because zero is
+   a real budget there.
+
+4. **Step 3's edges moved into `_add_agentop_dependencies()`.** The
+   first implementation inlined the gate and the normalisation in
+   all three methods, which is three copies of the same ten lines
+   and the thing step 4's single-implementation criterion exists to
+   prevent. The helper mirrors `_add_agentop_timing()`, which is
+   where this repository already keeps a capability decision about
+   an agent operation parameter. The definition of done's check for
+   the capability token was corrected at source to match.
 
 ## Back brief
 
