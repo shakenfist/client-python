@@ -243,6 +243,25 @@ TERMINAL_AGENT_OPERATION_STATES = frozenset({'complete', 'error', 'expired', 'ab
 AGENT_DEPENDENCY_KEYS = frozenset({'op_uuid', 'settle_seconds'})
 
 
+# The states a dependency can be observed in which mean it had not
+# finished yet. These matter to a chain walk because the cascade records
+# one of them when a dependent was given up on rather than when a step
+# failed: a dependent waits only so long for a dependency to go terminal,
+# and when that budget is spent it is aborted with whatever state the
+# dependency was still in. The server's own copy, with the reasoning, is
+# DEPENDENCY_PENDING_STATES in shakenfist/daemons/sidechannel/main.py.
+AGENT_DEPENDENCY_PENDING_STATES = frozenset({'initial', 'preflight', 'queued', 'executing'})
+
+# The two sentinels the dispatcher records in place of a dependency's
+# state, neither of which is a state any operation can hold. They say
+# opposite things, which is why the server keeps them apart and why a
+# chain walk has to as well: missing means the dependency was looked for
+# and is not there, while unreadable means nothing at all was learned
+# about it.
+AGENT_DEPENDENCY_MISSING = 'missing'
+AGENT_DEPENDENCY_UNREADABLE = 'unreadable'
+
+
 def _canonical_op_uuid(where, value):
     # The canonical form of the UUID, not whatever the caller typed. The
     # server parses an edge's op_uuid and hands it back in canonical lower
@@ -349,6 +368,19 @@ def _agentop_dependency_edges(name, edges):
         normalised.append(edge)
 
     return normalised
+
+
+def _agentop_chain_position(hops):
+    # Where in a submitted chain the walk below ended up, phrased for a
+    # failure message. Zero hops is the operation the caller awaited, and
+    # saying so is worth a branch: "0 operations back" reads like an
+    # arithmetic bug in the client rather than a chain whose last link is
+    # the one that broke.
+    if hops == 0:
+        return 'the operation which was awaited'
+    if hops == 1:
+        return '1 operation back in the chain'
+    return f'{hops} operations back in the chain'
 
 
 def _correct_blob_indexes(d):
@@ -1662,6 +1694,187 @@ class Client:
 
             time.sleep(1)
             r = self.get_agent_operation(r['uuid'])
+
+    def await_agent_chain(self, operations, timeout=None):
+        """Await a chain of ordered agent operations and report what broke it.
+
+        ``operations`` is the operation views a caller submitted, in
+        submission order -- each one created with ``await_seconds=0`` so
+        that submitting the chain does not wait for it, which is the whole
+        point of declaring the order on the server instead of enforcing it
+        from here. Only the last operation is awaited, because every other
+        link has to finish before it can run.
+
+        Returns the last operation once it completes. An operation which is
+        still in flight when the wait runs out is returned as
+        ``_await_agentop`` returns it, with no exception, which is this
+        client's long standing behaviour for a wait that expired rather
+        than a thing that failed.
+
+        A chain fails backwards: the operation the caller awaited is
+        aborted because the one before it did not succeed, and that one may
+        have been aborted for the same reason in turn. So the exception
+        raised from here names the operation which *actually* failed rather
+        than the last link in the chain, and when it cannot name one it says
+        which of the several reasons it cannot -- each has a different
+        remedy, and guessing between them is worse than reporting the
+        uncertainty.
+        """
+        if not operations:
+            raise ValueError(
+                'await_agent_chain() needs the operations of a chain to await, and was given none')
+
+        try:
+            return self._await_agentop(operations[-1], await_seconds=timeout)
+        except AgentOperationFailed as e:
+            if e.op_view.get('state') != 'abort':
+                # Not a chain question. abort is the only state the
+                # dependency cascade writes, so any other failure is this
+                # operation's own and is already reported as well as it can
+                # be -- re-describing it in terms of a chain would bury the
+                # real failure under a walk which has nothing to walk.
+                raise
+
+            raise self._agentop_chain_failure(operations, e) from e
+
+    def _agentop_chain_failure(self, operations, failure):
+        """Walk an aborted operation back to the one which actually failed.
+
+        Returns the AgentOperationFailed to raise in place of the one the
+        awaited operation produced, which is a return rather than a raise so
+        that the caller above can chain the two exceptions together.
+
+        Each hop reads a dependency_failure, which the cascade writes as
+        {op_type, op_uuid, state} before it assigns the abort state. The
+        recorded state is not always a failure: the dispatcher aborts a
+        dependent both for a dependency which failed and for one which never
+        finished inside the dependency wait budget, and it records two
+        sentinels which are not states at all. Those are branches below
+        rather than assumptions, because they are remedied differently.
+        """
+        # Only the operations the caller submitted, which is what bounds
+        # what this walk is willing to look at.
+        submitted = {op['uuid']: op for op in operations if op.get('uuid')}
+
+        awaited = failure.op_uuid
+        current_uuid = awaited
+        current_view = failure.op_view
+        hops = 0
+
+        # Bounded by the chain which was submitted. A client cannot build a
+        # cycle -- an edge may only name an operation which already exists --
+        # but this walk reads state a cluster wrote, and a reporting helper
+        # which a surprising cluster could hang is a worse answer than one
+        # which stops and says it stopped.
+        for _ in range(len(operations)):
+            dependency_failure = current_view.get('dependency_failure')
+            if not dependency_failure:
+                return AgentOperationFailed(
+                    f'Agent operation {current_uuid} ({_agentop_chain_position(hops)}) was aborted, but it '
+                    'carries no dependency_failure, so which dependency aborted it cannot be named. Only '
+                    'the dependency cascade writes an abort, and it records the cause before it writes the '
+                    'state, so an abort without one is a cluster to look at rather than a chain to read.',
+                    current_uuid, current_view)
+
+            state = dependency_failure.get('state')
+            named = dependency_failure.get('op_uuid')
+
+            if state in AGENT_DEPENDENCY_PENDING_STATES:
+                # Not a failed step at all: the dependency was still working
+                # when the dependent ran out of patience. Said separately
+                # because the remedy is a longer budget or a quicker
+                # dependency, and nothing is wrong with either operation.
+                return AgentOperationFailed(
+                    f'Agent operation {awaited} was aborted because the chain ran out of its dependency '
+                    f'wait budget, not because a step failed. {current_uuid} '
+                    f'({_agentop_chain_position(hops)}) was waiting on {named}, which was still in state '
+                    f'"{state}" when the wait expired. A dependent waits at most '
+                    'AGENT_OPERATION_DEPENDENCY_WAIT seconds for a dependency to finish, 300 by default, '
+                    'so the remedy is a longer budget on the cluster or a dependency which finishes '
+                    'sooner.',
+                    named, submitted.get(named, {}))
+
+            if state == AGENT_DEPENDENCY_MISSING:
+                # The dependency is gone, so success and failure cannot be
+                # told apart. Not a guess in either direction: an errored
+                # operation is never swept while every other terminal one is
+                # swept an hour after it finished, so "gone" is weak evidence
+                # it did not error and no evidence at all about the rest.
+                return AgentOperationFailed(
+                    f'Agent operation {awaited} was aborted because its dependency {named} had been swept '
+                    f'or deleted by the time {current_uuid} ({_agentop_chain_position(hops)}) came to run, '
+                    'so whether that dependency succeeded or failed can no longer be established. A '
+                    'completed, aborted, expired or deleted operation is swept an hour after it finished '
+                    'while an errored one is never swept, so the state it ended in is not recorded '
+                    'anywhere left to read.',
+                    named, submitted.get(named, {}))
+
+            if state == AGENT_DEPENDENCY_UNREADABLE:
+                # Nothing was learned about the dependency, which is a
+                # different thing from learning that it is gone, and it is a
+                # cluster problem rather than a chain problem.
+                return AgentOperationFailed(
+                    f'Agent operation {awaited} was aborted because the dispatcher could not read the '
+                    f'state of its dependency {named} at all, which is a problem with the cluster rather '
+                    f'than with the chain that was submitted. Nothing was learned about {named}, so it may '
+                    'well have succeeded. Look at the sidechannel daemon on the node holding the instance, '
+                    'and at that node\'s database connectivity, before resubmitting the chain.',
+                    named, submitted.get(named, {}))
+
+            if named not in submitted:
+                # Deliberately not fetched. A chain may cross namespaces, so
+                # reading an operation the caller did not hand us turns a
+                # reporting helper into a question about authorisation --
+                # and an answer the caller may not be entitled to.
+                return AgentOperationFailed(
+                    f'Agent operation {awaited} was aborted because its dependency {named} ended in state '
+                    f'"{state}", but that operation was not submitted with this chain, so the cause cannot '
+                    'be resolved any further here. This client does not read an operation it was not '
+                    'given: a chain may cross namespaces, and resolving a uuid from somewhere else would '
+                    'ask a question about authorisation rather than about the chain.',
+                    named, {})
+
+            hops += 1
+            current_uuid = named
+            current_view = self._refresh_chain_operation(named, submitted[named], state)
+
+            if current_view.get('state') != 'abort':
+                # The first link whose own failure was not a dependency
+                # failure, which is the operation the operator has to go and
+                # look at.
+                failed_state = current_view.get('state', state)
+                return AgentOperationFailed(
+                    f'Agent operation {awaited} was aborted because a dependency failed. The operation '
+                    f'which actually failed is {current_uuid}, {_agentop_chain_position(hops)}, which '
+                    f'ended in state "{failed_state}".',
+                    current_uuid, current_view)
+
+        return AgentOperationFailed(
+            f'Agent operation {awaited} was aborted, and the chain of aborts behind it is longer than the '
+            f'{len(operations)} operations submitted, so the walk was stopped rather than followed any '
+            f'further. The last operation it reached was {current_uuid}.',
+            current_uuid, current_view)
+
+    def _refresh_chain_operation(self, op_uuid, submitted_view, observed_state):
+        """Fetch the current view of one operation in a submitted chain.
+
+        Only ever called with a uuid which is in the list handed to
+        ``await_agent_chain()``, which is the whole of this walk's reading
+        policy. The fetch is needed because a chain's views are as the
+        creating POSTs returned them -- the state in one is the state the
+        operation started in, not the one it ended in -- and the walk needs
+        the ending state to tell a link which was cascaded in turn from the
+        one which actually failed.
+
+        Best effort, for the reason ``_agent_failure_context`` gives: a read
+        which fails while *decorating* a failure must not replace it, so a
+        failed read falls back to the submitted view carrying the state the
+        dispatcher recorded having observed.
+        """
+        try:
+            return self.get_agent_operation(op_uuid)
+        except Exception:
+            return dict(submitted_view, state=observed_state)
 
     def _add_agentop_timing(self, data, deadline_seconds, progress_timeout_seconds):
         """Add the timing parameters the caller actually asked for to a request body.

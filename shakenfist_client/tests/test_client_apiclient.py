@@ -3338,3 +3338,275 @@ class AgentOperationStoredEdgeTestCase(testtools.TestCase):
 
     def test_get_without_edges_ignores_the_response(self):
         self._assert_no_edges_ignores_the_response(self._get)
+
+
+class AgentOperationChainAwaitTestCase(testtools.TestCase):
+    """A chain which fails must name the operation that actually failed.
+
+    A dependent is aborted by the cascade when the operation it declared a
+    dependency on did not succeed, and that dependent may itself be the
+    dependency of the next link -- so the operation a caller awaited is the
+    last link rather than the cause. await_agent_chain() walks back to the
+    cause, and says which of several reasons it cannot when the walk cannot
+    get there. Every branch is tested here against fabricated views,
+    because two of them -- a swept dependency and an unreadable one -- need
+    an hour of sweep latency or a database fault to produce on a cluster.
+    """
+
+    # Operation uuids, in submission order, plus one which was never part
+    # of the chain the caller handed in.
+    OP_A = 'a0b5a1d6-0c50-4a1f-9f42-1f6e2ad1c001'
+    OP_B = 'b1c6b2e7-1d61-4b20-8a53-2a7f3be2d002'
+    OP_C = 'c2d7c3f8-2e72-4c31-9b64-3b806cf3e003'
+    OP_ELSEWHERE = 'd3e8d409-3f83-4d42-8c75-4c917d04f004'
+
+    def setUp(self):
+        super().setUp()
+
+        self.capabilities = mock.patch(
+            'shakenfist_client.apiclient.Client._collect_capabilities')
+        self.capabilities.start()
+        self.addCleanup(self.capabilities.stop)
+
+        self.sleep = mock.patch('time.sleep')
+        self.mock_sleep = self.sleep.start()
+        self.addCleanup(self.sleep.stop)
+
+        self.client = apiclient.Client(suppress_configuration_lookup=True,
+                                       base_url='http://localhost:13000')
+
+    # -- building the views a submitted chain is made of -------------------
+
+    def _submitted(self, op_uuid):
+        """An operation view as a creating POST returns one.
+
+        Deliberately carrying the state the operation *started* in, which
+        is what makes the walk's refresh of a link necessary rather than
+        decorative: nothing in the list a caller submitted knows how any
+        of it ended.
+        """
+        return {'uuid': op_uuid, 'state': 'queued'}
+
+    def _aborted(self, op_uuid, dependency_failure=None):
+        view = {'uuid': op_uuid, 'state': 'abort'}
+        if dependency_failure is not None:
+            view['dependency_failure'] = dependency_failure
+        return view
+
+    def _cascade(self, op_uuid, state):
+        """A dependency_failure as the cascade writes one."""
+        return {'op_type': 'agent', 'op_uuid': op_uuid, 'state': state}
+
+    def _await(self, operations, **kwargs):
+        return self.client.await_agent_chain(operations, **kwargs)
+
+    # -- the chain worked --------------------------------------------------
+
+    def test_chain_success_returns_the_last_operation(self):
+        # Only the last link is awaited: every other one has to finish
+        # before it can run, so awaiting them individually is what
+        # declaring the order was supposed to avoid.
+        clock = _FakeClock()
+        self.mock_sleep.side_effect = lambda seconds: clock.advance(seconds)
+        complete = {'uuid': self.OP_C, 'state': 'complete'}
+        operations = [self._submitted(self.OP_A), self._submitted(self.OP_B),
+                      self._submitted(self.OP_C)]
+
+        with mock.patch('time.time', clock), \
+                mock.patch.object(self.client, 'get_agent_operation',
+                                  return_value=complete) as get_op:
+            result = self._await(operations, timeout=30)
+
+        self.assertEqual(complete, result)
+        # One poll, of the last operation and nothing else.
+        get_op.assert_called_once_with(self.OP_C)
+
+    def test_an_empty_chain_is_refused(self):
+        self.assertRaises(ValueError, self._await, [])
+
+    # -- the chain failed, and the cause can be named ----------------------
+
+    def test_abort_names_the_immediately_preceding_operation(self):
+        operations = [self._submitted(self.OP_A),
+                      self._aborted(self.OP_B, self._cascade(self.OP_A, 'error'))]
+
+        with mock.patch.object(
+                self.client, 'get_agent_operation',
+                return_value={'uuid': self.OP_A, 'state': 'error'}) as get_op:
+            e = self.assertRaises(apiclient.AgentOperationFailed, self._await, operations)
+
+        # The cause, not the last link: a caller reading op_uuid is told
+        # which operation to go and look at.
+        self.assertEqual(self.OP_A, e.op_uuid)
+        self.assertEqual('error', e.op_view['state'])
+        self.assertIn('actually failed', str(e))
+        self.assertIn('1 operation back in the chain', str(e))
+        self.assertIn('"error"', str(e))
+        get_op.assert_called_once_with(self.OP_A)
+
+    def test_abort_names_an_operation_two_hops_back(self):
+        # B was aborted by the cascade in its turn, so B is a link and not
+        # a cause -- the walk has to keep going to reach A.
+        operations = [self._submitted(self.OP_A), self._submitted(self.OP_B),
+                      self._aborted(self.OP_C, self._cascade(self.OP_B, 'abort'))]
+        views = {
+            self.OP_B: self._aborted(self.OP_B, self._cascade(self.OP_A, 'expired')),
+            self.OP_A: {'uuid': self.OP_A, 'state': 'expired'},
+        }
+
+        with mock.patch.object(self.client, 'get_agent_operation',
+                               side_effect=lambda u: views[u]) as get_op:
+            e = self.assertRaises(apiclient.AgentOperationFailed, self._await, operations)
+
+        self.assertEqual(self.OP_A, e.op_uuid)
+        self.assertIn('2 operations back in the chain', str(e))
+        self.assertIn('"expired"', str(e))
+        self.assertEqual([mock.call(self.OP_B), mock.call(self.OP_A)],
+                         get_op.call_args_list)
+
+    def test_an_unreadable_link_falls_back_to_the_recorded_state(self):
+        # The refresh of a link is best effort: a read which fails while
+        # decorating a failure must not replace it, or the caller loses the
+        # failure in favour of the error from reporting it.
+        operations = [self._submitted(self.OP_A),
+                      self._aborted(self.OP_B, self._cascade(self.OP_A, 'error'))]
+        gone = apiclient.ResourceNotFoundException(
+            'not found', 'GET', '/agentoperations/' + self.OP_A, 404, '')
+
+        with mock.patch.object(self.client, 'get_agent_operation', side_effect=gone):
+            e = self.assertRaises(apiclient.AgentOperationFailed, self._await, operations)
+
+        self.assertEqual(self.OP_A, e.op_uuid)
+        self.assertIn('actually failed', str(e))
+        self.assertIn('"error"', str(e))
+
+    # -- the chain failed, and the cause cannot be named -------------------
+
+    def _assert_unresolvable(self, dependency_failure, phrase, named=None):
+        """Walk a chain whose cause cannot be resolved, and read the reason.
+
+        The assertion is on the phrase which distinguishes this branch from
+        the others rather than on the whole message, because the wording
+        around it is for an operator and will be improved; what must not
+        change is that the four cases remain four different answers.
+        """
+        operations = [self._submitted(self.OP_A), self._submitted(self.OP_B),
+                      self._aborted(self.OP_C, dependency_failure)]
+
+        with mock.patch.object(self.client, 'get_agent_operation') as get_op:
+            e = self.assertRaises(apiclient.AgentOperationFailed, self._await, operations)
+
+        self.assertIn(phrase, str(e))
+        # None of these branches needs a link refreshed: each is decided
+        # entirely from what the cascade already recorded.
+        get_op.assert_not_called()
+        if named:
+            self.assertEqual(named, e.op_uuid)
+        return e
+
+    def test_a_pending_dependency_reports_the_wait_budget(self):
+        # Not a failed step: the dependency was still working when the
+        # dependent ran out of patience, and the remedy is a budget rather
+        # than a fix.
+        for state in ('initial', 'preflight', 'queued', 'executing'):
+            e = self._assert_unresolvable(
+                self._cascade(self.OP_B, state),
+                'ran out of its dependency wait budget', named=self.OP_B)
+            self.assertIn('AGENT_OPERATION_DEPENDENCY_WAIT', str(e))
+            self.assertIn('300', str(e))
+            self.assertIn(f'"{state}"', str(e))
+
+    def test_a_swept_dependency_says_so(self):
+        e = self._assert_unresolvable(
+            self._cascade(self.OP_B, 'missing'),
+            'had been swept or deleted', named=self.OP_B)
+
+        # Why it cannot be recovered, rather than a guess in either
+        # direction.
+        self.assertIn('never swept', str(e))
+
+    def test_an_unreadable_dependency_points_at_the_cluster(self):
+        e = self._assert_unresolvable(
+            self._cascade(self.OP_B, 'unreadable'),
+            'could not read the state', named=self.OP_B)
+
+        self.assertIn('cluster', str(e))
+
+    def test_a_dependency_outside_the_chain_is_not_resolved(self):
+        self._assert_unresolvable(
+            self._cascade(self.OP_ELSEWHERE, 'error'),
+            'was not submitted with this chain', named=self.OP_ELSEWHERE)
+
+    def test_an_abort_without_a_cause_says_so(self):
+        operations = [self._submitted(self.OP_A),
+                      self._aborted(self.OP_B)]
+
+        with mock.patch.object(self.client, 'get_agent_operation') as get_op:
+            e = self.assertRaises(apiclient.AgentOperationFailed, self._await, operations)
+
+        self.assertIn('carries no dependency_failure', str(e))
+        self.assertIn('the operation which was awaited', str(e))
+        self.assertEqual(self.OP_B, e.op_uuid)
+        get_op.assert_not_called()
+
+    # -- the walk's two hard limits ----------------------------------------
+
+    def test_the_walk_never_requests_an_operation_outside_the_chain(self):
+        # Counted rather than inspected, because this is an authorisation
+        # property and not a tidiness one: a chain may cross namespaces, so
+        # a walk which chased a uuid the caller did not submit would be
+        # asking the cluster a question on the caller's behalf that the
+        # caller never asked.
+        operations = [self._submitted(self.OP_A), self._submitted(self.OP_B),
+                      self._aborted(self.OP_C, self._cascade(self.OP_B, 'abort'))]
+        # B was aborted by something from outside the submitted chain.
+        refreshed_b = self._aborted(self.OP_B,
+                                    self._cascade(self.OP_ELSEWHERE, 'error'))
+
+        with mock.patch.object(self.client, 'get_agent_operation',
+                               return_value=refreshed_b) as get_op:
+            e = self.assertRaises(apiclient.AgentOperationFailed, self._await, operations)
+
+        self.assertEqual(1, get_op.call_count)
+        self.assertEqual([mock.call(self.OP_B)], get_op.call_args_list)
+        requested = {call.args[0] for call in get_op.call_args_list}
+        self.assertEqual(set(), requested - {self.OP_A, self.OP_B, self.OP_C})
+        self.assertIn('was not submitted with this chain', str(e))
+
+    def test_the_walk_is_bounded_by_the_chain_it_was_given(self):
+        # A client cannot build a cycle, because an edge may only name an
+        # operation which already exists. This asserts the walk stops
+        # anyway, since it is reading state a cluster wrote and a reporting
+        # helper which could be hung is a worse answer than one which says
+        # it stopped.
+        operations = [self._submitted(self.OP_A),
+                      self._aborted(self.OP_B, self._cascade(self.OP_A, 'abort'))]
+        views = {
+            self.OP_A: self._aborted(self.OP_A, self._cascade(self.OP_B, 'abort')),
+            self.OP_B: self._aborted(self.OP_B, self._cascade(self.OP_A, 'abort')),
+        }
+
+        with mock.patch.object(self.client, 'get_agent_operation',
+                               side_effect=lambda u: views[u]) as get_op:
+            e = self.assertRaises(apiclient.AgentOperationFailed, self._await, operations)
+
+        self.assertIn('longer than the 2 operations submitted', str(e))
+        self.assertEqual(2, get_op.call_count)
+
+    # -- a failure which is not a chain question ---------------------------
+
+    def test_a_non_abort_failure_passes_through_unchanged(self):
+        # Only the cascade writes an abort, so any other terminal failure
+        # is the awaited operation's own and is already reported as well as
+        # it can be. Rewriting it as a chain failure would bury the real
+        # one under a walk with nothing to walk.
+        operations = [self._submitted(self.OP_A),
+                      {'uuid': self.OP_B, 'state': 'error'}]
+
+        with mock.patch.object(self.client, 'get_agent_operation') as get_op:
+            e = self.assertRaises(apiclient.AgentOperationFailed, self._await, operations)
+
+        self.assertEqual(self.OP_B, e.op_uuid)
+        self.assertIn('entered terminal state', str(e))
+        self.assertNotIn('chain', str(e))
+        get_op.assert_not_called()
