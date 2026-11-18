@@ -5,6 +5,9 @@ import logging
 import os
 import re
 import time
+# The class rather than the module, because a loop variable elsewhere in
+# this file is named uuid and would shadow a module imported as such.
+from uuid import UUID
 
 import requests
 
@@ -232,6 +235,120 @@ def _is_error_state(state):
 # import that module, so this duplicates it deliberately -- keep the two
 # in sync by hand.
 TERMINAL_AGENT_OPERATION_STATES = frozenset({'complete', 'error', 'expired', 'abort', 'deleted'})
+
+
+# The only keys an agent operation dependency edge may carry. This mirrors
+# the server's edge model, which forbids an unknown key on the parameter it
+# publishes rather than dropping it.
+AGENT_DEPENDENCY_KEYS = frozenset({'op_uuid', 'settle_seconds'})
+
+
+def _canonical_op_uuid(where, value):
+    # The canonical form of the UUID, not whatever the caller typed. The
+    # server parses an edge's op_uuid and hands it back in canonical lower
+    # case, and a creating call compares the edges it sent against the ones
+    # the response carries -- so an upper case UUID sent through as typed
+    # would come back looking like an edge the cluster had dropped.
+    try:
+        return str(UUID(str(value)))
+    except (TypeError, ValueError):
+        raise ValueError(f'{where}: {value!r} is not a valid UUID') from None
+
+
+def agent_dependency(operation, settle_seconds=None):
+    """Build a dependency edge which names an agent operation.
+
+    operation is either an agent operation as the API returns it (a
+    dictionary with a 'uuid') or an operation UUID as a string, so that a
+    caller chaining operations writes
+    depends_on=[agent_dependency(first_op)] instead of assembling
+    depends_on=[{'op_uuid': first_op['uuid']}] by hand.
+
+    settle_seconds delays the edge being satisfied for that long after the
+    named operation finished, for a caller whose next step needs the guest
+    to settle after whatever the dependency changed.
+
+    A caller who names something which is not an agent operation UUID is
+    refused here, rather than by the cluster a request later.
+    """
+    if isinstance(operation, dict):
+        op_uuid = operation.get('uuid')
+        if op_uuid is None:
+            raise ValueError(
+                'agent_dependency(): an edge must name an agent operation, and this one has no uuid')
+    else:
+        op_uuid = operation
+
+    # op_type is deliberately not emitted. The server stores it as a
+    # constant it does not publish, on the grounds that a caller forced to
+    # supply a constant can only get it wrong, and the parameter it
+    # validates against refuses any key it does not publish -- so an edge
+    # carrying op_type would be rejected rather than tolerated.
+    edge = {'op_uuid': _canonical_op_uuid('agent_dependency()', op_uuid)}
+
+    # Only sent when the caller asked for a settle. An absent key is what
+    # means "satisfied as soon as the named operation finishes", and that
+    # is the server's decision to make, not a value to send on the caller's
+    # behalf.
+    if settle_seconds is not None:
+        edge['settle_seconds'] = settle_seconds
+
+    return edge
+
+
+def _agentop_dependency_edges(name, edges):
+    """Normalise a list of agent operation dependency edges.
+
+    Each member is either an agent operation UUID as a string or an edge
+    dictionary of the shape agent_dependency() builds. The returned list
+    holds an edge dictionary per member, in the order they were given.
+
+    name is the parameter the list arrived in ('depends_on' or
+    'runs_after'), and every refusal names it and the index of the member
+    at fault, because a caller submitting a graph needs to know which edge
+    the complaint is about.
+
+    What is checked here is shape, and only shape. How many edges an
+    operation may have, and how long a settle may be, are deployment
+    policy which the server reads from its own configuration -- the settle
+    ceiling moved from 86400 to 300 seconds in a single release -- so a
+    copy of either bound in this client would refuse a value the cluster
+    being talked to accepts, or tell a caller a value is fine which that
+    cluster then refuses. The server's own edge model declines to enforce
+    the settle ceiling for the same reason, and checks it where the
+    configuration can be read. Nothing is missing here; both bounds belong
+    to the server alone.
+    """
+    normalised = []
+
+    for index, edge in enumerate(edges):
+        if isinstance(edge, str):
+            edge = {'op_uuid': edge}
+
+        elif isinstance(edge, dict):
+            unknown = set(edge) - AGENT_DEPENDENCY_KEYS
+            if unknown:
+                raise ValueError(
+                    f'{name}[{index}] has keys which are not part of a dependency edge: '
+                    f'{", ".join(sorted(unknown))}. An edge may only name '
+                    f'{", ".join(sorted(AGENT_DEPENDENCY_KEYS))}')
+
+            if edge.get('op_uuid') is None:
+                raise ValueError(
+                    f'{name}[{index}] does not name an agent operation, a dependency '
+                    'edge must have an op_uuid')
+
+            edge = dict(edge)
+
+        else:
+            raise ValueError(
+                f'{name}[{index}] must be an agent operation UUID or a dependency edge '
+                f'dictionary, not a {type(edge).__name__}')
+
+        edge['op_uuid'] = _canonical_op_uuid(f'{name}[{index}] op_uuid', edge['op_uuid'])
+        normalised.append(edge)
+
+    return normalised
 
 
 def _correct_blob_indexes(d):

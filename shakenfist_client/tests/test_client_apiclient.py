@@ -1,6 +1,7 @@
 import copy
 import json
 import time
+import uuid
 from unittest import mock
 
 import requests
@@ -2752,3 +2753,173 @@ class APIExceptionTestCase(testtools.TestCase):
         exc = apiclient.APIException('m', 'GET', 'u', 507, 't', headers=None)
 
         self.assertEqual({}, exc.headers)
+
+
+class AgentDependencyTestCase(testtools.TestCase):
+    OP_UUID = '4b7f2f96-1b93-4f4c-9b0e-0f19d1a6f2a1'
+
+    def test_operation_view_becomes_an_edge(self):
+        op = {'uuid': self.OP_UUID, 'state': 'complete'}
+
+        self.assertEqual({'op_uuid': self.OP_UUID},
+                         apiclient.agent_dependency(op))
+
+    def test_uuid_string_becomes_an_edge(self):
+        self.assertEqual({'op_uuid': self.OP_UUID},
+                         apiclient.agent_dependency(self.OP_UUID))
+
+    def test_op_type_is_never_emitted(self):
+        # The server stores op_type as a constant it does not publish, and
+        # the parameter it validates against refuses a key it does not
+        # publish, so emitting one here would have the edge rejected.
+        edge = apiclient.agent_dependency(self.OP_UUID)
+
+        self.assertEqual(['op_uuid'], sorted(edge.keys()))
+
+    def test_settle_seconds_is_included_when_passed(self):
+        edge = apiclient.agent_dependency(self.OP_UUID, settle_seconds=30)
+
+        self.assertEqual({'op_uuid': self.OP_UUID, 'settle_seconds': 30}, edge)
+
+    def test_settle_seconds_is_absent_when_not_passed(self):
+        # An absent key, not an explicit null: it is the server's business
+        # what "no settle" means.
+        self.assertNotIn('settle_seconds',
+                         apiclient.agent_dependency(self.OP_UUID))
+
+    def test_a_zero_settle_is_still_emitted(self):
+        edge = apiclient.agent_dependency(self.OP_UUID, settle_seconds=0)
+
+        self.assertEqual(0, edge['settle_seconds'])
+
+    def test_an_operation_without_a_uuid_is_refused(self):
+        # Rather than building an edge which names the string 'None' and
+        # leaving the cluster to refuse it a request later.
+        e = self.assertRaises(
+            ValueError, apiclient.agent_dependency, {'state': 'complete'})
+
+        self.assertIn('has no uuid', str(e))
+
+    def test_something_which_is_not_a_uuid_is_refused(self):
+        e = self.assertRaises(
+            ValueError, apiclient.agent_dependency, 'the-first-one')
+
+        self.assertIn('is not a valid UUID', str(e))
+
+    def test_an_upper_case_uuid_is_canonicalised(self):
+        # The server parses the UUID and hands it back in lower case, and a
+        # creating call checks the edges it sent against the ones which came
+        # back, so the two have to be the same string.
+        edge = apiclient.agent_dependency(self.OP_UUID.upper())
+
+        self.assertEqual({'op_uuid': self.OP_UUID}, edge)
+
+
+class AgentDependencyEdgesTestCase(testtools.TestCase):
+    OP_UUID = '4b7f2f96-1b93-4f4c-9b0e-0f19d1a6f2a1'
+    OTHER_UUID = 'c0a8cbd6-3b02-4a0e-9e5a-8df0b0f8a991'
+
+    def test_uuid_string_members_are_normalised(self):
+        self.assertEqual(
+            [{'op_uuid': self.OP_UUID}, {'op_uuid': self.OTHER_UUID}],
+            apiclient._agentop_dependency_edges(
+                'depends_on', [self.OP_UUID, self.OTHER_UUID]))
+
+    def test_mapping_members_are_passed_through(self):
+        edges = [{'op_uuid': self.OP_UUID, 'settle_seconds': 5}]
+
+        self.assertEqual(edges,
+                         apiclient._agentop_dependency_edges('depends_on', edges))
+
+    def test_mapping_members_are_copied_not_mutated(self):
+        edge = {'op_uuid': self.OP_UUID}
+        result = apiclient._agentop_dependency_edges('runs_after', [edge])
+
+        self.assertIsNot(edge, result[0])
+
+    def test_an_empty_list_normalises_to_an_empty_list(self):
+        self.assertEqual([], apiclient._agentop_dependency_edges('depends_on', []))
+
+    def test_member_of_the_wrong_type_is_refused(self):
+        e = self.assertRaises(
+            ValueError, apiclient._agentop_dependency_edges,
+            'depends_on', [self.OP_UUID, 42])
+
+        self.assertIn('depends_on[1]', str(e))
+        self.assertIn('must be an agent operation UUID or a dependency edge', str(e))
+        self.assertIn('int', str(e))
+
+    def test_unknown_key_is_refused(self):
+        e = self.assertRaises(
+            ValueError, apiclient._agentop_dependency_edges,
+            'runs_after', [{'op_uuid': self.OP_UUID, 'op_type': 'agentoperation'}])
+
+        self.assertIn('runs_after[0]', str(e))
+        self.assertIn('not part of a dependency edge', str(e))
+        self.assertIn('op_type', str(e))
+
+    def test_missing_op_uuid_is_refused(self):
+        e = self.assertRaises(
+            ValueError, apiclient._agentop_dependency_edges,
+            'depends_on', [{'settle_seconds': 10}])
+
+        self.assertIn('depends_on[0]', str(e))
+        self.assertIn('does not name an agent operation', str(e))
+
+    def test_null_op_uuid_is_refused_as_missing(self):
+        e = self.assertRaises(
+            ValueError, apiclient._agentop_dependency_edges,
+            'depends_on', [{'op_uuid': None}])
+
+        self.assertIn('depends_on[0]', str(e))
+        self.assertIn('does not name an agent operation', str(e))
+
+    def test_non_uuid_string_member_is_refused(self):
+        e = self.assertRaises(
+            ValueError, apiclient._agentop_dependency_edges,
+            'runs_after', [self.OP_UUID, 'not-a-uuid'])
+
+        self.assertIn('runs_after[1]', str(e))
+        self.assertIn('is not a valid UUID', str(e))
+
+    def test_non_uuid_op_uuid_in_a_mapping_is_refused(self):
+        e = self.assertRaises(
+            ValueError, apiclient._agentop_dependency_edges,
+            'depends_on', [{'op_uuid': 'not-a-uuid'}])
+
+        self.assertIn('depends_on[0]', str(e))
+        self.assertIn('is not a valid UUID', str(e))
+
+    def test_an_empty_op_uuid_is_refused(self):
+        e = self.assertRaises(
+            ValueError, apiclient._agentop_dependency_edges,
+            'depends_on', [{'op_uuid': ''}])
+
+        self.assertIn('depends_on[0]', str(e))
+        self.assertIn('is not a valid UUID', str(e))
+
+    def test_an_upper_case_member_is_canonicalised(self):
+        edges = apiclient._agentop_dependency_edges(
+            'depends_on', [self.OP_UUID.upper()])
+
+        self.assertEqual([{'op_uuid': self.OP_UUID}], edges)
+
+    # The next two assert acceptances rather than refusals, which is the
+    # point of them. How many edges an operation may have and how long a
+    # settle may be are both deployment policy the server reads from its
+    # configuration, and the settle ceiling has already moved by two orders
+    # of magnitude in a single release. A client which refused either value
+    # would be wrong about a cluster configured differently, so these tests
+    # pin the absence of those bounds here.
+    def test_a_large_settle_seconds_is_accepted(self):
+        edges = apiclient._agentop_dependency_edges(
+            'depends_on', [{'op_uuid': self.OP_UUID, 'settle_seconds': 86400}])
+
+        self.assertEqual(86400, edges[0]['settle_seconds'])
+
+    def test_a_long_list_of_edges_is_accepted(self):
+        edges = apiclient._agentop_dependency_edges(
+            'depends_on', [apiclient.agent_dependency(str(uuid.uuid4()))
+                           for _ in range(100)])
+
+        self.assertEqual(100, len(edges))
