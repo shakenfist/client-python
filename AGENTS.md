@@ -144,6 +144,49 @@ of the master plan writes it once, for the server and client halves
 together; until then the `--help` text on `instance execute`, `upload`
 and `download` is what a user has.
 
+## Agent Operation Dependencies
+
+`depends_on` and `runs_after` order in-guest agent operations on the
+*server*, and they are not interchangeable: a failed `depends_on`
+dependency cascades its dependent to `abort`, whereas a `runs_after`
+dependency only sequenced it and the dependent runs regardless. How to
+use either is described once, in the server repository's
+`docs/developer_guide/agent_operations.md`; this section holds only the
+invariants which read as tidy-up targets and are not:
+
+- `TERMINAL_AGENT_OPERATION_STATES` has five members, and `abort` had
+  to arrive before the submission parameters rather than after. Until a
+  caller can declare a dependency no operation it created can reach
+  `abort`, and a client which could create one before it recognised the
+  state would poll to its deadline and hand back an aborted operation
+  with no exception. `await_agent_command()` would then raise
+  `AgentAwaitTimeout` about an operation whose timeout was never the
+  problem.
+- The capability gate for dependencies *raises* where the deadlines gate
+  silently sends nothing, and the two helpers sit beside each other so
+  the divergence is visible. Silence means different things: an omitted
+  deadline means "the server's own default applies", whereas a dropped
+  ordering edge means "run now", the precise outcome the caller declared
+  the edge to prevent.
+- Neither `None` nor an empty list is a declaration, so neither consults
+  the capability or sends a key. The timing parameters test
+  `is not None` because zero is a real budget there; it is not here.
+- The client validates an edge's shape and deliberately carries neither
+  of the server's bounds, the edge-count limit or the `settle_seconds`
+  ceiling. Both are deployment policy read from the cluster's own
+  configuration, and the ceiling has already moved by two orders of
+  magnitude in one release.
+- `_verify_agentop_dependencies()` exists because an older `sf-database`
+  behind a new `sf-api` accepts the edges, answers 200 and stores
+  nothing, which no capability token can report.
+- `await_seconds=0` is how a chain link is submitted: it sets a deadline
+  already reached, so the call returns the operation as created.
+  Awaiting each link as it is submitted defeats the chain entirely. This
+  is the idiom the repository publishes in place of a submission helper.
+- The chain walk must never resolve a UUID the caller did not submit. A
+  chain may cross namespaces, and doing so would turn a reporting helper
+  into a question about authorisation.
+
 ## Transient Capacity Refusals
 
 `Client(retry_transient_capacity=True)` waits out a `507` the server has
