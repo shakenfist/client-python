@@ -227,11 +227,11 @@ def _is_error_state(state):
     return state == 'error' or state.endswith('-error')
 
 
-# These four are exactly AgentOperation.TERMINAL_STATES in the server
+# These five are exactly AgentOperation.TERMINAL_STATES in the server
 # repository (shakenfist/operations/agentoperation.py). The client cannot
 # import that module, so this duplicates it deliberately -- keep the two
 # in sync by hand.
-TERMINAL_AGENT_OPERATION_STATES = frozenset({'complete', 'error', 'expired', 'deleted'})
+TERMINAL_AGENT_OPERATION_STATES = frozenset({'complete', 'error', 'expired', 'abort', 'deleted'})
 
 
 def _correct_blob_indexes(d):

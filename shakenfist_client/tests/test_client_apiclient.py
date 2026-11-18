@@ -2016,7 +2016,7 @@ class AgentOperationAwaitTestCase(testtools.TestCase):
     caller waited out the whole timeout only to be told it timed out.
     """
 
-    TERMINAL_FAILURE_STATES = ('error', 'expired', 'deleted')
+    TERMINAL_FAILURE_STATES = ('error', 'expired', 'abort', 'deleted')
 
     def setUp(self):
         super().setUp()
@@ -2044,6 +2044,9 @@ class AgentOperationAwaitTestCase(testtools.TestCase):
 
         self.assertEqual(op, result)
         get_op.assert_not_called()
+
+    def test_abort_is_a_terminal_state(self):
+        self.assertIn('abort', apiclient.TERMINAL_AGENT_OPERATION_STATES)
 
     def test_await_agentop_terminal_failure_raises_on_first_poll(self):
         for state in self.TERMINAL_FAILURE_STATES:
