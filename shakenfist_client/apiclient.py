@@ -1693,6 +1693,42 @@ class Client:
         if progress_timeout_seconds is not None:
             data['progress_timeout_seconds'] = progress_timeout_seconds
 
+    def _add_agentop_dependencies(self, data, depends_on, runs_after):
+        """Add the dependency edges the caller declared to a request body.
+
+        Only a list the caller passed sends a key. Neither None -- a
+        wrapper forwarding a keyword argument it does not use -- nor an
+        empty list -- a caller who built no edges -- is a declaration, so
+        neither consults the capability nor sends anything, because
+        refusing either would be a refusal with no cause. That is the
+        opposite of the timing parameters above, where zero is a real
+        value and so only None may be treated as absent.
+
+        Unlike ``_add_agentop_timing``, a server which cannot accept
+        these is refused rather than silently sent nothing. An omitted
+        deadline means "the server's own default applies", which is what
+        an older server would have given anyway and costs the caller a
+        budget. A dropped ordering edge means "run now", which is the
+        precise outcome the caller declared the edge to prevent -- an
+        upload and the command which reads the file it placed would both
+        be dispatched with no guarantee the upload had finished -- and
+        the caller would be told it had succeeded. Silence there is worse
+        than a refusal.
+        """
+        if not (depends_on or runs_after):
+            return
+
+        if not self.check_capability('agentoperation-dependencies'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'agent operation dependencies, which require the '
+                'agentoperation-dependencies capability.')
+
+        if depends_on:
+            data['depends_on'] = _agentop_dependency_edges('depends_on', depends_on)
+        if runs_after:
+            data['runs_after'] = _agentop_dependency_edges('runs_after', runs_after)
+
     @staticmethod
     def _remaining_agentop_budget(start_time, timeout):
         """How much of the caller's timeout is left, as a server side budget.
@@ -1747,7 +1783,7 @@ class Client:
 
     def instance_put_blob(self, instance_ref, blob_uuid, path, mode,
                           deadline_seconds=None, progress_timeout_seconds=None,
-                          await_seconds=None):
+                          await_seconds=None, depends_on=None, runs_after=None):
         if not self.check_capability('instance-put-blob'):
             raise IncapableException(
                 'The API server version you are talking to does not support '
@@ -1755,13 +1791,14 @@ class Client:
 
         data = {'blob_uuid': blob_uuid, 'path': path, 'mode': mode}
         self._add_agentop_timing(data, deadline_seconds, progress_timeout_seconds)
+        self._add_agentop_dependencies(data, depends_on, runs_after)
 
         r = self._request_url('POST', '/instances/' + instance_ref + '/agent/put',
                               data=data)
         return self._await_agentop(r.json(), await_seconds=await_seconds)
 
     def instance_execute(self, instance_ref, command_line, deadline_seconds=None,
-                         await_seconds=None):
+                         await_seconds=None, depends_on=None, runs_after=None):
         if not self.check_capability('instance-execute'):
             raise IncapableException(
                 'The API server version you are talking to does not support '
@@ -1770,8 +1807,11 @@ class Client:
         data = {'command_line': command_line}
         # The server refuses a progress timeout on execute (decision 4;
         # shakenfist/external_api/instance.py), so execute never gains a
-        # progress_timeout_seconds kwarg and always passes None here.
+        # progress_timeout_seconds kwarg and always passes None here. The
+        # dependency parameters have no such asymmetry: all three endpoints
+        # accept both edge lists.
         self._add_agentop_timing(data, deadline_seconds, None)
+        self._add_agentop_dependencies(data, depends_on, runs_after)
 
         r = self._request_url('POST', '/instances/' + instance_ref + '/agent/execute',
                               data=data)
@@ -1779,7 +1819,7 @@ class Client:
 
     def instance_get(self, instance_ref, path,
                      deadline_seconds=None, progress_timeout_seconds=None,
-                     await_seconds=None):
+                     await_seconds=None, depends_on=None, runs_after=None):
         if not self.check_capability('instance-get'):
             raise IncapableException(
                 'The API server version you are talking to does not support '
@@ -1787,6 +1827,7 @@ class Client:
 
         data = {'path': path}
         self._add_agentop_timing(data, deadline_seconds, progress_timeout_seconds)
+        self._add_agentop_dependencies(data, depends_on, runs_after)
 
         r = self._request_url('POST', '/instances/' + instance_ref + '/agent/get',
                               data=data)

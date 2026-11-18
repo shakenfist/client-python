@@ -2923,3 +2923,207 @@ class AgentDependencyEdgesTestCase(testtools.TestCase):
                            for _ in range(100)])
 
         self.assertEqual(100, len(edges))
+
+
+class AgentOperationDependencyParameterTestCase(testtools.TestCase):
+    """The three agent operation creating helpers send dependency edges.
+
+    They send them only when the caller declared some, and refuse to run at
+    all when the caller declared some and the server has not advertised the
+    'agentoperation-dependencies' capability. The refusal is the point: a
+    dropped ordering edge would be reported to the caller as a success.
+    """
+
+    OP_UUID = '4b7f2f96-1b93-4f4c-9b0e-0f19d1a6f2a1'
+    OTHER_UUID = 'c0a8cbd6-3b02-4a0e-9e5a-8df0b0f8a991'
+
+    PUT_BODY = {'blob_uuid': 'blob1', 'path': '/path', 'mode': 0o644}
+    EXECUTE_BODY = {'command_line': 'true'}
+    GET_BODY = {'path': '/path'}
+
+    def setUp(self):
+        super().setUp()
+
+        self.request_url = mock.patch(
+            'shakenfist_client.apiclient.Client._request_url')
+        self.mock_request = self.request_url.start()
+        self.addCleanup(self.request_url.stop)
+        self.mock_request.return_value.json.return_value = {
+            'uuid': 'op1', 'state': 'complete'}
+
+        self.capabilities = mock.patch(
+            'shakenfist_client.apiclient.Client._collect_capabilities')
+        self.capabilities.start()
+        self.addCleanup(self.capabilities.stop)
+
+    def _client(self, capable):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        # check_capability() is a substring match against the server's root
+        # HTML page, so this is what a real server response looks like to
+        # the client.
+        client.root_html = 'instance-put-blob instance-execute instance-get'
+        if capable:
+            client.root_html += ' agentoperation-dependencies'
+        return client
+
+    def _sent_data(self):
+        return self.mock_request.call_args.kwargs['data']
+
+    # The three calls under test, each with the request body it builds
+    # before any dependency key is added.
+
+    def _put(self, client, **kwargs):
+        return client.instance_put_blob('inst1', 'blob1', '/path', 0o644, **kwargs)
+
+    def _execute(self, client, **kwargs):
+        return client.instance_execute('inst1', 'true', **kwargs)
+
+    def _get(self, client, **kwargs):
+        return client.instance_get('inst1', '/path', **kwargs)
+
+    # -- the edges are sent ----------------------------------------------
+
+    def _assert_sends_edges(self, call, body):
+        client = self._client(True)
+        call(client,
+             depends_on=[self.OP_UUID],
+             runs_after=[apiclient.agent_dependency(self.OTHER_UUID,
+                                                    settle_seconds=5)])
+
+        # A bare UUID string was normalised into an edge, so the list really
+        # went through _agentop_dependency_edges() rather than being passed
+        # to the server as the caller typed it.
+        self.assertEqual(
+            dict(body,
+                 depends_on=[{'op_uuid': self.OP_UUID}],
+                 runs_after=[{'op_uuid': self.OTHER_UUID, 'settle_seconds': 5}]),
+            self._sent_data())
+
+    def test_put_blob_sends_edges(self):
+        self._assert_sends_edges(self._put, self.PUT_BODY)
+
+    def test_execute_sends_edges(self):
+        self._assert_sends_edges(self._execute, self.EXECUTE_BODY)
+
+    def test_get_sends_edges(self):
+        self._assert_sends_edges(self._get, self.GET_BODY)
+
+    def _assert_sends_one_list_alone(self, call, body):
+        # The list the caller did not pass must not appear at all. An empty
+        # list is not the same request as an absent key.
+        client = self._client(True)
+        call(client, depends_on=[self.OP_UUID])
+
+        self.assertEqual(
+            dict(body, depends_on=[{'op_uuid': self.OP_UUID}]), self._sent_data())
+
+    def test_put_blob_sends_depends_on_alone(self):
+        self._assert_sends_one_list_alone(self._put, self.PUT_BODY)
+
+    def test_execute_sends_depends_on_alone(self):
+        self._assert_sends_one_list_alone(self._execute, self.EXECUTE_BODY)
+
+    def test_get_sends_depends_on_alone(self):
+        self._assert_sends_one_list_alone(self._get, self.GET_BODY)
+
+    # -- an incapable server is refused -----------------------------------
+
+    def _assert_refuses_an_incapable_server(self, call):
+        client = self._client(False)
+
+        for kwargs in ({'depends_on': [self.OP_UUID]},
+                       {'runs_after': [self.OP_UUID]}):
+            e = self.assertRaises(apiclient.IncapableException,
+                                  call, client, **kwargs)
+
+            self.assertIn('agentoperation-dependencies', str(e))
+            # Refused before the request went out, not after an operation
+            # was created which would have run unordered.
+            self.mock_request.assert_not_called()
+
+    def test_put_blob_refuses_an_incapable_server(self):
+        self._assert_refuses_an_incapable_server(self._put)
+
+    def test_execute_refuses_an_incapable_server(self):
+        self._assert_refuses_an_incapable_server(self._execute)
+
+    def test_get_refuses_an_incapable_server(self):
+        self._assert_refuses_an_incapable_server(self._get)
+
+    # -- a caller who declared nothing is unaffected ----------------------
+
+    # Each of these drives an *incapable* client deliberately: if the
+    # capability were consulted the call would raise, so these also prove
+    # the check is never reached.
+
+    def _assert_no_arguments_send_no_keys(self, call, body):
+        client = self._client(False)
+        call(client)
+
+        self.assertEqual(body, self._sent_data())
+
+    def test_put_blob_without_edges_sends_no_keys(self):
+        self._assert_no_arguments_send_no_keys(self._put, self.PUT_BODY)
+
+    def test_execute_without_edges_sends_no_keys(self):
+        self._assert_no_arguments_send_no_keys(self._execute, self.EXECUTE_BODY)
+
+    def test_get_without_edges_sends_no_keys(self):
+        self._assert_no_arguments_send_no_keys(self._get, self.GET_BODY)
+
+    def _assert_explicit_none_sends_no_keys(self, call, body):
+        # A wrapper forwarding **kwargs passes None for an edge list it does
+        # not use, and that must behave exactly as not passing it at all.
+        client = self._client(False)
+        call(client, depends_on=None, runs_after=None)
+
+        self.assertEqual(body, self._sent_data())
+
+    def test_put_blob_explicit_none_sends_no_keys(self):
+        self._assert_explicit_none_sends_no_keys(self._put, self.PUT_BODY)
+
+    def test_execute_explicit_none_sends_no_keys(self):
+        self._assert_explicit_none_sends_no_keys(self._execute, self.EXECUTE_BODY)
+
+    def test_get_explicit_none_sends_no_keys(self):
+        self._assert_explicit_none_sends_no_keys(self._get, self.GET_BODY)
+
+    def _assert_empty_lists_send_no_keys(self, call, body):
+        # An empty list is a caller who declared no edges, which is not a
+        # caller who needs ordering. Refusing it would be a refusal with no
+        # cause, and sending an empty list would say "I checked, there is
+        # nothing to wait for" to a server which cannot read the key.
+        client = self._client(False)
+        call(client, depends_on=[], runs_after=[])
+
+        self.assertEqual(body, self._sent_data())
+
+    def test_put_blob_empty_lists_send_no_keys(self):
+        self._assert_empty_lists_send_no_keys(self._put, self.PUT_BODY)
+
+    def test_execute_empty_lists_send_no_keys(self):
+        self._assert_empty_lists_send_no_keys(self._execute, self.EXECUTE_BODY)
+
+    def test_get_empty_lists_send_no_keys(self):
+        self._assert_empty_lists_send_no_keys(self._get, self.GET_BODY)
+
+    # -- a malformed edge is refused before the request -------------------
+
+    def _assert_a_malformed_edge_is_refused(self, call):
+        client = self._client(True)
+
+        e = self.assertRaises(ValueError, call, client,
+                              depends_on=[{'op_uuid': 'not-a-uuid'}])
+
+        self.assertIn('depends_on[0]', str(e))
+        self.mock_request.assert_not_called()
+
+    def test_put_blob_refuses_a_malformed_edge(self):
+        self._assert_a_malformed_edge_is_refused(self._put)
+
+    def test_execute_refuses_a_malformed_edge(self):
+        self._assert_a_malformed_edge_is_refused(self._execute)
+
+    def test_get_refuses_a_malformed_edge(self):
+        self._assert_a_malformed_edge_is_refused(self._get)
