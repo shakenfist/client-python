@@ -2925,6 +2925,26 @@ class AgentDependencyEdgesTestCase(testtools.TestCase):
         self.assertEqual(100, len(edges))
 
 
+def _echoing_agentop_response(method, url, data=None, **kwargs):
+    """Answer a creating POST the way a healthy cluster does.
+
+    The response to one of the three agent operation creating calls is the
+    created operation's own view, and a cluster whose database tier
+    understands dependency edges hands back the ones it stored. So an
+    operation created with edges must come back carrying them, or the
+    client refuses it -- which means a test about anything else has to
+    answer like a working cluster rather than with a bare operation view.
+    """
+    op = {'uuid': 'op1', 'state': 'complete'}
+    for name in ('depends_on', 'runs_after'):
+        if name in (data or {}):
+            op[name] = data[name]
+
+    r = mock.MagicMock()
+    r.json.return_value = op
+    return r
+
+
 class AgentOperationDependencyParameterTestCase(testtools.TestCase):
     """The three agent operation creating helpers send dependency edges.
 
@@ -2948,8 +2968,7 @@ class AgentOperationDependencyParameterTestCase(testtools.TestCase):
             'shakenfist_client.apiclient.Client._request_url')
         self.mock_request = self.request_url.start()
         self.addCleanup(self.request_url.stop)
-        self.mock_request.return_value.json.return_value = {
-            'uuid': 'op1', 'state': 'complete'}
+        self.mock_request.side_effect = _echoing_agentop_response
 
         self.capabilities = mock.patch(
             'shakenfist_client.apiclient.Client._collect_capabilities')
@@ -3127,3 +3146,195 @@ class AgentOperationDependencyParameterTestCase(testtools.TestCase):
 
     def test_get_refuses_a_malformed_edge(self):
         self._assert_a_malformed_edge_is_refused(self._get)
+
+
+class AgentOperationStoredEdgeTestCase(testtools.TestCase):
+    """A creating call checks that the edges it sent came back stored.
+
+    The agentoperation-dependencies capability is advertised by sf-api,
+    which is not the service that writes an edge. During a staged upgrade
+    a new sf-api in front of an older sf-database accepts the parameters,
+    answers 200, and stores empty edge lists -- so an operation which the
+    caller ordered runs unordered and is reported as a success. The
+    created operation's view is the POST response, so the client catches
+    that without another request.
+    """
+
+    OP_UUID = '4b7f2f96-1b93-4f4c-9b0e-0f19d1a6f2a1'
+    OTHER_UUID = 'c0a8cbd6-3b02-4a0e-9e5a-8df0b0f8a991'
+
+    def setUp(self):
+        super().setUp()
+
+        self.request_url = mock.patch(
+            'shakenfist_client.apiclient.Client._request_url')
+        self.mock_request = self.request_url.start()
+        self.addCleanup(self.request_url.stop)
+
+        self.capabilities = mock.patch(
+            'shakenfist_client.apiclient.Client._collect_capabilities')
+        self.capabilities.start()
+        self.addCleanup(self.capabilities.stop)
+
+        self.client = apiclient.Client(suppress_configuration_lookup=True,
+                                       base_url='http://localhost:13000')
+        # check_capability() is a substring match against the server's root
+        # HTML page, and this cluster advertises dependencies -- which is
+        # exactly the case where the database tier may still not store them.
+        self.client.root_html = ('instance-put-blob instance-execute instance-get '
+                                 'agentoperation-dependencies')
+
+    def _answers(self, view):
+        """Make the creating POST answer with this operation view."""
+        self.mock_request.return_value.json.return_value = dict(
+            view, uuid='op1', state='complete')
+
+    # The three calls under test.
+
+    def _put(self, **kwargs):
+        return self.client.instance_put_blob('inst1', 'blob1', '/path', 0o644, **kwargs)
+
+    def _execute(self, **kwargs):
+        return self.client.instance_execute('inst1', 'true', **kwargs)
+
+    def _get(self, **kwargs):
+        return self.client.instance_get('inst1', '/path', **kwargs)
+
+    # -- a cluster which stored the edges is accepted ----------------------
+
+    def _assert_echoed_edges_pass(self, call):
+        self._answers({'depends_on': [{'op_uuid': self.OP_UUID}],
+                       'runs_after': [{'op_uuid': self.OTHER_UUID}]})
+
+        op = call(depends_on=[self.OP_UUID], runs_after=[self.OTHER_UUID])
+
+        self.assertEqual('op1', op['uuid'])
+
+    def test_put_blob_accepts_echoed_edges(self):
+        self._assert_echoed_edges_pass(self._put)
+
+    def test_execute_accepts_echoed_edges(self):
+        self._assert_echoed_edges_pass(self._execute)
+
+    def test_get_accepts_echoed_edges(self):
+        self._assert_echoed_edges_pass(self._get)
+
+    # -- the three shapes an older database tier produces ------------------
+
+    def _assert_refused(self, call, view):
+        self._answers(view)
+
+        e = self.assertRaises(apiclient.IncapableException, call,
+                              depends_on=[self.OP_UUID])
+
+        # The operator reading this needs to know which component to
+        # upgrade, and that the call they made was not the mistake.
+        self.assertIn('sf-database', str(e))
+        self.assertIn('Upgrade sf-database', str(e))
+        self.assertIn('depends_on', str(e))
+        self.assertIn(self.OP_UUID, str(e))
+        return e
+
+    def _assert_empty_list_refused(self, call):
+        # What an older sf-database actually produces: the fields reach it,
+        # are unknown to it, and are dropped, so the view carries the key
+        # with nothing in it.
+        self._assert_refused(call, {'depends_on': [], 'runs_after': []})
+
+    def test_put_blob_refuses_empty_edge_lists(self):
+        self._assert_empty_list_refused(self._put)
+
+    def test_execute_refuses_empty_edge_lists(self):
+        self._assert_empty_list_refused(self._execute)
+
+    def test_get_refuses_empty_edge_lists(self):
+        self._assert_empty_list_refused(self._get)
+
+    def _assert_subset_refused(self, call):
+        self._answers({'depends_on': [{'op_uuid': self.OP_UUID}]})
+
+        e = self.assertRaises(apiclient.IncapableException, call,
+                              depends_on=[self.OP_UUID, self.OTHER_UUID])
+
+        # Partly stored is not stored: the edge which went missing is the
+        # one whose ordering will not be honoured.
+        self.assertIn('sf-database', str(e))
+        self.assertIn(self.OTHER_UUID, str(e))
+
+    def test_put_blob_refuses_a_subset_of_the_edges(self):
+        self._assert_subset_refused(self._put)
+
+    def test_execute_refuses_a_subset_of_the_edges(self):
+        self._assert_subset_refused(self._execute)
+
+    def test_get_refuses_a_subset_of_the_edges(self):
+        self._assert_subset_refused(self._get)
+
+    def _assert_missing_key_refused(self, call):
+        # An older service's view may not carry the field at all, which is
+        # not distinguishable from an edge list it threw away.
+        self._assert_refused(call, {})
+
+    def test_put_blob_refuses_a_view_without_the_key(self):
+        self._assert_missing_key_refused(self._put)
+
+    def test_execute_refuses_a_view_without_the_key(self):
+        self._assert_missing_key_refused(self._execute)
+
+    def test_get_refuses_a_view_without_the_key(self):
+        self._assert_missing_key_refused(self._get)
+
+    # -- what is deliberately not compared --------------------------------
+
+    def test_a_dropped_settle_seconds_is_not_a_mismatch(self):
+        # Only the op_uuid sets are compared. A tier which does not
+        # understand an edge drops the whole edge, so a settle which did
+        # not come back says nothing about storage, and refusing on it
+        # would refuse a healthy cluster.
+        self._answers({'depends_on': [{'op_uuid': self.OP_UUID}]})
+
+        op = self._execute(depends_on=[apiclient.agent_dependency(self.OP_UUID,
+                                                                  settle_seconds=5)])
+
+        self.assertEqual('op1', op['uuid'])
+
+    def test_reordered_edges_are_not_a_mismatch(self):
+        # The server does not promise to return the edges in the order they
+        # were sent, so the comparison is between sets.
+        self._answers({'depends_on': [{'op_uuid': self.OTHER_UUID},
+                                      {'op_uuid': self.OP_UUID}]})
+
+        op = self._execute(depends_on=[self.OP_UUID, self.OTHER_UUID])
+
+        self.assertEqual('op1', op['uuid'])
+
+    def test_an_upper_case_uuid_is_not_a_mismatch(self):
+        # The edge was canonicalised when it was built and the server's view
+        # is canonical too, which is why the comparison needs no
+        # normalisation of its own.
+        self._answers({'depends_on': [{'op_uuid': self.OP_UUID}]})
+
+        op = self._execute(depends_on=[self.OP_UUID.upper()])
+
+        self.assertEqual('op1', op['uuid'])
+
+    # -- a caller who sent no edges reaches no comparison ------------------
+
+    def _assert_no_edges_ignores_the_response(self, call):
+        # Whatever the view carries on an operation the caller did not order
+        # is not this client's business: an unrelated edge in the response,
+        # or none at all, must not raise.
+        self._answers({'depends_on': [{'op_uuid': self.OTHER_UUID}]})
+
+        op = call()
+
+        self.assertEqual('op1', op['uuid'])
+
+    def test_put_blob_without_edges_ignores_the_response(self):
+        self._assert_no_edges_ignores_the_response(self._put)
+
+    def test_execute_without_edges_ignores_the_response(self):
+        self._assert_no_edges_ignores_the_response(self._execute)
+
+    def test_get_without_edges_ignores_the_response(self):
+        self._assert_no_edges_ignores_the_response(self._get)

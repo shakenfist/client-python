@@ -1729,6 +1729,70 @@ class Client:
         if runs_after:
             data['runs_after'] = _agentop_dependency_edges('runs_after', runs_after)
 
+    def _verify_agentop_dependencies(self, data, op):
+        """Check that the edges a creating call sent came back on the operation.
+
+        The agentoperation-dependencies capability says the API server
+        understands the parameters. It does not say the tier behind it
+        stores them, and the server records the consequence itself in the
+        comment which defines that token
+        (shakenfist/external_api/app.py): a newer sf-api against an older
+        sf-database accepts the parameters, answers 200, and stores empty
+        edge lists.
+
+        That is the one way this family of calls fails silently -- an
+        operation which will run with no ordering at all, reported to the
+        caller as a success -- and no capability token can report it. The
+        POST response is the created operation's own view, which carries
+        both edge lists, so this costs no extra request.
+
+        Only the op_uuid sets are compared. Not settle_seconds, because a
+        tier which does not understand an edge drops the whole edge rather
+        than part of one, and not order, which the server does not promise
+        to preserve.
+        """
+        for name in ('depends_on', 'runs_after'):
+            sent = data.get(name)
+            if not sent:
+                # A caller who declared nothing on this list has nothing to
+                # verify, so whatever the response carries is not this
+                # client's business.
+                continue
+
+            # Neither side needs normalising here. The edges were
+            # canonicalised when they were built, and the server's op_uuid is
+            # a pydantic UUID4 which its view renders in that same canonical
+            # lower case form -- so the two sides are already the same
+            # strings. Normalising again would be a second place for the two
+            # forms to disagree, and could only hide the mismatch this check
+            # exists to find.
+            sent_uuids = {edge['op_uuid'] for edge in sent}
+            stored_uuids = {edge.get('op_uuid') for edge in op.get(name) or []}
+            if sent_uuids == stored_uuids:
+                continue
+
+            # Counts, and the edges which did not come back rather than
+            # both sets in full: an operation may name as many edges as the
+            # cluster allows, and a sentence carrying a hundred and
+            # twenty eight UUIDs is one nobody reads to the end of.
+            detail = f'{len(sent_uuids)} sent, {len(stored_uuids)} came back'
+            missing = sorted(sent_uuids - stored_uuids)
+            if missing:
+                detail += ', missing ' + ', '.join(missing[:3])
+                if len(missing) > 3:
+                    detail += f' and {len(missing) - 3} more'
+
+            raise IncapableException(
+                f'The API server accepted the {name} edges for agent operation '
+                f'{op["uuid"]} and answered success, but the database tier did not store '
+                f'them: {detail}. This is a cluster part way through an upgrade -- sf-api '
+                'advertises the agentoperation-dependencies capability, but the '
+                'sf-database behind it predates the dependency fields and drops them. '
+                'Upgrade sf-database to a version which stores dependency edges. The '
+                'call which was made is correct, and is refused here only because the '
+                'operation would otherwise run unordered while reporting that it had '
+                'been ordered.')
+
     @staticmethod
     def _remaining_agentop_budget(start_time, timeout):
         """How much of the caller's timeout is left, as a server side budget.
@@ -1795,7 +1859,9 @@ class Client:
 
         r = self._request_url('POST', '/instances/' + instance_ref + '/agent/put',
                               data=data)
-        return self._await_agentop(r.json(), await_seconds=await_seconds)
+        op = r.json()
+        self._verify_agentop_dependencies(data, op)
+        return self._await_agentop(op, await_seconds=await_seconds)
 
     def instance_execute(self, instance_ref, command_line, deadline_seconds=None,
                          await_seconds=None, depends_on=None, runs_after=None):
@@ -1815,7 +1881,9 @@ class Client:
 
         r = self._request_url('POST', '/instances/' + instance_ref + '/agent/execute',
                               data=data)
-        return self._await_agentop(r.json(), await_seconds=await_seconds)
+        op = r.json()
+        self._verify_agentop_dependencies(data, op)
+        return self._await_agentop(op, await_seconds=await_seconds)
 
     def instance_get(self, instance_ref, path,
                      deadline_seconds=None, progress_timeout_seconds=None,
@@ -1831,7 +1899,9 @@ class Client:
 
         r = self._request_url('POST', '/instances/' + instance_ref + '/agent/get',
                               data=data)
-        return self._await_agentop(r.json(), await_seconds=await_seconds)
+        op = r.json()
+        self._verify_agentop_dependencies(data, op)
+        return self._await_agentop(op, await_seconds=await_seconds)
 
     def get_namespaces(self):
         r = self._request_url('GET', '/auth/namespaces')
