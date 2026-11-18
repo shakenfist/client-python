@@ -460,3 +460,67 @@ class ClaimListAllTestCase(testtools.TestCase):
         result, _ = self._list(['--all'], incapable=True)
         self.assertEqual(1, result.exit_code)
         self.assertEqual('no cluster claims\n', result.output)
+
+
+class NamespaceShowKeysTestCase(testtools.TestCase):
+    """Tests for the key listing in ``sf-client namespace show``."""
+
+    NS = {'name': 'testspace', 'state': 'created', 'keys': ['live']}
+    DETAIL = [
+        {'namespace': 'testspace', 'key_name': 'live', 'uuid': 'u1',
+         'expiry': None, 'scopes': ['cluster-admin']},
+        {'namespace': 'testspace', 'key_name': 'old', 'uuid': 'u2',
+         'expiry': 1755300000.0, 'scopes': []}]
+
+    def _invoke(self, output, capable=True, detail=None):
+        client = mock.MagicMock()
+        client.get_namespace.return_value = dict(self.NS)
+        client.check_capability.return_value = capable
+        client.get_namespace_keys.return_value = (
+            self.DETAIL if detail is None else detail)
+
+        result = CliRunner().invoke(
+            namespace_cmd.namespace, ['show', 'testspace'],
+            obj={'CLIENT': client, 'OUTPUT': output}, catch_exceptions=False)
+        return result, client
+
+    def test_pretty_shows_expired_keys_and_scopes(self):
+        result, client = self._invoke('pretty')
+        client.check_capability.assert_called_with('namespace-key-metadata')
+        self.assertIn('old', result.output)
+        self.assertIn('cluster-admin', result.output)
+        self.assertNotIn('provenance', result.output)
+
+    def test_pretty_shows_provenance_when_served(self):
+        detail = [dict(self.DETAIL[0], provenance={'sub': 'abc'})]
+        result, _ = self._invoke('pretty', detail=detail)
+        self.assertIn('provenance', result.output)
+        self.assertIn('"sub": "abc"', result.output)
+
+    def test_pretty_falls_back_without_capability(self):
+        result, client = self._invoke('pretty', capable=False)
+        client.get_namespace_keys.assert_not_called()
+        self.assertIn('Key Names:', result.output)
+        self.assertIn('live', result.output)
+
+    def test_machine_readable_rows(self):
+        result, _ = self._invoke('simple')
+        self.assertIn('keyname,live,,cluster-admin\n', result.output)
+        self.assertIn('keyname,old,', result.output)
+
+    def test_machine_readable_omits_provenance(self):
+        detail = [dict(self.DETAIL[0], provenance={'sub': 'abc', 'jti': 'd'})]
+        result, _ = self._invoke('simple', detail=detail)
+        self.assertIn('keyname,live,,cluster-admin\n', result.output)
+        self.assertNotIn('sub', result.output)
+        self.assertNotIn('jti', result.output)
+
+    def test_machine_readable_falls_back_without_capability(self):
+        result, _ = self._invoke('simple', capable=False)
+        self.assertIn('keyname,live\n', result.output)
+
+    def test_json_adds_key_details_only_with_capability(self):
+        result, _ = self._invoke('json')
+        self.assertEqual(self.DETAIL, json.loads(result.output)['key_details'])
+        result, _ = self._invoke('json', capable=False)
+        self.assertNotIn('key_details', json.loads(result.output))

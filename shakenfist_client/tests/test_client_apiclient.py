@@ -268,6 +268,22 @@ class ApiClientTestCase(testtools.TestCase):
         self.mock_request.assert_called_with(
             'GET', '/auth/namespaces/testspace/keys')
 
+    def test_get_namespace_keys(self):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.get_namespace_keys('testspace')
+
+        self.mock_request.assert_called_with(
+            'GET', '/auth/namespaces/testspace/keys?detail=true')
+
+    def test_get_namespace_key(self):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.get_namespace_key('testspace', 'testkeyname')
+
+        self.mock_request.assert_called_with(
+            'GET', '/auth/namespaces/testspace/keys/testkeyname')
+
     def test_add_namespace_key(self):
         client = apiclient.Client(suppress_configuration_lookup=True,
                                   base_url='http://localhost:13000')

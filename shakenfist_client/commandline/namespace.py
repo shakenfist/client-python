@@ -64,6 +64,38 @@ def namespace_delete(ctx, namespace=None):
     ctx.obj['CLIENT'].delete_namespace(namespace)
 
 
+def _key_expiry(key):
+    """Render a key's expiry, which is a unix timestamp on the wire or null."""
+    expiry = key.get('expiry')
+    if not expiry:
+        return ''
+    try:
+        return str(datetime.datetime.fromtimestamp(float(expiry)))
+    except (TypeError, ValueError):
+        return str(expiry)
+
+
+def _key_scopes(key):
+    scopes = key.get('scopes') or []
+    if isinstance(scopes, (list, tuple)):
+        return ' '.join(str(s) for s in scopes)
+    return str(scopes)
+
+
+def _key_provenance(key):
+    provenance = key.get('provenance')
+    if isinstance(provenance, str):
+        return provenance
+    return json.dumps(provenance, sort_keys=True)
+
+
+def _get_key_details(ctx, namespace):
+    """Return per-key metadata, or None if the cluster cannot provide it."""
+    if not ctx.obj['CLIENT'].check_capability('namespace-key-metadata'):
+        return None
+    return ctx.obj['CLIENT'].get_namespace_keys(namespace)
+
+
 @namespace.command(name='show', help='Show a namespace')
 @click.argument('namespace', type=click.STRING, shell_complete=_get_namespaces)
 @click.pass_context
@@ -73,7 +105,14 @@ def namespace_show(ctx, namespace=None):
         print('Namespace not found')
         sys.exit(1)
 
+    # Namespace.keys is only a list of names, so metadata needs a second call.
+    # An older cluster cannot answer it, and we fall back to the names alone.
+    key_details = _get_key_details(ctx, namespace)
+
     if ctx.obj['OUTPUT'] == 'json':
+        if key_details is not None:
+            ns = dict(ns)
+            ns['key_details'] = key_details
         print(json.dumps(ns, indent=4, sort_keys=True))
 
     elif ctx.obj['OUTPUT'] == 'pretty':
@@ -82,7 +121,25 @@ def namespace_show(ctx, namespace=None):
             print(format_string % (key, ns[key]))
         print()
 
-        if ns['keys']:
+        if key_details:
+            # Provenance is only served to callers in the system namespace, so
+            # the column appears only when the server sent it.
+            show_provenance = any('provenance' in k for k in key_details)
+            headers = ['name', 'expiry', 'scopes']
+            if show_provenance:
+                headers.append('provenance')
+            t = PrettyTable(headers)
+            t.align = 'l'
+            for k in key_details:
+                row = [k['key_name'], _key_expiry(k), _key_scopes(k)]
+                if show_provenance:
+                    row.append(_key_provenance(k) if 'provenance' in k else '')
+                t.add_row(row)
+            print('Keys:')
+            print(t)
+            print()
+
+        elif key_details is None and ns['keys']:
             format_string = '    %s'
             print('Key Names:')
             for key in ns['keys']:
@@ -109,7 +166,18 @@ def namespace_show(ctx, namespace=None):
         print()
 
         print('keynames:')
-        if ns['keys']:
+        if key_details is not None:
+            # Provenance is deliberately absent here. This output is comma
+            # separated, and a serialised object contains commas of its own;
+            # it is also served to some callers and not others, which would
+            # make the number of columns depend on who is asking. Read it
+            # with --output json instead.
+            for k in key_details:
+                print(','.join(['keyname', k['key_name'], _key_expiry(k),
+                                _key_scopes(k)]))
+            if key_details:
+                print()
+        elif ns['keys']:
             for key in ns['keys']:
                 print('keyname,%s' % (key))
             print()
