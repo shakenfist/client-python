@@ -761,6 +761,53 @@ Departures from the plan, as they happened:
    is creation-time static data which `external_view()` carries verbatim,
    so nothing prunes a satisfied edge before the response is built.
 
+7. **The ordering test as specified could not fail.** Decision 9 and
+   step 8 put both operations of the ordering test on one instance,
+   with the second declaring `depends_on` on the first. The
+   dispatcher runs at most one executor per instance, so those two
+   operations are serialised by that queue whether or not either
+   declares an edge -- delete the `depends_on` and the test still
+   passes, which means it asserts nothing about dependencies. The
+   step's brief was corrected before it ran: the dependent goes on a
+   second instance, whose executor is idle, so an unordered dependent
+   is dispatched on the dispatcher's next pass and the edge is the
+   only thing which can hold it. Cross-instance edges, which phase 2
+   shipped, are what make that available. The test also refuses to
+   pass without having observed a window at all, so a blocker which
+   died immediately fails rather than passing vacuously.
+
+8. **`_await_agentop_state()` moved to `base.py`, so step 8 touched
+   three files rather than one.** The step's brief said the new test
+   was to be the only file changed, which would have shipped a
+   verbatim second copy of that helper. The deadlines test, which had
+   the only copy, says in as many words that `base.py` is where a
+   helper with one caller goes to be copied later; this was that
+   moment, and the waiter directly above it in `base.py` carries a
+   comment about a flake fix which half-landed across two
+   near-identical copies of exactly this kind.
+
+9. **Which job runs the smoke tier, since the gate depends on it.**
+   It is `smoke_collection` in `.github/workflows/functional-tests.yml`,
+   which passes `tier: smoke` and no `stestr_config`, so the reusable
+   workflow defaults to `smoke-ci.conf` and its `test_path` picks the
+   directory up with no registration. It runs on pull requests.
+   `functional-lanes.yml` -- the merge-group and weekly matrix -- never
+   runs the smoke tier: every one of its lanes names `cluster-ci.conf`
+   or `guest-ci.conf`. That job installs `client-python` from its
+   default branch, which is what makes step 9's gate real rather than
+   cautious.
+
+10. **Two review rounds on the client pull request, then stopped.**
+    Round one was 2 fix / 3 document / 6 consider, round two 1 fix / 1
+    document / 10 consider, with three of round two's items about code
+    round one had added. Both rounds' fix and document items were
+    taken, and the loop was stopped there with no fix item open rather
+    than run a third time. Ten mutations now cover the client's
+    guards, each against a verified baseline; the first run of that set
+    reported four kills which were all false, because the runner it
+    invoked was not installed, which is why every mutant now asserts
+    its baseline ran and passed.
+
 ## Back brief
 
 Before executing any step, back brief the operator on the
