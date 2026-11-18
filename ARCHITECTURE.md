@@ -75,6 +75,17 @@ REST API:
   `ServiceUnavailableException` so a retryable refusal can be caught
   apart from a durable one. `docs/namespace-claims.md` describes the
   two claim states and the refusal statuses.
+- **Namespace key metadata**: `get_namespace_keys` and
+  `get_namespace_key` read a key's expiry, scopes and provenance
+  (`/auth/namespaces/<namespace>/keys`, the collection with
+  `detail=true`). Both are gated on the `namespace-key-metadata`
+  capability and fail closed, because a server without it answers the
+  collection with a bare name list rather than an error.
+  `get_namespace_keynames` is ungated and keeps that older shape. No CLI
+  verb calls `get_namespace_key` yet; the interactive login work is its
+  intended consumer. `docs/namespace-keys.md` describes why provenance
+  reaches only a `system` caller and why it is kept out of
+  comma-separated output.
 
 - **Agent operation deadlines**: `instance_put_blob`, `instance_get`
   and `instance_execute` accept `deadline_seconds` (and, for put and

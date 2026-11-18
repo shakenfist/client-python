@@ -1,6 +1,7 @@
 import datetime
 import json
 import sys
+import time
 
 import click
 from prettytable import PrettyTable
@@ -65,25 +66,40 @@ def namespace_delete(ctx, namespace=None):
 
 
 def _key_expiry(key):
-    """Render a key's expiry, which is a unix timestamp on the wire or null."""
-    expiry = key.get('expiry')
-    if not expiry:
+    """Render a key's expiry, which is a unix timestamp on the wire.
+
+    The key is indexed directly, like a claim's expiry and for the same
+    reason: a server which stopped sending it should fail the way any
+    other missing field fails, rather than rendering a key as though it
+    never expires. A null value is a different thing and does render
+    empty. Both this field and the scopes are part of the capability
+    this listing is gated on, so there is no older server to absorb.
+    """
+    if not key['expiry']:
         return ''
-    try:
-        return str(datetime.datetime.fromtimestamp(float(expiry)))
-    except (TypeError, ValueError):
-        return str(expiry)
+    stamp = str(datetime.datetime.fromtimestamp(key['expiry']))
+    if key['expiry'] < time.time():
+        # An expired key is the one an operator has to act on, so it says
+        # so rather than leaving them to compare timestamps by eye.
+        return '%s (expired)' % stamp
+    return stamp
 
 
 def _key_scopes(key):
-    scopes = key.get('scopes') or []
-    if isinstance(scopes, (list, tuple)):
-        return ' '.join(str(s) for s in scopes)
-    return str(scopes)
+    return ' '.join(key['scopes'])
 
 
 def _key_provenance(key):
+    """Render a key's provenance, which only a system caller is served.
+
+    Absence is the caller's business rather than the key's, and the row
+    only asks for this when the field arrived. An explicit null renders
+    empty, so that it reads the way a null expiry does in the column
+    beside it rather than as the word "null".
+    """
     provenance = key.get('provenance')
+    if provenance is None:
+        return ''
     if isinstance(provenance, str):
         return provenance
     return json.dumps(provenance, sort_keys=True)
@@ -91,9 +107,13 @@ def _key_provenance(key):
 
 def _get_key_details(ctx, namespace):
     """Return per-key metadata, or None if the cluster cannot provide it."""
-    if not ctx.obj['CLIENT'].check_capability('namespace-key-metadata'):
+    try:
+        return ctx.obj['CLIENT'].get_namespace_keys(namespace)
+    except IncapableException:
+        # The bare name list is still worth printing, so this is a
+        # fallback rather than the error exit an explicit verb would
+        # make of the same exception.
         return None
-    return ctx.obj['CLIENT'].get_namespace_keys(namespace)
 
 
 @namespace.command(name='show', help='Show a namespace')
@@ -121,7 +141,12 @@ def namespace_show(ctx, namespace=None):
             print(format_string % (key, ns[key]))
         print()
 
-        if key_details:
+        # The detail list is authoritative where it was served at all, so
+        # an empty one prints an empty table rather than falling back to
+        # the namespace record's names. The fallback is for a cluster
+        # which could not answer, which is the None case alone -- and the
+        # machine readable branch below draws the same line.
+        if key_details is not None:
             # Provenance is only served to callers in the system namespace, so
             # the column appears only when the server sent it.
             show_provenance = any('provenance' in k for k in key_details)
@@ -139,7 +164,7 @@ def namespace_show(ctx, namespace=None):
             print(t)
             print()
 
-        elif key_details is None and ns['keys']:
+        elif ns['keys']:
             format_string = '    %s'
             print('Key Names:')
             for key in ns['keys']:
@@ -172,8 +197,16 @@ def namespace_show(ctx, namespace=None):
             # it is also served to some callers and not others, which would
             # make the number of columns depend on who is asking. Read it
             # with --output json instead.
+            #
+            # The expiry is the raw unix timestamp rather than the rendered
+            # one the table shows: it cannot contain a separator, and a
+            # script can compare it with the current time without parsing a
+            # date. The columns are named for the same reason the metadata
+            # block below names its own.
+            print('keyname,name,expiry,scopes')
             for k in key_details:
-                print(','.join(['keyname', k['key_name'], _key_expiry(k),
+                expiry = '' if not k['expiry'] else repr(k['expiry'])
+                print(','.join(['keyname', k['key_name'], expiry,
                                 _key_scopes(k)]))
             if key_details:
                 print()

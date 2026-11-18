@@ -45,6 +45,9 @@ from `~/.shakenfist`, or from `/etc/sf/shakenfist.json`.
 - [Namespace capacity claims](https://github.com/shakenfist/client-python/blob/develop/docs/namespace-claims.md)
   -- claiming aggregate cluster capacity for a namespace, the two claim
   states, and what each refusal means
+- [Reading a namespace key's metadata](https://github.com/shakenfist/client-python/blob/develop/docs/namespace-keys.md)
+  -- a key's expiry, scopes and provenance, who is served which fields,
+  and the capability the reads are gated on
 - [Cluster capacity](https://github.com/shakenfist/client-python/blob/develop/docs/cluster-capacity.md)
   -- reading what each hypervisor has committed and measured, which figure
   the scheduler admits against, and namespace and claim events

@@ -271,18 +271,50 @@ class ApiClientTestCase(testtools.TestCase):
     def test_get_namespace_keys(self):
         client = apiclient.Client(suppress_configuration_lookup=True,
                                   base_url='http://localhost:13000')
+        client.root_html = 'namespace-key-metadata'
         client.get_namespace_keys('testspace')
 
         self.mock_request.assert_called_with(
             'GET', '/auth/namespaces/testspace/keys?detail=true')
 
+    def test_get_namespace_keys_incapable(self):
+        # A server without the capability answers this same route with a
+        # list of names, because detail is an unknown query parameter
+        # there. Refusing is what stops a caller indexing into strings.
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = ''
+        self.assertRaises(apiclient.IncapableException,
+                          client.get_namespace_keys, 'testspace')
+        self.mock_request.assert_not_called()
+
     def test_get_namespace_key(self):
         client = apiclient.Client(suppress_configuration_lookup=True,
                                   base_url='http://localhost:13000')
+        client.root_html = 'namespace-key-metadata'
         client.get_namespace_key('testspace', 'testkeyname')
 
         self.mock_request.assert_called_with(
             'GET', '/auth/namespaces/testspace/keys/testkeyname')
+
+    def test_get_namespace_key_incapable(self):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = ''
+        self.assertRaises(apiclient.IncapableException,
+                          client.get_namespace_key, 'testspace', 'testkeyname')
+        self.mock_request.assert_not_called()
+
+    def test_get_namespace_keynames_is_not_gated(self):
+        # The bare listing predates the capability and must keep working
+        # against a server which does not advertise it.
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = ''
+        client.get_namespace_keynames('testspace')
+
+        self.mock_request.assert_called_with(
+            'GET', '/auth/namespaces/testspace/keys')
 
     def test_add_namespace_key(self):
         client = apiclient.Client(suppress_configuration_lookup=True,

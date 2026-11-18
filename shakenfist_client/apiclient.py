@@ -1704,13 +1704,29 @@ class Client:
         entry carries its expiry and scopes. The provenance field is present
         only when the caller is in the system namespace, so its absence says
         nothing about whether a key has provenance.
+
+        Gated rather than attempted, because a server without the capability
+        answers the same route with a list of names: detail is an unknown
+        query parameter there, so the request succeeds and the caller gets
+        strings where it expected objects.
         """
+        if not self.check_capability('namespace-key-metadata'):
+            raise IncapableException(
+                'Cluster does not support reading namespace key metadata')
         r = self._request_url(
             'GET', '/auth/namespaces/' + namespace + '/keys?detail=true')
         return r.json()
 
     def get_namespace_key(self, namespace, key_name):
-        """Read the metadata of one key, which may be expired."""
+        """Read the metadata of one key, which may be expired.
+
+        No CLI verb calls this yet; the interactive login work which reads a
+        single credential back after minting it is the intended consumer.
+        Unused is not a reason to remove it.
+        """
+        if not self.check_capability('namespace-key-metadata'):
+            raise IncapableException(
+                'Cluster does not support reading namespace key metadata')
         r = self._request_url(
             'GET', '/auth/namespaces/' + namespace + '/keys/' + key_name)
         return r.json()
