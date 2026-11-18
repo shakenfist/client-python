@@ -83,11 +83,27 @@ REST API:
   polls for it -- three separate budgets that are deliberately not
   derived from one another. `_await_agentop()` is the single place
   which polls operation state: it breaks on any member of
-  `TERMINAL_AGENT_OPERATION_STATES` and raises `AgentOperationFailed`
+  `TERMINAL_AGENT_OPERATION_STATES` -- five states, `abort` among
+  them, hand-kept in step with the server's own list -- and raises
+  `AgentOperationFailed`
   rather than waiting out its budget and reporting a timeout, and
   `await_agent_command()`/`await_agent_fetch()` catch that to attach the
   instance's console data. The timing parameters are gated on the
   `agentoperation-deadlines` capability and fail closed.
+
+- **Agent operation dependencies**: the same three creating helpers
+  accept `depends_on` and `runs_after`, lists of edges built by the
+  module-level `agent_dependency()`, which name agent operations that
+  must finish first. The client validates an edge's shape and leaves
+  the cluster's own limits to the cluster. `_add_agentop_dependencies()`
+  gates both parameters on the `agentoperation-dependencies` capability
+  and, unlike the timing parameters beside it, *raises* rather than
+  sending nothing, because a dropped ordering edge means "run now".
+  `_verify_agentop_dependencies()` then checks that the edges came back
+  on the created operation, which catches a database tier too old to
+  store them, and deletes the operation when they did not.
+  `await_agent_chain()` awaits a submitted chain and walks
+  `dependency_failure` back to the operation which actually failed.
 
 - **Placement queries**: `check_placement()` asks the server whether a
   set of prospective instance shapes would fit the cluster now (`POST

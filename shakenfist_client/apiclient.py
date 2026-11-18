@@ -5,6 +5,9 @@ import logging
 import os
 import re
 import time
+# The class rather than the module, because a loop variable elsewhere in
+# this file is named uuid and would shadow a module imported as such.
+from uuid import UUID
 
 import requests
 
@@ -227,11 +230,211 @@ def _is_error_state(state):
     return state == 'error' or state.endswith('-error')
 
 
-# These four are exactly AgentOperation.TERMINAL_STATES in the server
+# These five are exactly AgentOperation.TERMINAL_STATES in the server
 # repository (shakenfist/operations/agentoperation.py). The client cannot
 # import that module, so this duplicates it deliberately -- keep the two
 # in sync by hand.
-TERMINAL_AGENT_OPERATION_STATES = frozenset({'complete', 'error', 'expired', 'deleted'})
+TERMINAL_AGENT_OPERATION_STATES = frozenset({'complete', 'error', 'expired', 'abort', 'deleted'})
+
+
+# The only keys an agent operation dependency edge may carry. This mirrors
+# the server's edge model, which forbids an unknown key on the parameter it
+# publishes rather than dropping it.
+AGENT_DEPENDENCY_KEYS = frozenset({'op_uuid', 'settle_seconds'})
+
+
+# The states a dependency can be observed in which mean it had not
+# finished yet. These matter to a chain walk because the cascade records
+# one of them when a dependent was given up on rather than when a step
+# failed: a dependent waits only so long for a dependency to go terminal,
+# and when that budget is spent it is aborted with whatever state the
+# dependency was still in. The server's own copy, with the reasoning, is
+# DEPENDENCY_PENDING_STATES in shakenfist/daemons/sidechannel/main.py.
+AGENT_DEPENDENCY_PENDING_STATES = frozenset({'initial', 'preflight', 'queued', 'executing'})
+
+# The two sentinels the dispatcher records in place of a dependency's
+# state, neither of which is a state any operation can hold. They say
+# opposite things, which is why the server keeps them apart and why a
+# chain walk has to as well: missing means the dependency was looked for
+# and is not there, while unreadable means nothing at all was learned
+# about it.
+AGENT_DEPENDENCY_MISSING = 'missing'
+AGENT_DEPENDENCY_UNREADABLE = 'unreadable'
+
+
+def _canonical_op_uuid(where, value):
+    # The canonical form of the UUID, not whatever the caller typed. The
+    # server parses an edge's op_uuid and hands it back in canonical lower
+    # case, and a creating call compares the edges it sent against the ones
+    # the response carries -- so an upper case UUID sent through as typed
+    # would come back looking like an edge the cluster had dropped.
+    try:
+        return str(UUID(str(value)))
+    except (TypeError, ValueError):
+        raise ValueError(f'{where}: {value!r} is not a valid UUID') from None
+
+
+def agent_dependency(operation, settle_seconds=None):
+    """Build a dependency edge which names an agent operation.
+
+    operation is either an agent operation as the API returns it (a
+    dictionary with a 'uuid') or an operation UUID as a string, so that a
+    caller chaining operations writes
+    depends_on=[agent_dependency(first_op)] instead of assembling
+    depends_on=[{'op_uuid': first_op['uuid']}] by hand.
+
+    settle_seconds delays the edge being satisfied for that long after the
+    named operation finished, for a caller whose next step needs the guest
+    to settle after whatever the dependency changed.
+
+    A caller who names something which is not an agent operation UUID is
+    refused here, rather than by the cluster a request later.
+    """
+    if isinstance(operation, dict):
+        op_uuid = operation.get('uuid')
+        if op_uuid is None:
+            raise ValueError(
+                'agent_dependency(): an edge must name an agent operation, and this one has no uuid')
+    else:
+        op_uuid = operation
+
+    # op_type is deliberately not emitted. The server stores it as a
+    # constant it does not publish, on the grounds that a caller forced to
+    # supply a constant can only get it wrong, and the parameter it
+    # validates against refuses any key it does not publish -- so an edge
+    # carrying op_type would be rejected rather than tolerated.
+    edge = {'op_uuid': _canonical_op_uuid('agent_dependency()', op_uuid)}
+
+    # Only sent when the caller asked for a settle. An absent key is what
+    # means "satisfied as soon as the named operation finishes", and that
+    # is the server's decision to make, not a value to send on the caller's
+    # behalf.
+    if settle_seconds is not None:
+        edge['settle_seconds'] = settle_seconds
+
+    return edge
+
+
+def _agentop_dependency_edges(name, edges):
+    """Normalise a list of agent operation dependency edges.
+
+    Each member is either an agent operation UUID as a string or an edge
+    dictionary of the shape agent_dependency() builds. The returned list
+    holds an edge dictionary per member, in the order they were given.
+
+    name is the parameter the list arrived in ('depends_on' or
+    'runs_after'), and every refusal names it and the index of the member
+    at fault, because a caller submitting a graph needs to know which edge
+    the complaint is about.
+
+    What is checked here is shape, and only shape. How many edges an
+    operation may have, and how long a settle may be, are deployment
+    policy which the server reads from its own configuration -- the settle
+    ceiling moved from 86400 to 300 seconds in a single release -- so a
+    copy of either bound in this client would refuse a value the cluster
+    being talked to accepts, or tell a caller a value is fine which that
+    cluster then refuses. The server's own edge model declines to enforce
+    the settle ceiling for the same reason, and checks it where the
+    configuration can be read. Nothing is missing here; both bounds belong
+    to the server alone.
+    """
+    # A caller who passes one edge where a list belongs gets told that.
+    # Both mistakes are iterable, so without this the loop below walks a
+    # uuid character by character, or a single edge dict key by key, and
+    # complains about the first character or the string 'op_uuid' -- an
+    # answer which describes neither the mistake nor the fix.
+    if isinstance(edges, (str, bytes, bytearray, dict)):
+        raise ValueError(
+            f'{name} must be a list of dependency edges, not a single '
+            f'{type(edges).__name__}')
+
+    normalised = []
+
+    for index, edge in enumerate(edges):
+        if isinstance(edge, str):
+            edge = {'op_uuid': edge}
+
+        elif isinstance(edge, dict):
+            unknown = set(edge) - AGENT_DEPENDENCY_KEYS
+            if unknown:
+                raise ValueError(
+                    f'{name}[{index}] has keys which are not part of a dependency edge: '
+                    f'{", ".join(sorted(unknown))}. An edge may only name '
+                    f'{", ".join(sorted(AGENT_DEPENDENCY_KEYS))}')
+
+            if edge.get('op_uuid') is None:
+                raise ValueError(
+                    f'{name}[{index}] does not name an agent operation, a dependency '
+                    'edge must have an op_uuid')
+
+            # Whether a settle is a number of seconds at all, and whether it
+            # points forwards, are properties of the value rather than of the
+            # deployment -- the server's own edge model refuses both on
+            # exactly that ground, and no cluster configuration makes either
+            # acceptable. How *large* a settle may be is the deployment's
+            # business and is still not checked here. A bool is refused
+            # before the numeric test because isinstance(True, int) is true
+            # in Python, so True would otherwise arrive as one second.
+            settle = edge.get('settle_seconds')
+            if isinstance(settle, bool):
+                raise ValueError(
+                    f'{name}[{index}] settle_seconds must be a number of seconds, '
+                    'not a boolean')
+            if settle is not None and not isinstance(settle, (int, float)):
+                raise ValueError(
+                    f'{name}[{index}] settle_seconds must be a number of seconds, '
+                    f'not a {type(settle).__name__}')
+            if settle is not None and settle < 0:
+                raise ValueError(
+                    f'{name}[{index}] settle_seconds may not be negative, got {settle}')
+
+            edge = dict(edge)
+
+        else:
+            raise ValueError(
+                f'{name}[{index}] must be an agent operation UUID or a dependency edge '
+                f'dictionary, not a {type(edge).__name__}')
+
+        edge['op_uuid'] = _canonical_op_uuid(f'{name}[{index}] op_uuid', edge['op_uuid'])
+        normalised.append(edge)
+
+    return normalised
+
+
+def _stored_edge_uuid(edge):
+    # The op_uuid of an edge as it came back on a created operation. A
+    # mapping is what the server sends -- it stores each edge as its schema
+    # model dumped to JSON, so the edge carries op_type and settle_seconds
+    # as well -- but reading a surprising shape must not raise here, where
+    # the whole point is to report a surprising answer rather than to add
+    # one.
+    if isinstance(edge, dict):
+        return edge.get('op_uuid')
+    if isinstance(edge, str):
+        return edge
+    return None
+
+
+def _observed_dependency_view(submitted, op_uuid, state):
+    # The view a chain walk hands back for a dependency it could not resolve,
+    # carrying the state the dispatcher recorded having observed rather than
+    # the state the creating POST returned. AgentOperationFailed promises its
+    # op_view is the operation's last known view, and a submitted view says
+    # "queued" forever -- which would contradict the message beside it.
+    return dict(submitted.get(op_uuid) or {'uuid': op_uuid}, state=state)
+
+
+def _agentop_chain_position(hops):
+    # Where in a submitted chain the walk below ended up, phrased for a
+    # failure message. Zero hops is the operation the caller awaited, and
+    # saying so is worth a branch: "0 operations back" reads like an
+    # arithmetic bug in the client rather than a chain whose last link is
+    # the one that broke.
+    if hops == 0:
+        return 'the operation which was awaited'
+    if hops == 1:
+        return '1 operation back in the chain'
+    return f'{hops} operations back in the chain'
 
 
 def _correct_blob_indexes(d):
@@ -1546,6 +1749,211 @@ class Client:
             time.sleep(1)
             r = self.get_agent_operation(r['uuid'])
 
+    def await_agent_chain(self, operations, timeout=None):
+        """Await a chain of ordered agent operations and report what broke it.
+
+        ``operations`` is the operation views a caller submitted, in
+        submission order -- each one created with ``await_seconds=0`` so
+        that submitting the chain does not wait for it, which is the whole
+        point of declaring the order on the server instead of enforcing it
+        from here. Only the last operation is awaited, because every other
+        link has to finish before it can run.
+
+        Returns the last operation once it completes. An operation which is
+        still in flight when the wait runs out is returned as
+        ``_await_agentop`` returns it, with no exception, which is this
+        client's long standing behaviour for a wait that expired rather
+        than a thing that failed.
+
+        Two bounds on what this reports. It observes only failures which
+        reached the operation it awaited, so it is a complete report for a
+        depends_on chain -- where a failed dependency cascades -- and not
+        for a runs_after one, whose dependent runs whatever its dependency
+        did: the last link can complete while an earlier link errored, and
+        that completion is what comes back. A caller mixing the two kinds
+        has to inspect the earlier links itself. And timeout=None means
+        "this client's async strategy decides", which for an ASYNC_CONTINUE
+        client -- the one a chain is submitted with -- is not to wait at
+        all, so a caller which wants this to block passes a timeout.
+
+        A chain fails backwards: the operation the caller awaited is
+        aborted because the one before it did not succeed, and that one may
+        have been aborted for the same reason in turn. So the exception
+        raised from here names the operation which *actually* failed rather
+        than the last link in the chain, and when it cannot name one it says
+        which of the several reasons it cannot -- each has a different
+        remedy, and guessing between them is worse than reporting the
+        uncertainty.
+        """
+        if not operations:
+            raise ValueError(
+                'await_agent_chain() needs the operations of a chain to await, and was given none')
+
+        try:
+            return self._await_agentop(operations[-1], await_seconds=timeout)
+        except AgentOperationFailed as e:
+            if e.op_view.get('state') != 'abort':
+                # Not a chain question. abort is the only state the
+                # dependency cascade writes, so any other failure is this
+                # operation's own and is already reported as well as it can
+                # be -- re-describing it in terms of a chain would bury the
+                # real failure under a walk which has nothing to walk.
+                raise
+
+            raise self._agentop_chain_failure(operations, e) from e
+
+    def _agentop_chain_failure(self, operations, failure):
+        """Walk an aborted operation back to the one which actually failed.
+
+        Returns the AgentOperationFailed to raise in place of the one the
+        awaited operation produced, which is a return rather than a raise so
+        that the caller above can chain the two exceptions together.
+
+        Each hop reads a dependency_failure, which the cascade writes as
+        {op_type, op_uuid, state} before it assigns the abort state. The
+        recorded state is not always a failure: the dispatcher aborts a
+        dependent both for a dependency which failed and for one which never
+        finished inside the dependency wait budget, and it records two
+        sentinels which are not states at all. Those are branches below
+        rather than assumptions, because they are remedied differently.
+        """
+        # Only the operations the caller submitted, which is what bounds
+        # what this walk is willing to look at.
+        submitted = {op['uuid']: op for op in operations if op.get('uuid')}
+
+        awaited = failure.op_uuid
+        current_uuid = awaited
+        current_view = failure.op_view
+        hops = 0
+
+        # Bounded by the chain which was submitted. A client cannot build a
+        # cycle -- an edge may only name an operation which already exists --
+        # but this walk reads state a cluster wrote, and a reporting helper
+        # which a surprising cluster could hang is a worse answer than one
+        # which stops and says it stopped.
+        for _ in range(len(operations)):
+            dependency_failure = current_view.get('dependency_failure')
+            if not dependency_failure:
+                return AgentOperationFailed(
+                    f'Agent operation {current_uuid} ({_agentop_chain_position(hops)}) was aborted, but it '
+                    'carries no dependency_failure, so which dependency aborted it cannot be named. Only '
+                    'the dependency cascade writes an abort, and it records the cause before it writes the '
+                    'state, so an abort without one is a cluster to look at rather than a chain to read.',
+                    current_uuid, current_view)
+
+            state = dependency_failure.get('state')
+            named = dependency_failure.get('op_uuid')
+
+            if not named:
+                # The cascade writes the dependency's uuid before it writes
+                # the abort, so an abort whose cause has no uuid is the same
+                # unanswerable question as one with no cause at all -- and
+                # saying "its dependency None" would be a worse way to ask
+                # it.
+                return AgentOperationFailed(
+                    f'Agent operation {current_uuid} ({_agentop_chain_position(hops)}) was aborted, and '
+                    f'its dependency_failure names no operation ({dependency_failure!r}), so which '
+                    'dependency aborted it cannot be named. The cascade records the cause before it '
+                    'writes the state, so this is a cluster to look at rather than a chain to read.',
+                    current_uuid, current_view)
+
+            if state in AGENT_DEPENDENCY_PENDING_STATES:
+                # Not a failed step at all: the dependency was still working
+                # when the dependent ran out of patience. Said separately
+                # because the remedy is a longer budget or a quicker
+                # dependency, and nothing is wrong with either operation.
+                return AgentOperationFailed(
+                    f'Agent operation {awaited} was aborted because the chain ran out of its dependency '
+                    f'wait budget, not because a step failed. {current_uuid} '
+                    f'({_agentop_chain_position(hops)}) was waiting on {named}, which was still in state '
+                    f'"{state}" when the wait expired. A dependent waits at most '
+                    'AGENT_OPERATION_DEPENDENCY_WAIT seconds for a dependency to finish, 300 by default, '
+                    'so the remedy is a longer budget on the cluster or a dependency which finishes '
+                    'sooner.',
+                    named, _observed_dependency_view(submitted, named, state))
+
+            if state == AGENT_DEPENDENCY_MISSING:
+                # The dependency is gone, so success and failure cannot be
+                # told apart. Not a guess in either direction: an errored
+                # operation is never swept while every other terminal one is
+                # swept an hour after it finished, so "gone" is weak evidence
+                # it did not error and no evidence at all about the rest.
+                return AgentOperationFailed(
+                    f'Agent operation {awaited} was aborted because its dependency {named} had been swept '
+                    f'or deleted by the time {current_uuid} ({_agentop_chain_position(hops)}) came to run, '
+                    'so whether that dependency succeeded or failed can no longer be established. A '
+                    'completed, aborted, expired or deleted operation is swept an hour after it finished '
+                    'while an errored one is never swept, so the state it ended in is not recorded '
+                    'anywhere left to read.',
+                    named, _observed_dependency_view(submitted, named, state))
+
+            if state == AGENT_DEPENDENCY_UNREADABLE:
+                # Nothing was learned about the dependency, which is a
+                # different thing from learning that it is gone, and it is a
+                # cluster problem rather than a chain problem.
+                return AgentOperationFailed(
+                    f'Agent operation {awaited} was aborted because the dispatcher could not read the '
+                    f'state of its dependency {named} at all, which is a problem with the cluster rather '
+                    f'than with the chain that was submitted. Nothing was learned about {named}, so it may '
+                    'well have succeeded. Look at the sidechannel daemon on the node holding the instance, '
+                    'and at that node\'s database connectivity, before resubmitting the chain.',
+                    named, _observed_dependency_view(submitted, named, state))
+
+            if named not in submitted:
+                # Deliberately not fetched. A chain may cross namespaces, so
+                # reading an operation the caller did not hand us turns a
+                # reporting helper into a question about authorisation --
+                # and an answer the caller may not be entitled to.
+                return AgentOperationFailed(
+                    f'Agent operation {awaited} was aborted because its dependency {named} ended in state '
+                    f'"{state}", but that operation was not submitted with this chain, so the cause cannot '
+                    'be resolved any further here. This client does not read an operation it was not '
+                    'given: a chain may cross namespaces, and resolving a uuid from somewhere else would '
+                    'ask a question about authorisation rather than about the chain.',
+                    named, _observed_dependency_view(submitted, named, state))
+
+            hops += 1
+            current_uuid = named
+            current_view = self._refresh_chain_operation(named, submitted[named], state)
+
+            if current_view.get('state') != 'abort':
+                # The first link whose own failure was not a dependency
+                # failure, which is the operation the operator has to go and
+                # look at.
+                failed_state = current_view.get('state', state)
+                return AgentOperationFailed(
+                    f'Agent operation {awaited} was aborted because a dependency failed. The operation '
+                    f'which actually failed is {current_uuid}, {_agentop_chain_position(hops)}, which '
+                    f'ended in state "{failed_state}".',
+                    current_uuid, current_view)
+
+        return AgentOperationFailed(
+            f'Agent operation {awaited} was aborted, and the chain of aborts behind it is longer than the '
+            f'{len(operations)} operations submitted, so the walk was stopped rather than followed any '
+            f'further. The last operation it reached was {current_uuid}.',
+            current_uuid, current_view)
+
+    def _refresh_chain_operation(self, op_uuid, submitted_view, observed_state):
+        """Fetch the current view of one operation in a submitted chain.
+
+        Only ever called with a uuid which is in the list handed to
+        ``await_agent_chain()``, which is the whole of this walk's reading
+        policy. The fetch is needed because a chain's views are as the
+        creating POSTs returned them -- the state in one is the state the
+        operation started in, not the one it ended in -- and the walk needs
+        the ending state to tell a link which was cascaded in turn from the
+        one which actually failed.
+
+        Best effort, for the reason ``_agent_failure_context`` gives: a read
+        which fails while *decorating* a failure must not replace it, so a
+        failed read falls back to the submitted view carrying the state the
+        dispatcher recorded having observed.
+        """
+        try:
+            return self.get_agent_operation(op_uuid)
+        except Exception:
+            return dict(submitted_view, state=observed_state)
+
     def _add_agentop_timing(self, data, deadline_seconds, progress_timeout_seconds):
         """Add the timing parameters the caller actually asked for to a request body.
 
@@ -1575,6 +1983,146 @@ class Client:
             data['deadline_seconds'] = deadline_seconds
         if progress_timeout_seconds is not None:
             data['progress_timeout_seconds'] = progress_timeout_seconds
+
+    def _add_agentop_dependencies(self, data, depends_on, runs_after):
+        """Add the dependency edges the caller declared to a request body.
+
+        Only a list the caller passed sends a key. Neither None -- a
+        wrapper forwarding a keyword argument it does not use -- nor an
+        empty list -- a caller who built no edges -- is a declaration, so
+        neither consults the capability nor sends anything, because
+        refusing either would be a refusal with no cause. That is the
+        opposite of the timing parameters above, where zero is a real
+        value and so only None may be treated as absent.
+
+        Unlike ``_add_agentop_timing``, a server which cannot accept
+        these is refused rather than silently sent nothing. An omitted
+        deadline means "the server's own default applies", which is what
+        an older server would have given anyway and costs the caller a
+        budget. A dropped ordering edge means "run now", which is the
+        precise outcome the caller declared the edge to prevent -- an
+        upload and the command which reads the file it placed would both
+        be dispatched with no guarantee the upload had finished -- and
+        the caller would be told it had succeeded. Silence there is worse
+        than a refusal.
+        """
+        if not (depends_on or runs_after):
+            return
+
+        # The caller's own edges are checked before the server is consulted,
+        # so a malformed edge is reported as the malformed edge it is rather
+        # than as whatever the cluster on the other end happens to be capable
+        # of. The caller can fix one of those and not the other.
+        edges = {}
+        if depends_on:
+            edges['depends_on'] = _agentop_dependency_edges('depends_on', depends_on)
+        if runs_after:
+            edges['runs_after'] = _agentop_dependency_edges('runs_after', runs_after)
+
+        if not self.check_capability('agentoperation-dependencies'):
+            raise IncapableException(
+                'The API server version you are talking to does not support '
+                'agent operation dependencies, which require the '
+                'agentoperation-dependencies capability.')
+
+        data.update(edges)
+
+    def _verify_agentop_dependencies(self, data, op):
+        """Check that the edges a creating call sent came back on the operation.
+
+        The agentoperation-dependencies capability says the API server
+        understands the parameters. It does not say the tier behind it
+        stores them, and the server records the consequence itself in the
+        comment which defines that token
+        (shakenfist/external_api/app.py): a newer sf-api against an older
+        sf-database accepts the parameters, answers 200, and stores empty
+        edge lists.
+
+        That is the one way this family of calls fails silently -- an
+        operation which will run with no ordering at all, reported to the
+        caller as a success -- and no capability token can report it. The
+        POST response is the created operation's own view, which carries
+        both edge lists, so this costs no extra request.
+
+        Only the op_uuid sets are compared. Not settle_seconds, because a
+        tier which does not understand an edge drops the whole edge rather
+        than part of one, and not order, which the server does not promise
+        to preserve.
+        """
+        for name in ('depends_on', 'runs_after'):
+            sent = data.get(name)
+            if not sent:
+                # A caller who declared nothing on this list has nothing to
+                # verify, so whatever the response carries is not this
+                # client's business.
+                continue
+
+            # Neither side needs normalising here. The edges were
+            # canonicalised when they were built, and the server's op_uuid is
+            # a pydantic UUID4 which its view renders in that same canonical
+            # lower case form -- so the two sides are already the same
+            # strings. Normalising again would be a second place for the two
+            # forms to disagree, and could only hide the mismatch this check
+            # exists to find.
+            sent_uuids = {edge['op_uuid'] for edge in sent}
+            stored_uuids = {_stored_edge_uuid(edge) for edge in op.get(name) or []}
+            if sent_uuids == stored_uuids:
+                continue
+
+            # Counts, and the edges which did not come back rather than
+            # both sets in full: an operation may name as many edges as the
+            # cluster allows, and a sentence carrying a hundred and
+            # twenty eight UUIDs is one nobody reads to the end of.
+            detail = f'{len(sent_uuids)} sent, {len(stored_uuids)} came back'
+            missing = sorted(sent_uuids - stored_uuids)
+            if missing:
+                detail += ', missing ' + ', '.join(missing[:3])
+                if len(missing) > 3:
+                    detail += f' and {len(missing) - 3} more'
+
+            # Hoisted out of the message below, which is where it used to
+            # sit: a DELETE against the cluster is not something a reader
+            # scanning a raise expression for side effects should have to
+            # find inside an f-string.
+            cleanup = self._cancel_unordered_agentop(op)
+
+            raise IncapableException(
+                f'The API server accepted the {name} edges for agent operation '
+                f'{op["uuid"]} and answered success, but the database tier did not store '
+                f'them: {detail}. This is a cluster part way through an upgrade -- sf-api '
+                'advertises the agentoperation-dependencies capability, but the '
+                'sf-database behind it predates the dependency fields and drops them. '
+                'Upgrade sf-database to a version which stores dependency edges. The '
+                f'call which was made is correct. {cleanup}')
+
+    def _cancel_unordered_agentop(self, op):
+        """Try to delete an operation whose ordering the cluster did not store.
+
+        Refusing to await an operation does not stop it: by the time the
+        response which revealed the dropped edges is in hand the operation
+        exists, is queued, and will run with no ordering at all -- which is
+        the harm the check exists to prevent, not something refusing can
+        undo. Deleting it does prevent it: the instance's queue treats a
+        head whose records have gone as invalid, pops it and moves on
+        without dispatching it.
+
+        Best effort, and reported either way as a sentence to append to the
+        refusal, because the caller has to know whether an operation is
+        still coming. The delete needs its own capability and can fail for
+        reasons which have nothing to do with the refusal being raised, and
+        a failure to clean up must not replace the explanation of what went
+        wrong.
+        """
+        try:
+            self.delete_agent_operation(op['uuid'])
+        except Exception as e:
+            return (f'The operation was created before this was detected and could not be '
+                    f'deleted ({e}), so it is still queued and will run without the ordering '
+                    f'which was asked for. Delete agent operation {op["uuid"]} to stop it.')
+
+        return ('The operation was created before this was detected, and has been deleted so '
+                'that it cannot run without the ordering which was asked for. An operation '
+                'which had already started is not stopped by that, so check whether it ran.')
 
     @staticmethod
     def _remaining_agentop_budget(start_time, timeout):
@@ -1630,7 +2178,7 @@ class Client:
 
     def instance_put_blob(self, instance_ref, blob_uuid, path, mode,
                           deadline_seconds=None, progress_timeout_seconds=None,
-                          await_seconds=None):
+                          await_seconds=None, depends_on=None, runs_after=None):
         if not self.check_capability('instance-put-blob'):
             raise IncapableException(
                 'The API server version you are talking to does not support '
@@ -1638,13 +2186,16 @@ class Client:
 
         data = {'blob_uuid': blob_uuid, 'path': path, 'mode': mode}
         self._add_agentop_timing(data, deadline_seconds, progress_timeout_seconds)
+        self._add_agentop_dependencies(data, depends_on, runs_after)
 
         r = self._request_url('POST', '/instances/' + instance_ref + '/agent/put',
                               data=data)
-        return self._await_agentop(r.json(), await_seconds=await_seconds)
+        op = r.json()
+        self._verify_agentop_dependencies(data, op)
+        return self._await_agentop(op, await_seconds=await_seconds)
 
     def instance_execute(self, instance_ref, command_line, deadline_seconds=None,
-                         await_seconds=None):
+                         await_seconds=None, depends_on=None, runs_after=None):
         if not self.check_capability('instance-execute'):
             raise IncapableException(
                 'The API server version you are talking to does not support '
@@ -1653,16 +2204,21 @@ class Client:
         data = {'command_line': command_line}
         # The server refuses a progress timeout on execute (decision 4;
         # shakenfist/external_api/instance.py), so execute never gains a
-        # progress_timeout_seconds kwarg and always passes None here.
+        # progress_timeout_seconds kwarg and always passes None here. The
+        # dependency parameters have no such asymmetry: all three endpoints
+        # accept both edge lists.
         self._add_agentop_timing(data, deadline_seconds, None)
+        self._add_agentop_dependencies(data, depends_on, runs_after)
 
         r = self._request_url('POST', '/instances/' + instance_ref + '/agent/execute',
                               data=data)
-        return self._await_agentop(r.json(), await_seconds=await_seconds)
+        op = r.json()
+        self._verify_agentop_dependencies(data, op)
+        return self._await_agentop(op, await_seconds=await_seconds)
 
     def instance_get(self, instance_ref, path,
                      deadline_seconds=None, progress_timeout_seconds=None,
-                     await_seconds=None):
+                     await_seconds=None, depends_on=None, runs_after=None):
         if not self.check_capability('instance-get'):
             raise IncapableException(
                 'The API server version you are talking to does not support '
@@ -1670,10 +2226,13 @@ class Client:
 
         data = {'path': path}
         self._add_agentop_timing(data, deadline_seconds, progress_timeout_seconds)
+        self._add_agentop_dependencies(data, depends_on, runs_after)
 
         r = self._request_url('POST', '/instances/' + instance_ref + '/agent/get',
                               data=data)
-        return self._await_agentop(r.json(), await_seconds=await_seconds)
+        op = r.json()
+        self._verify_agentop_dependencies(data, op)
+        return self._await_agentop(op, await_seconds=await_seconds)
 
     def get_namespaces(self):
         r = self._request_url('GET', '/auth/namespaces')

@@ -1,6 +1,7 @@
 import copy
 import json
 import time
+import uuid
 from unittest import mock
 
 import requests
@@ -2016,7 +2017,7 @@ class AgentOperationAwaitTestCase(testtools.TestCase):
     caller waited out the whole timeout only to be told it timed out.
     """
 
-    TERMINAL_FAILURE_STATES = ('error', 'expired', 'deleted')
+    TERMINAL_FAILURE_STATES = ('error', 'expired', 'abort', 'deleted')
 
     def setUp(self):
         super().setUp()
@@ -2044,6 +2045,9 @@ class AgentOperationAwaitTestCase(testtools.TestCase):
 
         self.assertEqual(op, result)
         get_op.assert_not_called()
+
+    def test_abort_is_a_terminal_state(self):
+        self.assertIn('abort', apiclient.TERMINAL_AGENT_OPERATION_STATES)
 
     def test_await_agentop_terminal_failure_raises_on_first_poll(self):
         for state in self.TERMINAL_FAILURE_STATES:
@@ -2749,3 +2753,1032 @@ class APIExceptionTestCase(testtools.TestCase):
         exc = apiclient.APIException('m', 'GET', 'u', 507, 't', headers=None)
 
         self.assertEqual({}, exc.headers)
+
+
+class AgentDependencyTestCase(testtools.TestCase):
+    OP_UUID = '4b7f2f96-1b93-4f4c-9b0e-0f19d1a6f2a1'
+
+    def test_operation_view_becomes_an_edge(self):
+        op = {'uuid': self.OP_UUID, 'state': 'complete'}
+
+        self.assertEqual({'op_uuid': self.OP_UUID},
+                         apiclient.agent_dependency(op))
+
+    def test_uuid_string_becomes_an_edge(self):
+        self.assertEqual({'op_uuid': self.OP_UUID},
+                         apiclient.agent_dependency(self.OP_UUID))
+
+    def test_op_type_is_never_emitted(self):
+        # The server stores op_type as a constant it does not publish, and
+        # the parameter it validates against refuses a key it does not
+        # publish, so emitting one here would have the edge rejected.
+        edge = apiclient.agent_dependency(self.OP_UUID)
+
+        self.assertEqual(['op_uuid'], sorted(edge.keys()))
+
+    def test_settle_seconds_is_included_when_passed(self):
+        edge = apiclient.agent_dependency(self.OP_UUID, settle_seconds=30)
+
+        self.assertEqual({'op_uuid': self.OP_UUID, 'settle_seconds': 30}, edge)
+
+    def test_settle_seconds_is_absent_when_not_passed(self):
+        # An absent key, not an explicit null: it is the server's business
+        # what "no settle" means.
+        self.assertNotIn('settle_seconds',
+                         apiclient.agent_dependency(self.OP_UUID))
+
+    def test_a_zero_settle_is_still_emitted(self):
+        edge = apiclient.agent_dependency(self.OP_UUID, settle_seconds=0)
+
+        self.assertEqual(0, edge['settle_seconds'])
+
+    def test_an_operation_without_a_uuid_is_refused(self):
+        # Rather than building an edge which names the string 'None' and
+        # leaving the cluster to refuse it a request later.
+        e = self.assertRaises(
+            ValueError, apiclient.agent_dependency, {'state': 'complete'})
+
+        self.assertIn('has no uuid', str(e))
+
+    def test_something_which_is_not_a_uuid_is_refused(self):
+        e = self.assertRaises(
+            ValueError, apiclient.agent_dependency, 'the-first-one')
+
+        self.assertIn('is not a valid UUID', str(e))
+
+    def test_an_upper_case_uuid_is_canonicalised(self):
+        # The server parses the UUID and hands it back in lower case, and a
+        # creating call checks the edges it sent against the ones which came
+        # back, so the two have to be the same string.
+        edge = apiclient.agent_dependency(self.OP_UUID.upper())
+
+        self.assertEqual({'op_uuid': self.OP_UUID}, edge)
+
+
+class AgentDependencyEdgesTestCase(testtools.TestCase):
+    OP_UUID = '4b7f2f96-1b93-4f4c-9b0e-0f19d1a6f2a1'
+    OTHER_UUID = 'c0a8cbd6-3b02-4a0e-9e5a-8df0b0f8a991'
+
+    def test_uuid_string_members_are_normalised(self):
+        self.assertEqual(
+            [{'op_uuid': self.OP_UUID}, {'op_uuid': self.OTHER_UUID}],
+            apiclient._agentop_dependency_edges(
+                'depends_on', [self.OP_UUID, self.OTHER_UUID]))
+
+    def test_mapping_members_are_passed_through(self):
+        edges = [{'op_uuid': self.OP_UUID, 'settle_seconds': 5}]
+
+        self.assertEqual(edges,
+                         apiclient._agentop_dependency_edges('depends_on', edges))
+
+    def test_mapping_members_are_copied_not_mutated(self):
+        edge = {'op_uuid': self.OP_UUID}
+        result = apiclient._agentop_dependency_edges('runs_after', [edge])
+
+        self.assertIsNot(edge, result[0])
+
+    def test_an_empty_list_normalises_to_an_empty_list(self):
+        self.assertEqual([], apiclient._agentop_dependency_edges('depends_on', []))
+
+    def test_member_of_the_wrong_type_is_refused(self):
+        e = self.assertRaises(
+            ValueError, apiclient._agentop_dependency_edges,
+            'depends_on', [self.OP_UUID, 42])
+
+        self.assertIn('depends_on[1]', str(e))
+        self.assertIn('must be an agent operation UUID or a dependency edge', str(e))
+        self.assertIn('int', str(e))
+
+    def test_unknown_key_is_refused(self):
+        e = self.assertRaises(
+            ValueError, apiclient._agentop_dependency_edges,
+            'runs_after', [{'op_uuid': self.OP_UUID, 'op_type': 'agentoperation'}])
+
+        self.assertIn('runs_after[0]', str(e))
+        self.assertIn('not part of a dependency edge', str(e))
+        self.assertIn('op_type', str(e))
+
+    def test_missing_op_uuid_is_refused(self):
+        e = self.assertRaises(
+            ValueError, apiclient._agentop_dependency_edges,
+            'depends_on', [{'settle_seconds': 10}])
+
+        self.assertIn('depends_on[0]', str(e))
+        self.assertIn('does not name an agent operation', str(e))
+
+    def test_null_op_uuid_is_refused_as_missing(self):
+        e = self.assertRaises(
+            ValueError, apiclient._agentop_dependency_edges,
+            'depends_on', [{'op_uuid': None}])
+
+        self.assertIn('depends_on[0]', str(e))
+        self.assertIn('does not name an agent operation', str(e))
+
+    def test_non_uuid_string_member_is_refused(self):
+        e = self.assertRaises(
+            ValueError, apiclient._agentop_dependency_edges,
+            'runs_after', [self.OP_UUID, 'not-a-uuid'])
+
+        self.assertIn('runs_after[1]', str(e))
+        self.assertIn('is not a valid UUID', str(e))
+
+    def test_non_uuid_op_uuid_in_a_mapping_is_refused(self):
+        e = self.assertRaises(
+            ValueError, apiclient._agentop_dependency_edges,
+            'depends_on', [{'op_uuid': 'not-a-uuid'}])
+
+        self.assertIn('depends_on[0]', str(e))
+        self.assertIn('is not a valid UUID', str(e))
+
+    def test_an_empty_op_uuid_is_refused(self):
+        e = self.assertRaises(
+            ValueError, apiclient._agentop_dependency_edges,
+            'depends_on', [{'op_uuid': ''}])
+
+        self.assertIn('depends_on[0]', str(e))
+        self.assertIn('is not a valid UUID', str(e))
+
+    def test_a_bare_uuid_instead_of_a_list_is_refused(self):
+        # depends_on=op['uuid'] is the obvious mistake, and it is iterable,
+        # so without a guard it is walked character by character and the
+        # complaint is about the character '4'.
+        e = self.assertRaises(
+            ValueError, apiclient._agentop_dependency_edges,
+            'depends_on', self.OP_UUID)
+
+        self.assertIn('must be a list of dependency edges', str(e))
+        self.assertIn('not a single str', str(e))
+
+    def test_a_single_edge_instead_of_a_list_is_refused(self):
+        e = self.assertRaises(
+            ValueError, apiclient._agentop_dependency_edges,
+            'runs_after', {'op_uuid': self.OP_UUID})
+
+        self.assertIn('must be a list of dependency edges', str(e))
+        self.assertIn('not a single dict', str(e))
+
+    def test_a_boolean_settle_is_refused(self):
+        # isinstance(True, int) is true in Python, so a bool would
+        # otherwise arrive at the cluster as one second.
+        e = self.assertRaises(
+            ValueError, apiclient._agentop_dependency_edges,
+            'depends_on', [{'op_uuid': self.OP_UUID, 'settle_seconds': True}])
+
+        self.assertIn('not a boolean', str(e))
+
+    def test_a_non_numeric_settle_is_refused(self):
+        e = self.assertRaises(
+            ValueError, apiclient._agentop_dependency_edges,
+            'depends_on', [{'op_uuid': self.OP_UUID, 'settle_seconds': 'soon'}])
+
+        self.assertIn('must be a number of seconds', str(e))
+
+    def test_a_negative_settle_is_refused(self):
+        # A settle pointing backwards would make the edge satisfied before
+        # the thing it waits for finished. Whether a settle is a number and
+        # which way it points are properties of the value; how large it may
+        # be is the deployment's business and is still not checked here.
+        e = self.assertRaises(
+            ValueError, apiclient._agentop_dependency_edges,
+            'depends_on', [{'op_uuid': self.OP_UUID, 'settle_seconds': -1}])
+
+        self.assertIn('may not be negative', str(e))
+
+    def test_an_upper_case_member_is_canonicalised(self):
+        edges = apiclient._agentop_dependency_edges(
+            'depends_on', [self.OP_UUID.upper()])
+
+        self.assertEqual([{'op_uuid': self.OP_UUID}], edges)
+
+    # The next two assert acceptances rather than refusals, which is the
+    # point of them. How many edges an operation may have and how long a
+    # settle may be are both deployment policy the server reads from its
+    # configuration, and the settle ceiling has already moved by two orders
+    # of magnitude in a single release. A client which refused either value
+    # would be wrong about a cluster configured differently, so these tests
+    # pin the absence of those bounds here.
+    def test_a_large_settle_seconds_is_accepted(self):
+        edges = apiclient._agentop_dependency_edges(
+            'depends_on', [{'op_uuid': self.OP_UUID, 'settle_seconds': 86400}])
+
+        self.assertEqual(86400, edges[0]['settle_seconds'])
+
+    def test_a_long_list_of_edges_is_accepted(self):
+        edges = apiclient._agentop_dependency_edges(
+            'depends_on', [apiclient.agent_dependency(str(uuid.uuid4()))
+                           for _ in range(100)])
+
+        self.assertEqual(100, len(edges))
+
+
+def _echoing_agentop_response(method, url, data=None, **kwargs):
+    """Answer a creating POST the way a healthy cluster does.
+
+    The response to one of the three agent operation creating calls is the
+    created operation's own view, and a cluster whose database tier
+    understands dependency edges hands back the ones it stored. So an
+    operation created with edges must come back carrying them, or the
+    client refuses it -- which means a test about anything else has to
+    answer like a working cluster rather than with a bare operation view.
+    """
+    op = {'uuid': 'op1', 'state': 'complete'}
+    for name in ('depends_on', 'runs_after'):
+        if name in (data or {}):
+            op[name] = data[name]
+
+    r = mock.MagicMock()
+    r.json.return_value = op
+    return r
+
+
+class AgentOperationDependencyParameterTestCase(testtools.TestCase):
+    """The three agent operation creating helpers send dependency edges.
+
+    They send them only when the caller declared some, and refuse to run at
+    all when the caller declared some and the server has not advertised the
+    'agentoperation-dependencies' capability. The refusal is the point: a
+    dropped ordering edge would be reported to the caller as a success.
+    """
+
+    OP_UUID = '4b7f2f96-1b93-4f4c-9b0e-0f19d1a6f2a1'
+    OTHER_UUID = 'c0a8cbd6-3b02-4a0e-9e5a-8df0b0f8a991'
+
+    PUT_BODY = {'blob_uuid': 'blob1', 'path': '/path', 'mode': 0o644}
+    EXECUTE_BODY = {'command_line': 'true'}
+    GET_BODY = {'path': '/path'}
+
+    def setUp(self):
+        super().setUp()
+
+        self.request_url = mock.patch(
+            'shakenfist_client.apiclient.Client._request_url')
+        self.mock_request = self.request_url.start()
+        self.addCleanup(self.request_url.stop)
+        self.mock_request.side_effect = _echoing_agentop_response
+
+        self.capabilities = mock.patch(
+            'shakenfist_client.apiclient.Client._collect_capabilities')
+        self.capabilities.start()
+        self.addCleanup(self.capabilities.stop)
+
+    def _client(self, capable):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        # check_capability() is a substring match against the server's root
+        # HTML page, so this is what a real server response looks like to
+        # the client.
+        client.root_html = 'instance-put-blob instance-execute instance-get'
+        if capable:
+            client.root_html += ' agentoperation-dependencies'
+        return client
+
+    def _sent_data(self):
+        return self.mock_request.call_args.kwargs['data']
+
+    # The three calls under test, each with the request body it builds
+    # before any dependency key is added.
+
+    def _put(self, client, **kwargs):
+        return client.instance_put_blob('inst1', 'blob1', '/path', 0o644, **kwargs)
+
+    def _execute(self, client, **kwargs):
+        return client.instance_execute('inst1', 'true', **kwargs)
+
+    def _get(self, client, **kwargs):
+        return client.instance_get('inst1', '/path', **kwargs)
+
+    # -- the edges are sent ----------------------------------------------
+
+    def _assert_sends_edges(self, call, body):
+        client = self._client(True)
+        call(client,
+             depends_on=[self.OP_UUID],
+             runs_after=[apiclient.agent_dependency(self.OTHER_UUID,
+                                                    settle_seconds=5)])
+
+        # A bare UUID string was normalised into an edge, so the list really
+        # went through _agentop_dependency_edges() rather than being passed
+        # to the server as the caller typed it.
+        self.assertEqual(
+            dict(body,
+                 depends_on=[{'op_uuid': self.OP_UUID}],
+                 runs_after=[{'op_uuid': self.OTHER_UUID, 'settle_seconds': 5}]),
+            self._sent_data())
+
+    def test_put_blob_sends_edges(self):
+        self._assert_sends_edges(self._put, self.PUT_BODY)
+
+    def test_execute_sends_edges(self):
+        self._assert_sends_edges(self._execute, self.EXECUTE_BODY)
+
+    def test_get_sends_edges(self):
+        self._assert_sends_edges(self._get, self.GET_BODY)
+
+    def _assert_sends_one_list_alone(self, call, body):
+        # The list the caller did not pass must not appear at all. An empty
+        # list is not the same request as an absent key.
+        client = self._client(True)
+        call(client, depends_on=[self.OP_UUID])
+
+        self.assertEqual(
+            dict(body, depends_on=[{'op_uuid': self.OP_UUID}]), self._sent_data())
+
+    def test_put_blob_sends_depends_on_alone(self):
+        self._assert_sends_one_list_alone(self._put, self.PUT_BODY)
+
+    def test_execute_sends_depends_on_alone(self):
+        self._assert_sends_one_list_alone(self._execute, self.EXECUTE_BODY)
+
+    def test_get_sends_depends_on_alone(self):
+        self._assert_sends_one_list_alone(self._get, self.GET_BODY)
+
+    # -- an incapable server is refused -----------------------------------
+
+    def _assert_refuses_an_incapable_server(self, call):
+        client = self._client(False)
+
+        for kwargs in ({'depends_on': [self.OP_UUID]},
+                       {'runs_after': [self.OP_UUID]}):
+            e = self.assertRaises(apiclient.IncapableException,
+                                  call, client, **kwargs)
+
+            self.assertIn('agentoperation-dependencies', str(e))
+            # Refused before the request went out, not after an operation
+            # was created which would have run unordered.
+            self.mock_request.assert_not_called()
+
+    def test_put_blob_refuses_an_incapable_server(self):
+        self._assert_refuses_an_incapable_server(self._put)
+
+    def test_execute_refuses_an_incapable_server(self):
+        self._assert_refuses_an_incapable_server(self._execute)
+
+    def test_get_refuses_an_incapable_server(self):
+        self._assert_refuses_an_incapable_server(self._get)
+
+    # -- a caller who declared nothing is unaffected ----------------------
+
+    # Each of these drives an *incapable* client deliberately: if the
+    # capability were consulted the call would raise, so these also prove
+    # the check is never reached.
+
+    def _assert_no_arguments_send_no_keys(self, call, body):
+        client = self._client(False)
+        call(client)
+
+        self.assertEqual(body, self._sent_data())
+
+    def test_put_blob_without_edges_sends_no_keys(self):
+        self._assert_no_arguments_send_no_keys(self._put, self.PUT_BODY)
+
+    def test_execute_without_edges_sends_no_keys(self):
+        self._assert_no_arguments_send_no_keys(self._execute, self.EXECUTE_BODY)
+
+    def test_get_without_edges_sends_no_keys(self):
+        self._assert_no_arguments_send_no_keys(self._get, self.GET_BODY)
+
+    def _assert_explicit_none_sends_no_keys(self, call, body):
+        # A wrapper forwarding **kwargs passes None for an edge list it does
+        # not use, and that must behave exactly as not passing it at all.
+        client = self._client(False)
+        call(client, depends_on=None, runs_after=None)
+
+        self.assertEqual(body, self._sent_data())
+
+    def test_put_blob_explicit_none_sends_no_keys(self):
+        self._assert_explicit_none_sends_no_keys(self._put, self.PUT_BODY)
+
+    def test_execute_explicit_none_sends_no_keys(self):
+        self._assert_explicit_none_sends_no_keys(self._execute, self.EXECUTE_BODY)
+
+    def test_get_explicit_none_sends_no_keys(self):
+        self._assert_explicit_none_sends_no_keys(self._get, self.GET_BODY)
+
+    def _assert_empty_lists_send_no_keys(self, call, body):
+        # An empty list is a caller who declared no edges, which is not a
+        # caller who needs ordering. Refusing it would be a refusal with no
+        # cause, and sending an empty list would say "I checked, there is
+        # nothing to wait for" to a server which cannot read the key.
+        client = self._client(False)
+        call(client, depends_on=[], runs_after=[])
+
+        self.assertEqual(body, self._sent_data())
+
+    def test_put_blob_empty_lists_send_no_keys(self):
+        self._assert_empty_lists_send_no_keys(self._put, self.PUT_BODY)
+
+    def test_execute_empty_lists_send_no_keys(self):
+        self._assert_empty_lists_send_no_keys(self._execute, self.EXECUTE_BODY)
+
+    def test_get_empty_lists_send_no_keys(self):
+        self._assert_empty_lists_send_no_keys(self._get, self.GET_BODY)
+
+    # -- a malformed edge is refused before the request -------------------
+
+    def _assert_a_malformed_edge_is_refused(self, call):
+        client = self._client(True)
+
+        e = self.assertRaises(ValueError, call, client,
+                              depends_on=[{'op_uuid': 'not-a-uuid'}])
+
+        self.assertIn('depends_on[0]', str(e))
+        self.mock_request.assert_not_called()
+
+    def test_put_blob_refuses_a_malformed_edge(self):
+        self._assert_a_malformed_edge_is_refused(self._put)
+
+    def test_execute_refuses_a_malformed_edge(self):
+        self._assert_a_malformed_edge_is_refused(self._execute)
+
+    def test_get_refuses_a_malformed_edge(self):
+        self._assert_a_malformed_edge_is_refused(self._get)
+
+
+class AgentOperationStoredEdgeTestCase(testtools.TestCase):
+    """A creating call checks that the edges it sent came back stored.
+
+    The agentoperation-dependencies capability is advertised by sf-api,
+    which is not the service that writes an edge. During a staged upgrade
+    a new sf-api in front of an older sf-database accepts the parameters,
+    answers 200, and stores empty edge lists -- so an operation which the
+    caller ordered runs unordered and is reported as a success. The
+    created operation's view is the POST response, so the client catches
+    that without another request.
+    """
+
+    OP_UUID = '4b7f2f96-1b93-4f4c-9b0e-0f19d1a6f2a1'
+    OTHER_UUID = 'c0a8cbd6-3b02-4a0e-9e5a-8df0b0f8a991'
+
+    def setUp(self):
+        super().setUp()
+
+        self.request_url = mock.patch(
+            'shakenfist_client.apiclient.Client._request_url')
+        self.mock_request = self.request_url.start()
+        self.addCleanup(self.request_url.stop)
+
+        self.capabilities = mock.patch(
+            'shakenfist_client.apiclient.Client._collect_capabilities')
+        self.capabilities.start()
+        self.addCleanup(self.capabilities.stop)
+
+        self.client = apiclient.Client(suppress_configuration_lookup=True,
+                                       base_url='http://localhost:13000')
+        # check_capability() is a substring match against the server's root
+        # HTML page, and this cluster advertises dependencies -- which is
+        # exactly the case where the database tier may still not store them.
+        self.client.root_html = ('instance-put-blob instance-execute instance-get '
+                                 'agentoperation-dependencies')
+
+    def _answers(self, view):
+        """Make the creating POST answer with this operation view."""
+        self.mock_request.return_value.json.return_value = dict(
+            view, uuid='op1', state='complete')
+
+    # The three calls under test.
+
+    def _put(self, **kwargs):
+        return self.client.instance_put_blob('inst1', 'blob1', '/path', 0o644, **kwargs)
+
+    def _execute(self, **kwargs):
+        return self.client.instance_execute('inst1', 'true', **kwargs)
+
+    def _get(self, **kwargs):
+        return self.client.instance_get('inst1', '/path', **kwargs)
+
+    # -- a cluster which stored the edges is accepted ----------------------
+
+    def _assert_echoed_edges_pass(self, call):
+        self._answers({'depends_on': [{'op_uuid': self.OP_UUID}],
+                       'runs_after': [{'op_uuid': self.OTHER_UUID}]})
+
+        op = call(depends_on=[self.OP_UUID], runs_after=[self.OTHER_UUID])
+
+        self.assertEqual('op1', op['uuid'])
+
+    def test_put_blob_accepts_echoed_edges(self):
+        self._assert_echoed_edges_pass(self._put)
+
+    def test_execute_accepts_echoed_edges(self):
+        self._assert_echoed_edges_pass(self._execute)
+
+    def test_get_accepts_echoed_edges(self):
+        self._assert_echoed_edges_pass(self._get)
+
+    # -- the three shapes an older database tier produces ------------------
+
+    def _assert_refused(self, call, view):
+        self._answers(view)
+
+        e = self.assertRaises(apiclient.IncapableException, call,
+                              depends_on=[self.OP_UUID])
+
+        # The operator reading this needs to know which component to
+        # upgrade, and that the call they made was not the mistake.
+        self.assertIn('sf-database', str(e))
+        self.assertIn('Upgrade sf-database', str(e))
+        self.assertIn('depends_on', str(e))
+        self.assertIn(self.OP_UUID, str(e))
+        return e
+
+    def _assert_empty_list_refused(self, call):
+        # What an older sf-database actually produces: the fields reach it,
+        # are unknown to it, and are dropped, so the view carries the key
+        # with nothing in it.
+        self._assert_refused(call, {'depends_on': [], 'runs_after': []})
+
+    def test_put_blob_refuses_empty_edge_lists(self):
+        self._assert_empty_list_refused(self._put)
+
+    def test_execute_refuses_empty_edge_lists(self):
+        self._assert_empty_list_refused(self._execute)
+
+    def test_get_refuses_empty_edge_lists(self):
+        self._assert_empty_list_refused(self._get)
+
+    def _assert_subset_refused(self, call):
+        self._answers({'depends_on': [{'op_uuid': self.OP_UUID}]})
+
+        e = self.assertRaises(apiclient.IncapableException, call,
+                              depends_on=[self.OP_UUID, self.OTHER_UUID])
+
+        # Partly stored is not stored: the edge which went missing is the
+        # one whose ordering will not be honoured.
+        self.assertIn('sf-database', str(e))
+        self.assertIn(self.OTHER_UUID, str(e))
+
+    def test_put_blob_refuses_a_subset_of_the_edges(self):
+        self._assert_subset_refused(self._put)
+
+    def test_execute_refuses_a_subset_of_the_edges(self):
+        self._assert_subset_refused(self._execute)
+
+    def test_get_refuses_a_subset_of_the_edges(self):
+        self._assert_subset_refused(self._get)
+
+    def _assert_missing_key_refused(self, call):
+        # An older service's view may not carry the field at all, which is
+        # not distinguishable from an edge list it threw away.
+        self._assert_refused(call, {})
+
+    def test_put_blob_refuses_a_view_without_the_key(self):
+        self._assert_missing_key_refused(self._put)
+
+    def test_execute_refuses_a_view_without_the_key(self):
+        self._assert_missing_key_refused(self._execute)
+
+    def test_get_refuses_a_view_without_the_key(self):
+        self._assert_missing_key_refused(self._get)
+
+    # -- what is deliberately not compared --------------------------------
+
+    def test_a_dropped_settle_seconds_is_not_a_mismatch(self):
+        # Only the op_uuid sets are compared. A tier which does not
+        # understand an edge drops the whole edge, so a settle which did
+        # not come back says nothing about storage, and refusing on it
+        # would refuse a healthy cluster.
+        self._answers({'depends_on': [{'op_uuid': self.OP_UUID}]})
+
+        op = self._execute(depends_on=[apiclient.agent_dependency(self.OP_UUID,
+                                                                  settle_seconds=5)])
+
+        self.assertEqual('op1', op['uuid'])
+
+    def test_reordered_edges_are_not_a_mismatch(self):
+        # The server does not promise to return the edges in the order they
+        # were sent, so the comparison is between sets.
+        self._answers({'depends_on': [{'op_uuid': self.OTHER_UUID},
+                                      {'op_uuid': self.OP_UUID}]})
+
+        op = self._execute(depends_on=[self.OP_UUID, self.OTHER_UUID])
+
+        self.assertEqual('op1', op['uuid'])
+
+    def test_an_upper_case_uuid_is_not_a_mismatch(self):
+        # The edge was canonicalised when it was built and the server's view
+        # is canonical too, which is why the comparison needs no
+        # normalisation of its own.
+        self._answers({'depends_on': [{'op_uuid': self.OP_UUID}]})
+
+        op = self._execute(depends_on=[self.OP_UUID.upper()])
+
+        self.assertEqual('op1', op['uuid'])
+
+    # -- a caller who sent no edges reaches no comparison ------------------
+
+    def _assert_no_edges_ignores_the_response(self, call):
+        # Whatever the view carries on an operation the caller did not order
+        # is not this client's business: an unrelated edge in the response,
+        # or none at all, must not raise.
+        self._answers({'depends_on': [{'op_uuid': self.OTHER_UUID}]})
+
+        op = call()
+
+        self.assertEqual('op1', op['uuid'])
+
+    def test_put_blob_without_edges_ignores_the_response(self):
+        self._assert_no_edges_ignores_the_response(self._put)
+
+    def test_execute_without_edges_ignores_the_response(self):
+        self._assert_no_edges_ignores_the_response(self._execute)
+
+    def test_get_without_edges_ignores_the_response(self):
+        self._assert_no_edges_ignores_the_response(self._get)
+
+    def test_edges_echoed_as_bare_uuids_are_not_a_mismatch(self):
+        # The server sends each edge as a mapping, because it stores the
+        # schema model dumped to JSON. Reading a surprising shape must not
+        # raise from inside the check whose job is to report a surprising
+        # answer.
+        self.mock_request.return_value.json.return_value = {
+            'uuid': 'op1', 'state': 'complete', 'depends_on': [self.OP_UUID]}
+
+        op = self._execute(depends_on=[self.OP_UUID])
+
+        self.assertEqual('op1', op['uuid'])
+
+    # -- whose mistake gets reported first ---------------------------------
+
+    def test_a_malformed_edge_is_reported_before_the_capability(self):
+        # Against a server which cannot take edges at all, a caller who
+        # also built a broken one hears about the broken one. The caller
+        # can fix that; what the cluster on the other end is capable of is
+        # not theirs to fix, and is the less useful half of the answer.
+        self.client.root_html = 'instance-execute'
+
+        self.assertRaises(ValueError, self._execute,
+                          depends_on=[{'op_uuid': self.OP_UUID, 'nonsense': 1}])
+
+    # -- the refusal has to stop the operation, not just the await ---------
+
+    def test_a_dropped_edge_deletes_the_operation_it_created(self):
+        # Refusing to await an operation does not stop it running. By the
+        # time the response reveals the dropped edges the operation is
+        # queued and will run with no ordering at all, which is the harm
+        # this check is for, so the only thing which averts it is deleting
+        # the operation.
+        self._answers({'depends_on': []})
+
+        with mock.patch.object(self.client, 'delete_agent_operation') as delete:
+            e = self.assertRaises(apiclient.IncapableException,
+                                  self._execute, depends_on=[self.OP_UUID])
+
+        delete.assert_called_once_with('op1')
+        self.assertIn('has been deleted', str(e))
+
+    def test_a_failed_cleanup_is_reported_in_the_refusal(self):
+        # A cleanup which fails must not replace the explanation of what
+        # went wrong, and the caller still has to be told an operation is
+        # out there and which one.
+        self._answers({'depends_on': []})
+
+        with mock.patch.object(self.client, 'delete_agent_operation',
+                               side_effect=Exception('no such capability')):
+            e = self.assertRaises(apiclient.IncapableException,
+                                  self._execute, depends_on=[self.OP_UUID])
+
+        self.assertIn('could not be deleted', str(e))
+        self.assertIn('no such capability', str(e))
+        self.assertIn('op1', str(e))
+        # Still the refusal it was, not a report about the cleanup.
+        self.assertIn('sf-database', str(e))
+
+    # -- the idiom the repository publishes for submitting a chain ---------
+
+    def test_await_seconds_zero_submits_without_waiting(self):
+        # AGENTS.md publishes this as how a chain link is submitted, so it
+        # is pinned here: a deadline already reached means the operation
+        # comes back as the POST described it, with no polling at all.
+        #
+        # The response is deliberately a *queued* operation. A complete one
+        # would leave the await loop with nothing to do whatever the
+        # deadline said, so the test would pass even if await_seconds=0
+        # were ignored -- which is what it exists to catch.
+        self.mock_request.return_value.json.return_value = {
+            'uuid': 'op1', 'state': 'queued',
+            'depends_on': [{'op_uuid': self.OP_UUID}]}
+
+        with mock.patch.object(
+                self.client, 'get_agent_operation',
+                return_value={'uuid': 'op1', 'state': 'complete'}) as get_op:
+            op = self._execute(depends_on=[self.OP_UUID], await_seconds=0)
+
+        self.assertEqual('queued', op['state'])
+        get_op.assert_not_called()
+
+
+class AgentOperationChainAwaitTestCase(testtools.TestCase):
+    """A chain which fails must name the operation that actually failed.
+
+    A dependent is aborted by the cascade when the operation it declared a
+    dependency on did not succeed, and that dependent may itself be the
+    dependency of the next link -- so the operation a caller awaited is the
+    last link rather than the cause. await_agent_chain() walks back to the
+    cause, and says which of several reasons it cannot when the walk cannot
+    get there. Every branch is tested here against fabricated views,
+    because two of them -- a swept dependency and an unreadable one -- need
+    an hour of sweep latency or a database fault to produce on a cluster.
+    """
+
+    # Operation uuids, in submission order, plus one which was never part
+    # of the chain the caller handed in.
+    OP_A = 'a0b5a1d6-0c50-4a1f-9f42-1f6e2ad1c001'
+    OP_B = 'b1c6b2e7-1d61-4b20-8a53-2a7f3be2d002'
+    OP_C = 'c2d7c3f8-2e72-4c31-9b64-3b806cf3e003'
+    OP_ELSEWHERE = 'd3e8d409-3f83-4d42-8c75-4c917d04f004'
+
+    def setUp(self):
+        super().setUp()
+
+        self.capabilities = mock.patch(
+            'shakenfist_client.apiclient.Client._collect_capabilities')
+        self.capabilities.start()
+        self.addCleanup(self.capabilities.stop)
+
+        self.sleep = mock.patch('time.sleep')
+        self.mock_sleep = self.sleep.start()
+        self.addCleanup(self.sleep.stop)
+
+        self.client = apiclient.Client(suppress_configuration_lookup=True,
+                                       base_url='http://localhost:13000')
+
+    # -- building the views a submitted chain is made of -------------------
+
+    def _submitted(self, op_uuid):
+        """An operation view as a creating POST returns one.
+
+        Deliberately carrying the state the operation *started* in, which
+        is what makes the walk's refresh of a link necessary rather than
+        decorative: nothing in the list a caller submitted knows how any
+        of it ended.
+        """
+        return {'uuid': op_uuid, 'state': 'queued'}
+
+    def _aborted(self, op_uuid, dependency_failure=None):
+        view = {'uuid': op_uuid, 'state': 'abort'}
+        if dependency_failure is not None:
+            view['dependency_failure'] = dependency_failure
+        return view
+
+    def _cascade(self, op_uuid, state):
+        """A dependency_failure as the cascade writes one."""
+        return {'op_type': 'agent', 'op_uuid': op_uuid, 'state': state}
+
+    def _await(self, operations, **kwargs):
+        return self.client.await_agent_chain(operations, **kwargs)
+
+    # -- the chain worked --------------------------------------------------
+
+    def test_chain_success_returns_the_last_operation(self):
+        # Only the last link is awaited: every other one has to finish
+        # before it can run, so awaiting them individually is what
+        # declaring the order was supposed to avoid.
+        clock = _FakeClock()
+        self.mock_sleep.side_effect = lambda seconds: clock.advance(seconds)
+        complete = {'uuid': self.OP_C, 'state': 'complete'}
+        operations = [self._submitted(self.OP_A), self._submitted(self.OP_B),
+                      self._submitted(self.OP_C)]
+
+        with mock.patch('time.time', clock), \
+                mock.patch.object(self.client, 'get_agent_operation',
+                                  return_value=complete) as get_op:
+            result = self._await(operations, timeout=30)
+
+        self.assertEqual(complete, result)
+        # One poll, of the last operation and nothing else.
+        get_op.assert_called_once_with(self.OP_C)
+
+    def test_an_empty_chain_is_refused(self):
+        self.assertRaises(ValueError, self._await, [])
+
+    # -- the chain failed, and the cause can be named ----------------------
+
+    def test_abort_names_the_immediately_preceding_operation(self):
+        operations = [self._submitted(self.OP_A),
+                      self._aborted(self.OP_B, self._cascade(self.OP_A, 'error'))]
+
+        with mock.patch.object(
+                self.client, 'get_agent_operation',
+                return_value={'uuid': self.OP_A, 'state': 'error'}) as get_op:
+            e = self.assertRaises(apiclient.AgentOperationFailed, self._await, operations)
+
+        # The cause, not the last link: a caller reading op_uuid is told
+        # which operation to go and look at.
+        self.assertEqual(self.OP_A, e.op_uuid)
+        self.assertEqual('error', e.op_view['state'])
+        self.assertIn('actually failed', str(e))
+        self.assertIn('1 operation back in the chain', str(e))
+        self.assertIn('"error"', str(e))
+        get_op.assert_called_once_with(self.OP_A)
+
+    def test_abort_names_an_operation_two_hops_back(self):
+        # B was aborted by the cascade in its turn, so B is a link and not
+        # a cause -- the walk has to keep going to reach A.
+        operations = [self._submitted(self.OP_A), self._submitted(self.OP_B),
+                      self._aborted(self.OP_C, self._cascade(self.OP_B, 'abort'))]
+        views = {
+            self.OP_B: self._aborted(self.OP_B, self._cascade(self.OP_A, 'expired')),
+            self.OP_A: {'uuid': self.OP_A, 'state': 'expired'},
+        }
+
+        with mock.patch.object(self.client, 'get_agent_operation',
+                               side_effect=lambda u: views[u]) as get_op:
+            e = self.assertRaises(apiclient.AgentOperationFailed, self._await, operations)
+
+        self.assertEqual(self.OP_A, e.op_uuid)
+        self.assertIn('2 operations back in the chain', str(e))
+        self.assertIn('"expired"', str(e))
+        self.assertEqual([mock.call(self.OP_B), mock.call(self.OP_A)],
+                         get_op.call_args_list)
+
+    def test_an_unreadable_link_falls_back_to_the_recorded_state(self):
+        # The refresh of a link is best effort: a read which fails while
+        # decorating a failure must not replace it, or the caller loses the
+        # failure in favour of the error from reporting it.
+        operations = [self._submitted(self.OP_A),
+                      self._aborted(self.OP_B, self._cascade(self.OP_A, 'error'))]
+        gone = apiclient.ResourceNotFoundException(
+            'not found', 'GET', '/agentoperations/' + self.OP_A, 404, '')
+
+        with mock.patch.object(self.client, 'get_agent_operation', side_effect=gone):
+            e = self.assertRaises(apiclient.AgentOperationFailed, self._await, operations)
+
+        self.assertEqual(self.OP_A, e.op_uuid)
+        self.assertIn('actually failed', str(e))
+        self.assertIn('"error"', str(e))
+
+    # -- the chain failed, and the cause cannot be named -------------------
+
+    def _assert_unresolvable(self, dependency_failure, phrase, named=None):
+        """Walk a chain whose cause cannot be resolved, and read the reason.
+
+        The assertion is on the phrase which distinguishes this branch from
+        the others rather than on the whole message, because the wording
+        around it is for an operator and will be improved; what must not
+        change is that the four cases remain four different answers.
+        """
+        operations = [self._submitted(self.OP_A), self._submitted(self.OP_B),
+                      self._aborted(self.OP_C, dependency_failure)]
+
+        with mock.patch.object(self.client, 'get_agent_operation') as get_op:
+            e = self.assertRaises(apiclient.AgentOperationFailed, self._await, operations)
+
+        self.assertIn(phrase, str(e))
+        # None of these branches needs a link refreshed: each is decided
+        # entirely from what the cascade already recorded.
+        get_op.assert_not_called()
+        if named:
+            self.assertEqual(named, e.op_uuid)
+        return e
+
+    def test_a_pending_dependency_reports_the_wait_budget(self):
+        # Not a failed step: the dependency was still working when the
+        # dependent ran out of patience, and the remedy is a budget rather
+        # than a fix.
+        for state in ('initial', 'preflight', 'queued', 'executing'):
+            e = self._assert_unresolvable(
+                self._cascade(self.OP_B, state),
+                'ran out of its dependency wait budget', named=self.OP_B)
+            # The setting is named rather than its value asserted: the
+            # default is the cluster's to change, and a client test which
+            # pinned it would fail for something this client does not own.
+            self.assertIn('AGENT_OPERATION_DEPENDENCY_WAIT', str(e))
+            self.assertIn(f'"{state}"', str(e))
+
+    def test_a_swept_dependency_says_so(self):
+        e = self._assert_unresolvable(
+            self._cascade(self.OP_B, 'missing'),
+            'had been swept or deleted', named=self.OP_B)
+
+        # Why it cannot be recovered, rather than a guess in either
+        # direction.
+        self.assertIn('never swept', str(e))
+
+    def test_an_unreadable_dependency_points_at_the_cluster(self):
+        e = self._assert_unresolvable(
+            self._cascade(self.OP_B, 'unreadable'),
+            'could not read the state', named=self.OP_B)
+
+        self.assertIn('cluster', str(e))
+
+    def test_a_dependency_outside_the_chain_is_not_resolved(self):
+        self._assert_unresolvable(
+            self._cascade(self.OP_ELSEWHERE, 'error'),
+            'was not submitted with this chain', named=self.OP_ELSEWHERE)
+
+    def test_an_abort_without_a_cause_says_so(self):
+        operations = [self._submitted(self.OP_A),
+                      self._aborted(self.OP_B)]
+
+        with mock.patch.object(self.client, 'get_agent_operation') as get_op:
+            e = self.assertRaises(apiclient.AgentOperationFailed, self._await, operations)
+
+        self.assertIn('carries no dependency_failure', str(e))
+        self.assertIn('the operation which was awaited', str(e))
+        self.assertEqual(self.OP_B, e.op_uuid)
+        get_op.assert_not_called()
+
+    # -- the walk's two hard limits ----------------------------------------
+
+    def test_a_cascade_naming_no_operation_says_so(self):
+        # The cascade writes the dependency's uuid before it writes the
+        # abort, so an abort whose cause names nothing is as unanswerable
+        # as one with no cause at all -- and must not be reported as a
+        # dependency called None.
+        operations = [self._submitted(self.OP_A),
+                      self._aborted(self.OP_B, {'op_type': 'agent', 'state': 'error'})]
+
+        e = self.assertRaises(apiclient.AgentOperationFailed,
+                              self._await, operations)
+
+        self.assertIn('names no operation', str(e))
+        self.assertNotIn('None', str(e))
+        self.assertEqual(self.OP_B, e.op_uuid)
+
+    def test_an_unresolvable_branch_carries_the_state_the_cascade_saw(self):
+        # AgentOperationFailed promises op_view is the operation's last
+        # known view, and the view a caller submitted says "queued"
+        # forever -- so handing that back would contradict the message
+        # beside it, which says the dependency was executing, swept or
+        # unreadable.
+        for state in ('executing', 'missing', 'unreadable'):
+            operations = [self._submitted(self.OP_A),
+                          self._aborted(self.OP_B, self._cascade(self.OP_A, state))]
+
+            e = self.assertRaises(apiclient.AgentOperationFailed,
+                                  self._await, operations)
+
+            self.assertEqual(self.OP_A, e.op_uuid)
+            self.assertEqual(state, e.op_view['state'])
+            self.assertEqual(self.OP_A, e.op_view['uuid'])
+
+    def test_a_dependency_outside_the_chain_still_reports_a_view(self):
+        operations = [self._submitted(self.OP_A),
+                      self._aborted(self.OP_B,
+                                    self._cascade(self.OP_ELSEWHERE, 'error'))]
+
+        e = self.assertRaises(apiclient.AgentOperationFailed,
+                              self._await, operations)
+
+        self.assertEqual(self.OP_ELSEWHERE, e.op_uuid)
+        self.assertEqual({'uuid': self.OP_ELSEWHERE, 'state': 'error'}, e.op_view)
+
+    def test_the_walk_never_requests_an_operation_outside_the_chain(self):
+        # Counted rather than inspected, because this is an authorisation
+        # property and not a tidiness one: a chain may cross namespaces, so
+        # a walk which chased a uuid the caller did not submit would be
+        # asking the cluster a question on the caller's behalf that the
+        # caller never asked.
+        operations = [self._submitted(self.OP_A), self._submitted(self.OP_B),
+                      self._aborted(self.OP_C, self._cascade(self.OP_B, 'abort'))]
+        # B was aborted by something from outside the submitted chain.
+        refreshed_b = self._aborted(self.OP_B,
+                                    self._cascade(self.OP_ELSEWHERE, 'error'))
+
+        with mock.patch.object(self.client, 'get_agent_operation',
+                               return_value=refreshed_b) as get_op:
+            e = self.assertRaises(apiclient.AgentOperationFailed, self._await, operations)
+
+        self.assertEqual(1, get_op.call_count)
+        self.assertEqual([mock.call(self.OP_B)], get_op.call_args_list)
+        requested = {call.args[0] for call in get_op.call_args_list}
+        self.assertEqual(set(), requested - {self.OP_A, self.OP_B, self.OP_C})
+        self.assertIn('was not submitted with this chain', str(e))
+
+    def test_the_walk_is_bounded_by_the_chain_it_was_given(self):
+        # A client cannot build a cycle, because an edge may only name an
+        # operation which already exists. This asserts the walk stops
+        # anyway, since it is reading state a cluster wrote and a reporting
+        # helper which could be hung is a worse answer than one which says
+        # it stopped.
+        operations = [self._submitted(self.OP_A),
+                      self._aborted(self.OP_B, self._cascade(self.OP_A, 'abort'))]
+        views = {
+            self.OP_A: self._aborted(self.OP_A, self._cascade(self.OP_B, 'abort')),
+            self.OP_B: self._aborted(self.OP_B, self._cascade(self.OP_A, 'abort')),
+        }
+
+        with mock.patch.object(self.client, 'get_agent_operation',
+                               side_effect=lambda u: views[u]) as get_op:
+            e = self.assertRaises(apiclient.AgentOperationFailed, self._await, operations)
+
+        self.assertIn('longer than the 2 operations submitted', str(e))
+        self.assertEqual(2, get_op.call_count)
+
+    # -- a failure which is not a chain question ---------------------------
+
+    def test_a_non_abort_failure_passes_through_unchanged(self):
+        # Only the cascade writes an abort, so any other terminal failure
+        # is the awaited operation's own and is already reported as well as
+        # it can be. Rewriting it as a chain failure would bury the real
+        # one under a walk with nothing to walk.
+        operations = [self._submitted(self.OP_A),
+                      {'uuid': self.OP_B, 'state': 'error'}]
+
+        with mock.patch.object(self.client, 'get_agent_operation') as get_op:
+            e = self.assertRaises(apiclient.AgentOperationFailed, self._await, operations)
+
+        self.assertEqual(self.OP_B, e.op_uuid)
+        self.assertIn('entered terminal state', str(e))
+        self.assertNotIn('chain', str(e))
+        get_op.assert_not_called()
