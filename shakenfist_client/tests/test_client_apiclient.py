@@ -2898,6 +2898,52 @@ class AgentDependencyEdgesTestCase(testtools.TestCase):
         self.assertIn('depends_on[0]', str(e))
         self.assertIn('is not a valid UUID', str(e))
 
+    def test_a_bare_uuid_instead_of_a_list_is_refused(self):
+        # depends_on=op['uuid'] is the obvious mistake, and it is iterable,
+        # so without a guard it is walked character by character and the
+        # complaint is about the character '4'.
+        e = self.assertRaises(
+            ValueError, apiclient._agentop_dependency_edges,
+            'depends_on', self.OP_UUID)
+
+        self.assertIn('must be a list of dependency edges', str(e))
+        self.assertIn('not a single str', str(e))
+
+    def test_a_single_edge_instead_of_a_list_is_refused(self):
+        e = self.assertRaises(
+            ValueError, apiclient._agentop_dependency_edges,
+            'runs_after', {'op_uuid': self.OP_UUID})
+
+        self.assertIn('must be a list of dependency edges', str(e))
+        self.assertIn('not a single dict', str(e))
+
+    def test_a_boolean_settle_is_refused(self):
+        # isinstance(True, int) is true in Python, so a bool would
+        # otherwise arrive at the cluster as one second.
+        e = self.assertRaises(
+            ValueError, apiclient._agentop_dependency_edges,
+            'depends_on', [{'op_uuid': self.OP_UUID, 'settle_seconds': True}])
+
+        self.assertIn('not a boolean', str(e))
+
+    def test_a_non_numeric_settle_is_refused(self):
+        e = self.assertRaises(
+            ValueError, apiclient._agentop_dependency_edges,
+            'depends_on', [{'op_uuid': self.OP_UUID, 'settle_seconds': 'soon'}])
+
+        self.assertIn('must be a number of seconds', str(e))
+
+    def test_a_negative_settle_is_refused(self):
+        # A settle pointing backwards would make the edge satisfied before
+        # the thing it waits for finished. Whether a settle is a number and
+        # which way it points are properties of the value; how large it may
+        # be is the deployment's business and is still not checked here.
+        e = self.assertRaises(
+            ValueError, apiclient._agentop_dependency_edges,
+            'depends_on', [{'op_uuid': self.OP_UUID, 'settle_seconds': -1}])
+
+        self.assertIn('may not be negative', str(e))
+
     def test_an_upper_case_member_is_canonicalised(self):
         edges = apiclient._agentop_dependency_edges(
             'depends_on', [self.OP_UUID.upper()])
@@ -3339,6 +3385,18 @@ class AgentOperationStoredEdgeTestCase(testtools.TestCase):
     def test_get_without_edges_ignores_the_response(self):
         self._assert_no_edges_ignores_the_response(self._get)
 
+    def test_edges_echoed_as_bare_uuids_are_not_a_mismatch(self):
+        # The server sends each edge as a mapping, because it stores the
+        # schema model dumped to JSON. Reading a surprising shape must not
+        # raise from inside the check whose job is to report a surprising
+        # answer.
+        self.mock_request.return_value.json.return_value = {
+            'uuid': 'op1', 'state': 'complete', 'depends_on': [self.OP_UUID]}
+
+        op = self._execute(depends_on=[self.OP_UUID])
+
+        self.assertEqual('op1', op['uuid'])
+
     # -- whose mistake gets reported first ---------------------------------
 
     def test_a_malformed_edge_is_reported_before_the_capability(self):
@@ -3581,8 +3639,10 @@ class AgentOperationChainAwaitTestCase(testtools.TestCase):
             e = self._assert_unresolvable(
                 self._cascade(self.OP_B, state),
                 'ran out of its dependency wait budget', named=self.OP_B)
+            # The setting is named rather than its value asserted: the
+            # default is the cluster's to change, and a client test which
+            # pinned it would fail for something this client does not own.
             self.assertIn('AGENT_OPERATION_DEPENDENCY_WAIT', str(e))
-            self.assertIn('300', str(e))
             self.assertIn(f'"{state}"', str(e))
 
     def test_a_swept_dependency_says_so(self):
@@ -3619,6 +3679,21 @@ class AgentOperationChainAwaitTestCase(testtools.TestCase):
         get_op.assert_not_called()
 
     # -- the walk's two hard limits ----------------------------------------
+
+    def test_a_cascade_naming_no_operation_says_so(self):
+        # The cascade writes the dependency's uuid before it writes the
+        # abort, so an abort whose cause names nothing is as unanswerable
+        # as one with no cause at all -- and must not be reported as a
+        # dependency called None.
+        operations = [self._submitted(self.OP_A),
+                      self._aborted(self.OP_B, {'op_type': 'agent', 'state': 'error'})]
+
+        e = self.assertRaises(apiclient.AgentOperationFailed,
+                              self._await, operations)
+
+        self.assertIn('names no operation', str(e))
+        self.assertNotIn('None', str(e))
+        self.assertEqual(self.OP_B, e.op_uuid)
 
     def test_an_unresolvable_branch_carries_the_state_the_cascade_saw(self):
         # AgentOperationFailed promises op_view is the operation's last

@@ -83,8 +83,9 @@ REST API:
   polls for it -- three separate budgets that are deliberately not
   derived from one another. `_await_agentop()` is the single place
   which polls operation state: it breaks on any member of
-  `TERMINAL_AGENT_OPERATION_STATES` -- five states, `abort` among them,
-  hand-kept in step with the server's own list -- and raises `AgentOperationFailed`
+  `TERMINAL_AGENT_OPERATION_STATES` -- five states, `abort` among
+  them, hand-kept in step with the server's own list -- and raises
+  `AgentOperationFailed`
   rather than waiting out its budget and reporting a timeout, and
   `await_agent_command()`/`await_agent_fetch()` catch that to attach the
   instance's console data. The timing parameters are gated on the

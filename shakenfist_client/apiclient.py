@@ -338,6 +338,16 @@ def _agentop_dependency_edges(name, edges):
     configuration can be read. Nothing is missing here; both bounds belong
     to the server alone.
     """
+    # A caller who passes one edge where a list belongs gets told that.
+    # Both mistakes are iterable, so without this the loop below walks a
+    # uuid character by character, or a single edge dict key by key, and
+    # complains about the first character or the string 'op_uuid' -- an
+    # answer which describes neither the mistake nor the fix.
+    if isinstance(edges, (str, bytes, bytearray, dict)):
+        raise ValueError(
+            f'{name} must be a list of dependency edges, not a single '
+            f'{type(edges).__name__}')
+
     normalised = []
 
     for index, edge in enumerate(edges):
@@ -357,6 +367,27 @@ def _agentop_dependency_edges(name, edges):
                     f'{name}[{index}] does not name an agent operation, a dependency '
                     'edge must have an op_uuid')
 
+            # Whether a settle is a number of seconds at all, and whether it
+            # points forwards, are properties of the value rather than of the
+            # deployment -- the server's own edge model refuses both on
+            # exactly that ground, and no cluster configuration makes either
+            # acceptable. How *large* a settle may be is the deployment's
+            # business and is still not checked here. A bool is refused
+            # before the numeric test because isinstance(True, int) is true
+            # in Python, so True would otherwise arrive as one second.
+            settle = edge.get('settle_seconds')
+            if isinstance(settle, bool):
+                raise ValueError(
+                    f'{name}[{index}] settle_seconds must be a number of seconds, '
+                    'not a boolean')
+            if settle is not None and not isinstance(settle, (int, float)):
+                raise ValueError(
+                    f'{name}[{index}] settle_seconds must be a number of seconds, '
+                    f'not a {type(settle).__name__}')
+            if settle is not None and settle < 0:
+                raise ValueError(
+                    f'{name}[{index}] settle_seconds may not be negative, got {settle}')
+
             edge = dict(edge)
 
         else:
@@ -368,6 +399,20 @@ def _agentop_dependency_edges(name, edges):
         normalised.append(edge)
 
     return normalised
+
+
+def _stored_edge_uuid(edge):
+    # The op_uuid of an edge as it came back on a created operation. A
+    # mapping is what the server sends -- it stores each edge as its schema
+    # model dumped to JSON, so the edge carries op_type and settle_seconds
+    # as well -- but reading a surprising shape must not raise here, where
+    # the whole point is to report a surprising answer rather than to add
+    # one.
+    if isinstance(edge, dict):
+        return edge.get('op_uuid')
+    if isinstance(edge, str):
+        return edge
+    return None
 
 
 def _observed_dependency_view(submitted, op_uuid, state):
@@ -1799,6 +1844,19 @@ class Client:
             state = dependency_failure.get('state')
             named = dependency_failure.get('op_uuid')
 
+            if not named:
+                # The cascade writes the dependency's uuid before it writes
+                # the abort, so an abort whose cause has no uuid is the same
+                # unanswerable question as one with no cause at all -- and
+                # saying "its dependency None" would be a worse way to ask
+                # it.
+                return AgentOperationFailed(
+                    f'Agent operation {current_uuid} ({_agentop_chain_position(hops)}) was aborted, and '
+                    f'its dependency_failure names no operation ({dependency_failure!r}), so which '
+                    'dependency aborted it cannot be named. The cascade records the cause before it '
+                    'writes the state, so this is a cluster to look at rather than a chain to read.',
+                    current_uuid, current_view)
+
             if state in AGENT_DEPENDENCY_PENDING_STATES:
                 # Not a failed step at all: the dependency was still working
                 # when the dependent ran out of patience. Said separately
@@ -2007,7 +2065,7 @@ class Client:
             # forms to disagree, and could only hide the mismatch this check
             # exists to find.
             sent_uuids = {edge['op_uuid'] for edge in sent}
-            stored_uuids = {edge.get('op_uuid') for edge in op.get(name) or []}
+            stored_uuids = {_stored_edge_uuid(edge) for edge in op.get(name) or []}
             if sent_uuids == stored_uuids:
                 continue
 
@@ -2022,6 +2080,12 @@ class Client:
                 if len(missing) > 3:
                     detail += f' and {len(missing) - 3} more'
 
+            # Hoisted out of the message below, which is where it used to
+            # sit: a DELETE against the cluster is not something a reader
+            # scanning a raise expression for side effects should have to
+            # find inside an f-string.
+            cleanup = self._cancel_unordered_agentop(op)
+
             raise IncapableException(
                 f'The API server accepted the {name} edges for agent operation '
                 f'{op["uuid"]} and answered success, but the database tier did not store '
@@ -2029,7 +2093,7 @@ class Client:
                 'advertises the agentoperation-dependencies capability, but the '
                 'sf-database behind it predates the dependency fields and drops them. '
                 'Upgrade sf-database to a version which stores dependency edges. The '
-                f'call which was made is correct. {self._cancel_unordered_agentop(op)}')
+                f'call which was made is correct. {cleanup}')
 
     def _cancel_unordered_agentop(self, op):
         """Try to delete an operation whose ordering the cluster did not store.

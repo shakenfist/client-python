@@ -742,6 +742,25 @@ Departures from the plan, as they happened:
    an agent operation parameter. The definition of done's check for
    the capability token was corrected at source to match.
 
+6. **The stored-edge check deletes the operation, which decision 5 did
+   not ask for.** Decision 5 and step 4 said to raise. Review found that
+   raising is not enough: the check reads the POST response, so by the
+   time it fires the operation exists, is queued, and will run with no
+   ordering at all -- which is the harm the decision is about, and
+   refusing to await it does not avert it. The client now deletes the
+   operation as well, which does avert it: the instance's queue treats a
+   head whose records have gone as invalid and dispatches nothing
+   (`agent_operation_next()` in the server's `instance.py`). The delete
+   is best effort, because it needs its own capability and a failed
+   cleanup must not replace the explanation of the refusal, and the
+   exception says which happened. The echo shape the comparison relies
+   on was verified against the server rather than against the client's
+   own fixtures: `external_api/base.py` stores each edge as its schema
+   model dumped with `model_dump(mode='json')`, so `op_uuid` is the
+   canonical lower case string the client now sends, and the stored list
+   is creation-time static data which `external_view()` carries verbatim,
+   so nothing prunes a satisfied edge before the response is built.
+
 ## Back brief
 
 Before executing any step, back brief the operator on the

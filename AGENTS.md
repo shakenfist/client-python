@@ -149,7 +149,7 @@ and `download` is what a user has.
 `depends_on` and `runs_after` order in-guest agent operations on the
 *server*, and they are not interchangeable: a failed `depends_on`
 dependency cascades its dependent to `abort`, whereas a `runs_after`
-dependency only sequenced it and the dependent runs regardless.
+dependency only sequences it and the dependent runs regardless.
 
 There is deliberately no usage guide for either edge kind here. The
 server repository will describe both once, in
@@ -174,7 +174,7 @@ targets and are not:
   ordering edge means "run now", the precise outcome the caller declared
   the edge to prevent.
 - Neither `None` nor an empty list is a declaration, so neither consults
-  the capability or sends a key. The timing parameters test
+  the capability nor sends a key. The timing parameters test
   `is not None` because zero is a real budget there; it is not here.
 - The client validates an edge's shape and deliberately carries neither
   of the server's bounds, the edge-count limit or the `settle_seconds`
@@ -183,7 +183,12 @@ targets and are not:
   magnitude in one release.
 - `_verify_agentop_dependencies()` exists because an older `sf-database`
   behind a new `sf-api` accepts the edges, answers 200 and stores
-  nothing, which no capability token can report.
+  nothing, which no capability token can report. It runs on the POST
+  response, by which time the operation exists and is queued, so it
+  **deletes** that operation as well as raising: refusing to await an
+  operation does not stop it running, and running unordered is the harm
+  being refused. The delete is best effort and the exception says
+  whether it worked.
 - `await_seconds=0` is how a chain link is submitted: it sets a deadline
   already reached, so the call returns the operation as created.
   Awaiting each link as it is submitted defeats the chain entirely. This
