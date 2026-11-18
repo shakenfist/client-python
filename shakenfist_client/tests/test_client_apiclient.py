@@ -3339,6 +3339,75 @@ class AgentOperationStoredEdgeTestCase(testtools.TestCase):
     def test_get_without_edges_ignores_the_response(self):
         self._assert_no_edges_ignores_the_response(self._get)
 
+    # -- whose mistake gets reported first ---------------------------------
+
+    def test_a_malformed_edge_is_reported_before_the_capability(self):
+        # Against a server which cannot take edges at all, a caller who
+        # also built a broken one hears about the broken one. The caller
+        # can fix that; what the cluster on the other end is capable of is
+        # not theirs to fix, and is the less useful half of the answer.
+        self.client.root_html = 'instance-execute'
+
+        self.assertRaises(ValueError, self._execute,
+                          depends_on=[{'op_uuid': self.OP_UUID, 'nonsense': 1}])
+
+    # -- the refusal has to stop the operation, not just the await ---------
+
+    def test_a_dropped_edge_deletes_the_operation_it_created(self):
+        # Refusing to await an operation does not stop it running. By the
+        # time the response reveals the dropped edges the operation is
+        # queued and will run with no ordering at all, which is the harm
+        # this check is for, so the only thing which averts it is deleting
+        # the operation.
+        self._answers({'depends_on': []})
+
+        with mock.patch.object(self.client, 'delete_agent_operation') as delete:
+            e = self.assertRaises(apiclient.IncapableException,
+                                  self._execute, depends_on=[self.OP_UUID])
+
+        delete.assert_called_once_with('op1')
+        self.assertIn('has been deleted', str(e))
+
+    def test_a_failed_cleanup_is_reported_in_the_refusal(self):
+        # A cleanup which fails must not replace the explanation of what
+        # went wrong, and the caller still has to be told an operation is
+        # out there and which one.
+        self._answers({'depends_on': []})
+
+        with mock.patch.object(self.client, 'delete_agent_operation',
+                               side_effect=Exception('no such capability')):
+            e = self.assertRaises(apiclient.IncapableException,
+                                  self._execute, depends_on=[self.OP_UUID])
+
+        self.assertIn('could not be deleted', str(e))
+        self.assertIn('no such capability', str(e))
+        self.assertIn('op1', str(e))
+        # Still the refusal it was, not a report about the cleanup.
+        self.assertIn('sf-database', str(e))
+
+    # -- the idiom the repository publishes for submitting a chain ---------
+
+    def test_await_seconds_zero_submits_without_waiting(self):
+        # AGENTS.md publishes this as how a chain link is submitted, so it
+        # is pinned here: a deadline already reached means the operation
+        # comes back as the POST described it, with no polling at all.
+        #
+        # The response is deliberately a *queued* operation. A complete one
+        # would leave the await loop with nothing to do whatever the
+        # deadline said, so the test would pass even if await_seconds=0
+        # were ignored -- which is what it exists to catch.
+        self.mock_request.return_value.json.return_value = {
+            'uuid': 'op1', 'state': 'queued',
+            'depends_on': [{'op_uuid': self.OP_UUID}]}
+
+        with mock.patch.object(
+                self.client, 'get_agent_operation',
+                return_value={'uuid': 'op1', 'state': 'complete'}) as get_op:
+            op = self._execute(depends_on=[self.OP_UUID], await_seconds=0)
+
+        self.assertEqual('queued', op['state'])
+        get_op.assert_not_called()
+
 
 class AgentOperationChainAwaitTestCase(testtools.TestCase):
     """A chain which fails must name the operation that actually failed.
@@ -3550,6 +3619,34 @@ class AgentOperationChainAwaitTestCase(testtools.TestCase):
         get_op.assert_not_called()
 
     # -- the walk's two hard limits ----------------------------------------
+
+    def test_an_unresolvable_branch_carries_the_state_the_cascade_saw(self):
+        # AgentOperationFailed promises op_view is the operation's last
+        # known view, and the view a caller submitted says "queued"
+        # forever -- so handing that back would contradict the message
+        # beside it, which says the dependency was executing, swept or
+        # unreadable.
+        for state in ('executing', 'missing', 'unreadable'):
+            operations = [self._submitted(self.OP_A),
+                          self._aborted(self.OP_B, self._cascade(self.OP_A, state))]
+
+            e = self.assertRaises(apiclient.AgentOperationFailed,
+                                  self._await, operations)
+
+            self.assertEqual(self.OP_A, e.op_uuid)
+            self.assertEqual(state, e.op_view['state'])
+            self.assertEqual(self.OP_A, e.op_view['uuid'])
+
+    def test_a_dependency_outside_the_chain_still_reports_a_view(self):
+        operations = [self._submitted(self.OP_A),
+                      self._aborted(self.OP_B,
+                                    self._cascade(self.OP_ELSEWHERE, 'error'))]
+
+        e = self.assertRaises(apiclient.AgentOperationFailed,
+                              self._await, operations)
+
+        self.assertEqual(self.OP_ELSEWHERE, e.op_uuid)
+        self.assertEqual({'uuid': self.OP_ELSEWHERE, 'state': 'error'}, e.op_view)
 
     def test_the_walk_never_requests_an_operation_outside_the_chain(self):
         # Counted rather than inspected, because this is an authorisation

@@ -370,6 +370,15 @@ def _agentop_dependency_edges(name, edges):
     return normalised
 
 
+def _observed_dependency_view(submitted, op_uuid, state):
+    # The view a chain walk hands back for a dependency it could not resolve,
+    # carrying the state the dispatcher recorded having observed rather than
+    # the state the creating POST returned. AgentOperationFailed promises its
+    # op_view is the operation's last known view, and a submitted view says
+    # "queued" forever -- which would contradict the message beside it.
+    return dict(submitted.get(op_uuid) or {'uuid': op_uuid}, state=state)
+
+
 def _agentop_chain_position(hops):
     # Where in a submitted chain the walk below ended up, phrased for a
     # failure message. Zero hops is the operation the caller awaited, and
@@ -1711,6 +1720,17 @@ class Client:
         client's long standing behaviour for a wait that expired rather
         than a thing that failed.
 
+        Two bounds on what this reports. It observes only failures which
+        reached the operation it awaited, so it is a complete report for a
+        depends_on chain -- where a failed dependency cascades -- and not
+        for a runs_after one, whose dependent runs whatever its dependency
+        did: the last link can complete while an earlier link errored, and
+        that completion is what comes back. A caller mixing the two kinds
+        has to inspect the earlier links itself. And timeout=None means
+        "this client's async strategy decides", which for an ASYNC_CONTINUE
+        client -- the one a chain is submitted with -- is not to wait at
+        all, so a caller which wants this to block passes a timeout.
+
         A chain fails backwards: the operation the caller awaited is
         aborted because the one before it did not succeed, and that one may
         have been aborted for the same reason in turn. So the exception
@@ -1792,7 +1812,7 @@ class Client:
                     'AGENT_OPERATION_DEPENDENCY_WAIT seconds for a dependency to finish, 300 by default, '
                     'so the remedy is a longer budget on the cluster or a dependency which finishes '
                     'sooner.',
-                    named, submitted.get(named, {}))
+                    named, _observed_dependency_view(submitted, named, state))
 
             if state == AGENT_DEPENDENCY_MISSING:
                 # The dependency is gone, so success and failure cannot be
@@ -1807,7 +1827,7 @@ class Client:
                     'completed, aborted, expired or deleted operation is swept an hour after it finished '
                     'while an errored one is never swept, so the state it ended in is not recorded '
                     'anywhere left to read.',
-                    named, submitted.get(named, {}))
+                    named, _observed_dependency_view(submitted, named, state))
 
             if state == AGENT_DEPENDENCY_UNREADABLE:
                 # Nothing was learned about the dependency, which is a
@@ -1819,7 +1839,7 @@ class Client:
                     f'than with the chain that was submitted. Nothing was learned about {named}, so it may '
                     'well have succeeded. Look at the sidechannel daemon on the node holding the instance, '
                     'and at that node\'s database connectivity, before resubmitting the chain.',
-                    named, submitted.get(named, {}))
+                    named, _observed_dependency_view(submitted, named, state))
 
             if named not in submitted:
                 # Deliberately not fetched. A chain may cross namespaces, so
@@ -1832,7 +1852,7 @@ class Client:
                     'be resolved any further here. This client does not read an operation it was not '
                     'given: a chain may cross namespaces, and resolving a uuid from somewhere else would '
                     'ask a question about authorisation rather than about the chain.',
-                    named, {})
+                    named, _observed_dependency_view(submitted, named, state))
 
             hops += 1
             current_uuid = named
@@ -1931,16 +1951,23 @@ class Client:
         if not (depends_on or runs_after):
             return
 
+        # The caller's own edges are checked before the server is consulted,
+        # so a malformed edge is reported as the malformed edge it is rather
+        # than as whatever the cluster on the other end happens to be capable
+        # of. The caller can fix one of those and not the other.
+        edges = {}
+        if depends_on:
+            edges['depends_on'] = _agentop_dependency_edges('depends_on', depends_on)
+        if runs_after:
+            edges['runs_after'] = _agentop_dependency_edges('runs_after', runs_after)
+
         if not self.check_capability('agentoperation-dependencies'):
             raise IncapableException(
                 'The API server version you are talking to does not support '
                 'agent operation dependencies, which require the '
                 'agentoperation-dependencies capability.')
 
-        if depends_on:
-            data['depends_on'] = _agentop_dependency_edges('depends_on', depends_on)
-        if runs_after:
-            data['runs_after'] = _agentop_dependency_edges('runs_after', runs_after)
+        data.update(edges)
 
     def _verify_agentop_dependencies(self, data, op):
         """Check that the edges a creating call sent came back on the operation.
@@ -2002,9 +2029,36 @@ class Client:
                 'advertises the agentoperation-dependencies capability, but the '
                 'sf-database behind it predates the dependency fields and drops them. '
                 'Upgrade sf-database to a version which stores dependency edges. The '
-                'call which was made is correct, and is refused here only because the '
-                'operation would otherwise run unordered while reporting that it had '
-                'been ordered.')
+                f'call which was made is correct. {self._cancel_unordered_agentop(op)}')
+
+    def _cancel_unordered_agentop(self, op):
+        """Try to delete an operation whose ordering the cluster did not store.
+
+        Refusing to await an operation does not stop it: by the time the
+        response which revealed the dropped edges is in hand the operation
+        exists, is queued, and will run with no ordering at all -- which is
+        the harm the check exists to prevent, not something refusing can
+        undo. Deleting it does prevent it: the instance's queue treats a
+        head whose records have gone as invalid, pops it and moves on
+        without dispatching it.
+
+        Best effort, and reported either way as a sentence to append to the
+        refusal, because the caller has to know whether an operation is
+        still coming. The delete needs its own capability and can fail for
+        reasons which have nothing to do with the refusal being raised, and
+        a failure to clean up must not replace the explanation of what went
+        wrong.
+        """
+        try:
+            self.delete_agent_operation(op['uuid'])
+        except Exception as e:
+            return (f'The operation was created before this was detected and could not be '
+                    f'deleted ({e}), so it is still queued and will run without the ordering '
+                    f'which was asked for. Delete agent operation {op["uuid"]} to stop it.')
+
+        return ('The operation was created before this was detected, and has been deleted so '
+                'that it cannot run without the ordering which was asked for. An operation '
+                'which had already started is not stopped by that, so check whether it ran.')
 
     @staticmethod
     def _remaining_agentop_budget(start_time, timeout):

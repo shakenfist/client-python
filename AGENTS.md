@@ -149,10 +149,15 @@ and `download` is what a user has.
 `depends_on` and `runs_after` order in-guest agent operations on the
 *server*, and they are not interchangeable: a failed `depends_on`
 dependency cascades its dependent to `abort`, whereas a `runs_after`
-dependency only sequenced it and the dependent runs regardless. How to
-use either is described once, in the server repository's
-`docs/developer_guide/agent_operations.md`; this section holds only the
-invariants which read as tidy-up targets and are not:
+dependency only sequenced it and the dependent runs regardless.
+
+There is deliberately no usage guide for either edge kind here. The
+server repository will describe both once, in
+`docs/developer_guide/agent_operations.md`, which does not exist yet;
+until it does, the docstrings on `agent_dependency()`,
+`await_agent_chain()` and the three creating helpers are what a caller
+has. This section holds only the invariants which read as tidy-up
+targets and are not:
 
 - `TERMINAL_AGENT_OPERATION_STATES` has five members, and `abort` had
   to arrive before the submission parameters rather than after. Until a
