@@ -235,6 +235,18 @@ JSON object rather than a bare list, so the file can carry a
 format version and the current-namespace selection alongside the
 credentials without a second file.
 
+Each entry also records the API URL it was minted against, and
+the current selection names a cluster as well as a namespace.
+That was missing from this decision as first written, and step
+7a's review found why it cannot be: the existing credential
+chain is gated on the API URL rather than on the credential, so
+each source is consulted only `if not base_url`
+(`shakenfist_client/apiclient.py:479-516`). A cache offering a
+namespace and key but no API URL has nowhere to join that chain.
+The stronger reason is that a namespace key is cluster scoped, so
+a cached credential with no record of which cluster minted it
+could be presented to a different one.
+
 **D3. The set is resolved by an explicit current namespace, not
 per request.** `login` writes every credential it was given and
 records one as current -- the only member when there is one, and
@@ -450,7 +462,52 @@ than a real one; a real provider is phase 9's job.
 
 ## Execution notes
 
-Nothing yet. This file was committed at planning time.
+This file was committed at planning time. Execution began on
+2026-11-19 AEDT.
+
+**Back brief answered, before 7a.** Michael settled all three
+questions. The phase stays whole rather than splitting the
+browser flow into its own half. D7 stands as planned, with the
+cache above both configuration files and below flags and the
+environment. This session may push both branches and open both
+pull requests, here and in the shakenfist repository; merging
+remains his.
+
+**Two facts corrected at source before the steps that depend on
+them.**
+
+D2 did not say the cache records which cluster minted each
+credential, and it has to, for the two reasons now given there.
+
+Step 7a's row said to send its requests through `_request_url()`.
+That method authenticates before doing anything else, so for a
+caller who has not logged in yet it raises out of `POST /auth`
+with a namespace and key of `None` before the login request is
+made -- the chicken and egg the row did not see.
+`_actual_request_url()` sends no Authorization header when there
+is no cached credential, because `requests` drops a header whose
+value is `None`, and it still maps a status code to an exception.
+The step used that instead, and its tests patch it rather than
+the shared fixture's `_request_url` mock.
+
+**Step 7a found two defects outside its brief**, both fixed in
+its commit rather than deferred. `check_capability()` matched a
+capability as a substring of the API root page, so `human-login`
+matched inside `human-login-metadata` and a metadata-only cluster
+passed the gate on the mint -- which is exactly the failure the
+server's own comment on those two tokens warns about. And both
+bodies of the mint were being debug logged in full: the request
+is an identity token and the response is every secret the call
+will ever return, and the filter `sf-client` installs redacts a
+JWT, which a namespace key is not.
+
+**A defect this phase surfaces but 7a did not fix.**
+`UnconfiguredException` is not caught by `main.py`'s
+`GroupCatchExceptions`, so on a host with no `~/.shakenfist` and
+no `SHAKENFIST_API_URL` the first verb a new user ever runs,
+`login`, ends in a traceback rather than a message. It predates
+this phase and affects every verb, but `login` is the one where
+having no configuration is the normal case. Step 7d owns it.
 
 ## Results
 
