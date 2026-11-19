@@ -552,12 +552,28 @@ class Client:
 
     def check_capability(self, capability_string):
         # NOTE(mikal): this likely needs to be fancier
-        return capability_string in self.root_html
+        #
+        # Matched as a whole token, not a substring, because one capability
+        # can be a prefix of another: human-login is a prefix of
+        # human-login-metadata, so a cluster advertising only the latter
+        # would otherwise pass a check for the former.
+        return re.search(
+            r'(?<![\w-])' + re.escape(capability_string) + r'(?![\w-])',
+            self.root_html) is not None
 
     def _actual_request_url(self, method, url, data=None,
                             request_body_is_binary=False,
                             response_body_is_binary=False,
-                            allow_redirects=True, stream=False):
+                            allow_redirects=True, stream=False,
+                            body_is_sensitive=False):
+        """Make one HTTP request, with debug logging of what was sent.
+
+        body_is_sensitive suppresses the debug logging of both bodies,
+        for a route whose request or response is a credential rather
+        than merely describing one. _authenticate() avoids this method
+        altogether for the same reason; a route which needs the status
+        code mapping here cannot do that, so it says so instead.
+        """
         url = self.base_url + url
 
         h = {
@@ -596,7 +612,9 @@ class Client:
             else:
                 LOG.debug(f'Header: {hkey} = {h[hkey]}')
         if data:
-            if request_body_is_binary:
+            if body_is_sensitive:
+                LOG.debug('Data: ...request body not logged...')
+            elif request_body_is_binary:
                 LOG.debug('Data: ...%d bytes of binary omitted...' % len(data))
             else:
                 LOG.debug('Data:\n    %s' % '\n    '.join(data.split('\n')))
@@ -611,7 +629,9 @@ class Client:
             LOG.debug(f'Header: {hkey} = {r.headers[hkey]}')
 
         if not stream and r.text:
-            if response_body_is_binary:
+            if body_is_sensitive:
+                LOG.debug('Data: ...response body not logged...')
+            elif response_body_is_binary:
                 LOG.debug('Data: ...%d bytes of binary omitted...'
                           % len(r.text))
             else:
@@ -2288,6 +2308,63 @@ class Client:
                 'Cluster does not support reading namespace key metadata')
         r = self._request_url(
             'GET', '/auth/namespaces/' + namespace + '/keys/' + key_name)
+        return r.json()
+
+    def get_login_issuers(self):
+        """List the identity providers this cluster offers for human login.
+
+        Returns a list of dicts, each with name, issuer_url, client_id and
+        oidc_scopes, plus whichever of authorization_endpoint,
+        token_endpoint and device_authorization_endpoint the issuer has. An
+        endpoint which is absent means the provider cannot do that flow
+        here. An empty list is a complete answer: this cluster offers no
+        human login.
+
+        The route is public, so this sends no credential and works before
+        anyone has logged in. That is why it bypasses _request_url(), which
+        would try to authenticate first and fail for a caller with none.
+
+        Gated rather than attempted, because a server which predates the
+        route answers 404, and a 404 is indistinguishable from "no issuers"
+        to a caller who is only checking whether login is on offer.
+        """
+        if not self.check_capability('human-login-metadata'):
+            raise IncapableException(
+                'Cluster does not support listing human login issuers')
+        r = self._actual_request_url('GET', '/auth/login')
+        return r.json()
+
+    def login(self, token):
+        """Exchange a signed identity token for namespace keys.
+
+        Returns a list of dicts, one per mapping rule the identity
+        satisfies, each with namespace, key_name, key, expiry and scopes.
+        Each secret is returned once and never again, so the caller must
+        keep the set. The token is the signed identity token an issuer
+        returned at the end of a login flow, not a Shaken Fist key.
+
+        The route is public, so this sends no credential and bypasses
+        _request_url(), which would try to authenticate first and fail for a
+        caller with none.
+
+        Gated separately from get_login_issuers(), because a cluster can
+        offer the issuer list without the mint: a server which meets a
+        client posting a token to a route it lacks answers 404, and the
+        caller has by then sent an identity token somewhere it was never
+        meant to go.
+
+        Neither body is debug logged: the request carries an identity
+        token and the response carries every secret this call will ever
+        return. The logging filter sf-client installs catches a JWT, so
+        it would catch the token, but a namespace key is not a JWT and
+        nothing else would redact one on the way out.
+        """
+        if not self.check_capability('human-login'):
+            raise IncapableException(
+                'Cluster does not support logging in with an identity token')
+        r = self._actual_request_url(
+            'POST', '/auth/login', data={'token': token},
+            body_is_sensitive=True)
         return r.json()
 
     def add_namespace_key(self, namespace, key_name, key):

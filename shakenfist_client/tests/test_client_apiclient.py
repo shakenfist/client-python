@@ -289,6 +289,119 @@ class ApiClientTestCase(testtools.TestCase):
                           client.get_namespace_keys, 'testspace')
         self.mock_request.assert_not_called()
 
+    def _public_client(self, root_html):
+        # The login verbs reach public routes through
+        # _actual_request_url, so this patches that rather than the
+        # fixture's _request_url, and shows the latter is not used.
+        patcher = mock.patch(
+            'shakenfist_client.apiclient.Client._actual_request_url')
+        mock_actual = patcher.start()
+        self.addCleanup(patcher.stop)
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = root_html
+        return client, mock_actual
+
+    def test_get_login_issuers(self):
+        client, mock_actual = self._public_client('human-login-metadata')
+        mock_actual.return_value.json.return_value = [{'name': 'fake'}]
+
+        self.assertEqual([{'name': 'fake'}], client.get_login_issuers())
+        mock_actual.assert_called_once_with('GET', '/auth/login')
+        self.mock_request.assert_not_called()
+
+    def test_get_login_issuers_incapable(self):
+        # Having the mint is not having the metadata.
+        client, mock_actual = self._public_client('human-login')
+        self.assertRaises(apiclient.IncapableException,
+                          client.get_login_issuers)
+        mock_actual.assert_not_called()
+        self.mock_request.assert_not_called()
+
+    def test_login(self):
+        client, mock_actual = self._public_client('human-login')
+        mock_actual.return_value.json.return_value = [{'namespace': 'fake'}]
+
+        self.assertEqual([{'namespace': 'fake'}], client.login('faketoken'))
+        mock_actual.assert_called_once_with(
+            'POST', '/auth/login', data={'token': 'faketoken'},
+            body_is_sensitive=True)
+        self.mock_request.assert_not_called()
+
+    def test_login_incapable(self):
+        # Having the metadata is not having the mint.
+        client, mock_actual = self._public_client('human-login-metadata')
+        self.assertRaises(apiclient.IncapableException,
+                          client.login, 'faketoken')
+        mock_actual.assert_not_called()
+        self.mock_request.assert_not_called()
+
+    def test_check_capability_matches_whole_tokens(self):
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = '<li>auth: human-login-metadata, other</li>'
+        self.assertTrue(client.check_capability('human-login-metadata'))
+        self.assertFalse(client.check_capability('human-login'))
+        client.root_html = '<li>auth: other, human-login</li>'
+        self.assertTrue(client.check_capability('human-login'))
+
+    def _mint_response(self):
+        response = mock.MagicMock()
+        response.status_code = 200
+        response.history = []
+        response.headers = {}
+        response.text = json.dumps(
+            [{'namespace': 'ci', 'key_name': 'corporate-aaaa',
+              'key': 'notarealkey', 'expiry': 1.0, 'scopes': []}])
+        return response
+
+    def _mint_debug_log(self, **kwargs):
+        # Drive the real request helper with a faked out session, and
+        # return everything it debug logged.
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        with mock.patch.object(client, 'session') as mock_session:
+            mock_session.request.return_value = self._mint_response()
+            with mock.patch('shakenfist_client.apiclient.LOG') as mock_log:
+                client._actual_request_url(
+                    'POST', '/auth/login',
+                    data=json.dumps({'token': 'notarealtoken'}), **kwargs)
+        return ' '.join(str(call) for call in mock_log.debug.call_args_list)
+
+    def test_the_mint_does_not_log_either_body(self):
+        # The request body is an identity token and the response body is
+        # every secret the call will ever return. The logging filter
+        # sf-client installs redacts a JWT, which a namespace key is not,
+        # so suppressing the logging is the only thing protecting one.
+        logged = self._mint_debug_log(body_is_sensitive=True)
+        self.assertNotIn('notarealtoken', logged)
+        self.assertNotIn('notarealkey', logged)
+        self.assertIn('not logged', logged)
+
+    def test_an_ordinary_route_still_logs_its_bodies(self):
+        # The negative control for the test above: without the flag both
+        # bodies are logged, so that test can actually fail.
+        logged = self._mint_debug_log()
+        self.assertIn('notarealtoken', logged)
+        self.assertIn('notarealkey', logged)
+
+    def test_the_mint_marks_its_bodies_sensitive(self):
+        client, mock_actual = self._public_client('human-login')
+        mock_actual.return_value.json.return_value = []
+        client.login('notarealtoken')
+
+        self.assertTrue(
+            mock_actual.call_args.kwargs.get('body_is_sensitive'))
+
+    def test_login_incapable_messages_differ(self):
+        client, _ = self._public_client('')
+        with self.assertRaises(apiclient.IncapableException) as issuers:
+            client.get_login_issuers()
+        with self.assertRaises(apiclient.IncapableException) as mint:
+            client.login('faketoken')
+        self.assertNotEqual(str(issuers.exception), str(mint.exception))
+        self.assertNotIn('faketoken', str(mint.exception))
+
     def test_get_namespace_key(self):
         client = apiclient.Client(suppress_configuration_lookup=True,
                                   base_url='http://localhost:13000')
