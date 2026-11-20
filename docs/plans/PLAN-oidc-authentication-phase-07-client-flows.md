@@ -305,7 +305,7 @@ the reasoning. A person who has just run `sf-client login`
 expects the next command to use that login; if a stale
 `~/.shakenfist` from a year ago won instead, the login would
 appear to have done nothing, and the failure would be a confusing
-403 rather than a message. Putting the cache above both
+401 rather than a message. Putting the cache above both
 configuration files makes the explicit, recent, interactive act
 beat the implicit, old, file-based one. Flags and environment
 variables still win, because those are equally explicit and are
@@ -548,4 +548,140 @@ namespace are now named in the message.
 
 ## Results
 
-Nothing yet.
+### Documentation
+
+`docs/human-login.md` covers both flows, the cache's location and mode
+and every refusal reading it can produce, the precedence position D7
+argues for and the one addition made for a caller which named a cluster
+but no credential, what `logout` does and why it needs no cluster, and
+the provenance a login-minted key carries -- including that the server
+serves `provenance` to the `system` namespace alone, so the person who
+logged in does not see it in their own namespace's listing. Linked from
+`README.md`, whose Usage paragraph listed the credential sources and
+now names the cache among them.
+
+`ARCHITECTURE.md` was changed because the component inventory did:
+`credentials.py` and `commandline/auth.py` are new modules, and the
+`Client` authentication bullet listed the credential sources, which the
+cache has changed. `AGENTS.md` was not: no convention changed, and the
+invariants a reader might otherwise need -- create with the mode rather
+than chmod afterwards, the redaction filter matching only a JWT, the
+verbs the CLI group must not build a client for -- are each carried at
+length in the docstrings and comments beside the code they constrain,
+and `AGENTS.md` costs context on every task in the repository.
+
+**Release notes: there is nothing in this repository to update.** There
+is no release notes file and no changelog; releases run
+`softprops/action-gh-release` with `generate_release_notes: true`
+(`.github/workflows/release.yml:248`), so GitHub builds the notes from
+the commit messages between tags at tag time. The step row's
+instruction to update them is satisfied by the commit messages this
+phase already wrote, and inventing a file would create a second
+convention. Separately, the shakenfist repository's
+`docs/release_notes/v07-v08.md` documents federated identity and says
+nothing about human login; that is a different branch and a different
+pull request, so it was left alone and raised with Michael instead.
+
+### Mutation testing
+
+Harness:
+`/srv/nobackups/claude-tmp/.../scratchpad/step-7g/mutate.py`, run
+against a copy of the tree in `step-7g/tree`, one mutant per run with
+the suite bounded by a timeout and the mutated file restored from
+`step-7g/pristine` rather than with git. Thirty mutants across the four
+guards the step row names; the output is `step-7g/mutate-final.out`.
+The harness prints the module path of the copy it tested before
+applying anything, because a script run from the scratch directory
+otherwise imports the installed package.
+
+**Thirty mutants, thirty killed.** The two which survived the first
+pass are recorded below with what was added to kill them.
+
+| Guard | Mutant | Killed by |
+|-------|--------|-----------|
+| state check | `_states_match()` returns True always | `test_client_commandline_auth.PkceTestCase.test_the_state_comparison_refuses_everything_but_a_match` |
+| state check | states compared by length only | `PkceTestCase.test_the_state_comparison_refuses_everything_but_a_match` |
+| state check | a redirect with no state is accepted | `LoopbackListenerTestCase.test_a_redirect_with_no_state_at_all_is_refused` |
+| state check | the code is read before the state is checked | `LoopbackListenerTestCase.test_a_mismatched_state_is_refused_and_the_code_discarded` |
+| state check | a wrong state no longer ends the login | `AuthorizationCodeFlowTestCase.test_a_mismatched_state_stops_the_flow_before_the_exchange` |
+| state check | every login uses the same state | `PkceTestCase.test_no_two_logins_share_a_verifier_or_a_state` |
+| file mode | `UNSAFE_FILE_BITS = 0` | `test_client_credentials.CredentialsTestCase.test_a_readable_file_is_refused_and_names_itself` |
+| file mode | only the group and other read bits are unsafe | `CredentialsTestCase.test_every_group_and_other_bit_is_refused` |
+| file mode | the mode is not checked when the cache is read | `CredentialsTestCase.test_a_readable_file_is_refused_and_names_itself` |
+| file mode | the written file's mode is not verified | `CredentialsTestCase.test_a_write_which_cannot_verify_the_mode_refuses` |
+| file mode | the directory is created 0755 | `CredentialsTestCase.test_the_directory_is_created_owner_only` |
+| file mode | `UNSAFE_DIRECTORY_BITS = 0` | `CredentialsTestCase.test_a_group_writable_directory_is_refused` |
+| file mode | the directory's mode is not checked on read | `CredentialsTestCase.test_a_group_writable_directory_is_refused_on_read` |
+| file mode | `CACHE_FILE_MODE = 0o666` | `CredentialsTestCase.test_the_file_is_created_owner_only` -- **survived the first pass** |
+| file mode | a created directory's mode is not verified | `CredentialsTestCase.test_a_directory_created_with_the_wrong_mode_refuses` -- **survived the first pass** |
+| expiry drop | `_has_expired()` returns False always | `CredentialsTestCase.test_an_expired_credential_is_dropped_on_read` |
+| expiry drop | the boundary is `<` rather than `<=` | `CredentialsTestCase.test_a_credential_expiring_exactly_now_is_dropped` |
+| expiry drop | no expiry is treated as expired | `CredentialsTestCase.test_a_credential_with_no_expiry_is_kept` |
+| expiry drop | `_live_view()` keeps every credential | `test_client_commandline_auth.CredentialCommandTestCase.test_an_expired_credential_is_not_listed` |
+| expiry drop | the selection survives the credential it named | `CredentialsTestCase.test_a_selection_naming_an_expired_credential_is_dropped` |
+| precedence | the cache is consulted before the environment | `test_client_apiclient.ApiClientConfigurationLookupTestCase.test_an_environment_variable_beats_the_cache` |
+| precedence | the cache overwrites a credential already supplied | `ApiClientConfigurationLookupTestCase.test_a_flag_beats_the_cache_without_an_api_url` |
+| precedence | `~/.shakenfist` is consulted before the cache | `ApiClientConfigurationLookupTestCase.test_the_cache_beats_the_user_configuration_file` |
+| precedence | `/etc/sf/shakenfist.json` is consulted before the cache | `ApiClientConfigurationLookupTestCase.test_the_cache_beats_the_system_configuration_file` |
+| precedence | the environment is not re-read for a named cluster | `ApiClientConfigurationLookupTestCase.test_an_environment_credential_beats_the_cache_for_a_named_cluster` |
+| precedence | half a credential is completed from the cache | `ApiClientConfigurationLookupTestCase.test_a_half_supplied_credential_is_not_completed_from_the_cache` |
+| precedence | half an environment credential is completed from the cache | `ApiClientConfigurationLookupTestCase.test_an_environment_key_alone_is_not_completed_from_the_cache` |
+| precedence | the selection is used whichever cluster made it | `ApiClientConfigurationLookupTestCase.test_another_cluster_is_not_answered_from_the_cache` |
+| precedence | an ambiguous cache is guessed between | `ApiClientConfigurationLookupTestCase.test_several_credentials_for_a_named_cluster_are_not_guessed_between` |
+| precedence | an unreadable cache is passed over silently | `ApiClientConfigurationLookupTestCase.test_a_cache_which_cannot_be_read_is_refused_not_passed_over` |
+
+**The two survivors, and what they were.** Neither was a guard which
+worked and went unnoticed; both were a mode nothing compared against.
+
+`CACHE_FILE_MODE` is read by no code at all: `tempfile.mkstemp()`
+creates the cache file 0600 and `_write_atomically()` verifies it
+against `UNSAFE_FILE_BITS`, so the constant documents an intention and
+nothing checked that the intention matched the file. Loosening it to
+0666 changed nothing and no test noticed.
+`test_the_file_is_created_owner_only` now compares the created mode
+against the constant rather than against a literal, which is the only
+thing that can keep the two from drifting apart;
+`test_the_directory_is_created_owner_only` was given the same treatment
+for `CACHE_DIRECTORY_MODE`, which code does read.
+
+`_ensure_directory()` re-stats a directory it has just created and
+refuses one whose mode came out looser than it asked for. No test
+reached that branch, because a umask cannot produce it -- only a
+filesystem granting more than `mkdir()` was asked for can, which is
+exactly what the branch is for. The new
+`test_a_directory_created_with_the_wrong_mode_refuses` patches
+`os.mkdir` to produce a 0755 directory, modelled on its sibling
+`test_a_write_which_cannot_verify_the_mode_refuses`, and both the
+branch and the mutant are now covered.
+
+### A flaky test this step found and fixed
+
+`LoopbackListenerTestCase.test_a_wrong_state_ends_the_login_rather_than_buying_a_guess`
+failed roughly one full-suite run in eight, and nine runs in twelve when
+run on its own. The product is not at fault. The test queues two
+redirects and asserts that the wrong-state one is the one served, but
+both were sent from threads of their own, so which connection the
+listener accepted first was a race: when the good redirect won, the
+listener correctly handed back its code and the assertion that the login
+was refused failed. That matters here beyond the flake, because this
+test is one of the four which kill the state-check mutants.
+
+The refused redirect is now connected and written from the test's own
+thread, so `connect()` has returned before the second is started and the
+accept queue order is settled; its response is read back off the raw
+socket afterwards. 30 runs of the test alone and 15 of the whole suite,
+all passing.
+
+### Checks
+
+* `.tox/py3/bin/python -m stestr run --no-subunit-trace`: 690 tests
+  passing, 0 failing. The baseline was 689; the extra one is the
+  directory mode test added above.
+* `pre-commit run --all-files`: passed.
+
+Worth noting for a later reader: this repository's pre-commit config
+holds actionlint, shellcheck, skillsaw, `tox -eflake8` and `tox -epy3`.
+It has no documentation link hook and no plan-number hook; those are the
+shakenfist repository's. The constraint against naming plans, phases or
+decisions outside a plan file was followed in `docs/human-login.md`
+regardless, and the one documentation link it adds was checked by hand.

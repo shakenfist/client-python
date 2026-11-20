@@ -88,11 +88,16 @@ class CredentialsTestCase(testtools.TestCase):
     # at rest.
     def test_the_file_is_created_owner_only(self):
         credentials.write_credentials([cached()], path=self.path)
-        self.assertEqual(0o600, self.mode_of(self.path))
+        # Compared against the constant rather than against a literal,
+        # because nothing in the write path reads that constant --
+        # mkstemp() is what creates the file -- so this assertion is the
+        # only thing which stops the mode this module documents and the
+        # mode it actually produces from drifting apart.
+        self.assertEqual(credentials.CACHE_FILE_MODE, self.mode_of(self.path))
 
     def test_the_directory_is_created_owner_only(self):
         credentials.write_credentials([cached()], path=self.path)
-        self.assertEqual(0o700, self.mode_of(self.directory))
+        self.assertEqual(credentials.CACHE_DIRECTORY_MODE, self.mode_of(self.directory))
 
     def test_the_temporary_file_is_created_owner_only_beside_the_cache(self):
         # The mode matters on the temporary file as much as on the
@@ -350,6 +355,28 @@ class CredentialsTestCase(testtools.TestCase):
 
         self.assertFalse(os.path.exists(self.path))
         self.assertEqual([], os.listdir(self.directory))
+
+    def test_a_directory_created_with_the_wrong_mode_refuses(self):
+        # The mode of a directory this module created is verified rather
+        # than assumed, for the same reason the temporary file's is: a
+        # filesystem which grants more than mkdir() was asked for -- a
+        # default ACL, an unusual mount -- has to be a refusal, and not a
+        # credential written where other users can reach it.
+        real_mkdir = os.mkdir
+
+        def permissive_mkdir(path, *args, **kwargs):
+            real_mkdir(path)
+            os.chmod(path, 0o755)
+
+        with mock.patch('shakenfist_client.credentials.os.mkdir',
+                        permissive_mkdir):
+            e = self.assertRaises(credentials.CredentialCacheException,
+                                  credentials.write_credentials,
+                                  [cached()], path=self.path)
+
+        self.assertIn(self.directory, str(e))
+        self.assertIn('0755', str(e))
+        self.assertFalse(os.path.exists(self.path))
 
     # Writing a credential set, and the selection.
     def test_a_sole_credential_becomes_the_selection(self):

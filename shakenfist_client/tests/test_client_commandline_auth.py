@@ -542,6 +542,38 @@ class LoopbackListenerTestCase(testtools.TestCase):
         query = dict(params)
         return Redirect('%s?%s' % (listener.redirect_uri, urlencode(query))).start()
 
+    def _queued_redirect(self, listener, **params):
+        """A redirect connected from this thread, ahead of any started later.
+
+        Redirect connects from a thread of its own, which is right
+        wherever the order does not matter. It does matter for a test
+        which queues two of them and asserts which one was served: two
+        threads racing to connect settle that by chance, and the test
+        passes or fails with the race. connect() has returned by the time
+        this does, so this connection is ahead of anything started after
+        it in the listener's accept queue, and its request is already
+        written for the listener to read.
+
+        The response is read with _answer_to() rather than here, because
+        nothing answers this connection until the listener runs.
+        """
+        sock = socket.create_connection(listener._server.server_address[:2])
+        self.addCleanup(sock.close)
+        sock.settimeout(5)
+        sock.sendall(('GET /?%s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n'
+                      % (urlencode(dict(params)), auth.LOOPBACK_ADDRESS)).encode('ascii'))
+        return sock
+
+    def _answer_to(self, sock):
+        """Everything the listener wrote back on a raw connection."""
+        answer = b''
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            answer += chunk
+        return answer.decode('utf-8', 'replace')
+
     def test_it_binds_the_loopback_address_and_an_ephemeral_port(self):
         # Never 0.0.0.0: a redirect carries an authorization code, so a
         # listener reachable from the network is a code anybody on it
@@ -614,18 +646,23 @@ class LoopbackListenerTestCase(testtools.TestCase):
         # second is there to be served if anything is willing to serve it.
         # A listener which answered it would hand this login a code from a
         # redirect that arrived after it had already been told no.
+        #
+        # The refused one is connected from this thread so that it is
+        # certainly the first in the accept queue. Started as a thread of
+        # its own it raced the second, and the test asserted the outcome
+        # of that race rather than the listener's behaviour.
         listener = self._listener(timeout=5)
-        refused = self._redirect(listener, code=AUTHORIZATION_CODE,
-                                 state='not-the-state-this-login-sent')
+        refused = self._queued_redirect(listener, code=AUTHORIZATION_CODE,
+                                        state='not-the-state-this-login-sent')
         second = self._redirect(listener, code=OTHER_AUTHORIZATION_CODE,
                                 state=REDIRECT_STATE)
 
         e = self.assertRaises(auth.LoginFailed, listener.wait_for_redirect)
 
         self.assertIn('wrong state', str(e))
-        refused.wait()
-        self.assertEqual(400, refused.status)
-        self.assertNotIn(AUTHORIZATION_CODE, refused.page)
+        answer = self._answer_to(refused)
+        self.assertIn('400', answer.splitlines()[0])
+        self.assertNotIn(AUTHORIZATION_CODE, answer)
 
         # The second redirect is deliberately never waited on. Its job was
         # to be sitting there ready to be served, and a listener which did
