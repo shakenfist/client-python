@@ -1,5 +1,9 @@
 import copy
+import io
 import json
+import os
+import shutil
+import tempfile
 import time
 import uuid
 from unittest import mock
@@ -8,6 +12,7 @@ import requests
 import testtools
 
 from shakenfist_client import apiclient
+from shakenfist_client import credentials
 
 
 class ApiClientTestCase(testtools.TestCase):
@@ -1414,6 +1419,27 @@ class ApiClientGetNodesTestCase(testtools.TestCase):
 
 
 class ApiClientConfigurationLookupTestCase(testtools.TestCase):
+    """Where a client's credentials come from, and in what order.
+
+    Five sources, consulted in this order: the constructor's arguments
+    (which are the command line flags), the environment variables, the
+    credentials a human login cached, ~/.shakenfist and
+    /etc/sf/shakenfist.json. Each is consulted only while no API URL has
+    been established, so the order is very nearly the whole of the
+    behaviour; the exception is a caller which named a cluster and no
+    credential, which no source answered at all before the cache existed.
+    """
+
+    CLUSTER = 'http://sf.example.com/api'
+    OTHER_CLUSTER = 'http://elsewhere.example.com/api'
+
+    # Deliberately unconvincing. A credential scanner runs over this
+    # repository's history with a positive control, so a fixture shaped like
+    # a real namespace key is a finding whether or not it ever unlocked
+    # anything.
+    CACHED_KEY = 'not-a-cached-key-1'
+    OTHER_CACHED_KEY = 'not-a-cached-key-2'
+
     def setUp(self):
         super().setUp()
 
@@ -1427,6 +1453,80 @@ class ApiClientConfigurationLookupTestCase(testtools.TestCase):
             'shakenfist_client.apiclient.os.path.exists', return_value=False)
         self.mock_exists = self.exists.start()
         self.addCleanup(self.exists.stop)
+
+        # Nor the credential cache on it. The chain asks the cache module
+        # where the file is rather than being told, so that one function is
+        # the only seam a test needs: pointed at an empty temporary
+        # directory, a login by whoever is running the tests cannot change
+        # what they assert.
+        self.tempdir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tempdir, True)
+        self.cache_path = os.path.join(self.tempdir, 'shakenfist', 'credentials.json')
+        self.cache_file = mock.patch(
+            'shakenfist_client.credentials.credentials_path',
+            side_effect=lambda path=None: path or self.cache_path)
+        self.cache_file.start()
+        self.addCleanup(self.cache_file.stop)
+
+    def credential(self, apiurl=None, namespace='cachedspace',
+                   key_name='cached-aaaa', key=None, expiry=None):
+        """One cache entry, shaped as the cache stores it."""
+        return {
+            'apiurl': apiurl or self.CLUSTER,
+            'namespace': namespace,
+            'key_name': key_name,
+            'key': key or self.CACHED_KEY,
+            'expiry': expiry,
+            'scopes': ['blob.read'],
+        }
+
+    def selection(self, credential):
+        return {
+            'apiurl': credential['apiurl'],
+            'namespace': credential['namespace'],
+            'key_name': credential['key_name'],
+        }
+
+    def cache(self, entries, current=-1, mode=None):
+        """Write the credential cache the chain will consult.
+
+        current defaults to selecting the first entry, which is what a login
+        minting one credential leaves behind; None writes a cache with no
+        selection at all.
+        """
+        if current == -1:
+            current = self.selection(entries[0])
+        credentials.write_credentials(entries, current=current, path=self.cache_path)
+        if mode is not None:
+            os.chmod(self.cache_path, mode)
+
+    def configuration_files(self, user_conf=None, system_conf=None):
+        """Make the two configuration files hold these documents.
+
+        Both paths are absolute and neither is one a test may write, so they
+        are answered by name: the chain's os.path.exists() is already
+        patched to deny every path, and open() is redirected for these two
+        and passed through for everything else. Nothing here reads or writes
+        the real ~/.shakenfist or /etc/sf/shakenfist.json.
+        """
+        documents = {}
+        if user_conf is not None:
+            documents[os.path.expanduser('~/.shakenfist')] = user_conf
+        if system_conf is not None:
+            documents['/etc/sf/shakenfist.json'] = system_conf
+
+        self.mock_exists.side_effect = lambda path: path in documents
+
+        real_open = open
+
+        def fake_open(path, *args, **kwargs):
+            if path in documents:
+                return io.StringIO(json.dumps(documents[path]))
+            return real_open(path, *args, **kwargs)
+
+        opener = mock.patch('builtins.open', side_effect=fake_open)
+        opener.start()
+        self.addCleanup(opener.stop)
 
     @mock.patch.dict('os.environ', {
         'SHAKENFIST_API_URL': 'http://sf.example.com/api',
@@ -1457,6 +1557,311 @@ class ApiClientConfigurationLookupTestCase(testtools.TestCase):
     @mock.patch.dict('os.environ', {}, clear=True)
     def test_unconfigured(self):
         self.assertRaises(apiclient.UnconfiguredException, apiclient.Client)
+
+    # -- the credential cache's place in the order -------------------------
+
+    @mock.patch.dict('os.environ', {}, clear=True)
+    def test_a_flag_beats_the_cache(self):
+        # A flag is how a person says "this credential, this time", and it is
+        # as explicit as a login and more recent than one.
+        self.cache([self.credential()])
+
+        client = apiclient.Client(base_url=self.CLUSTER, namespace='flagspace',
+                                  key='flagkey')
+
+        self.assertEqual(self.CLUSTER, client.base_url)
+        self.assertEqual('flagspace', client.namespace)
+        self.assertEqual('flagkey', client.key)
+
+    @mock.patch.dict('os.environ', {}, clear=True)
+    def test_a_flag_beats_the_cache_without_an_api_url(self):
+        # The flags named a credential but not a cluster, so the cache
+        # supplies the cluster it was minted against and nothing else: the
+        # namespace and key the caller named are not replaced.
+        self.cache([self.credential()])
+
+        client = apiclient.Client(namespace='flagspace', key='flagkey')
+
+        self.assertEqual(self.CLUSTER, client.base_url)
+        self.assertEqual('flagspace', client.namespace)
+        self.assertEqual('flagkey', client.key)
+
+    @mock.patch.dict('os.environ', {
+        'SHAKENFIST_API_URL': 'http://sf.example.com/api',
+        'SHAKENFIST_NAMESPACE': 'testspace',
+        'SHAKENFIST_KEY': 'testkey',
+    })
+    def test_an_environment_variable_beats_the_cache(self):
+        # The cache holds a selected credential for the very cluster the
+        # environment names, and still loses: this is how a script or a CI
+        # job pins a credential, and it must not start using whoever logged
+        # in on the machine it runs on.
+        self.cache([self.credential()])
+
+        client = apiclient.Client()
+
+        self.assertEqual('http://sf.example.com/api', client.base_url)
+        self.assertEqual('testspace', client.namespace)
+        self.assertEqual('testkey', client.key)
+
+    @mock.patch.dict('os.environ', {}, clear=True)
+    def test_the_cache_beats_the_user_configuration_file(self):
+        # A login is more recent and more explicit than a configuration file
+        # written at some point in the past. If the file won, the login would
+        # appear to have done nothing.
+        self.cache([self.credential()])
+        self.configuration_files(user_conf={
+            'apiurl': self.OTHER_CLUSTER, 'namespace': 'filespace',
+            'key': 'filekey'})
+
+        client = apiclient.Client()
+
+        self.assertEqual(self.CLUSTER, client.base_url)
+        self.assertEqual('cachedspace', client.namespace)
+        self.assertEqual(self.CACHED_KEY, client.key)
+
+    @mock.patch.dict('os.environ', {}, clear=True)
+    def test_the_cache_beats_the_system_configuration_file(self):
+        self.cache([self.credential()])
+        self.configuration_files(system_conf={
+            'apiurl': self.OTHER_CLUSTER, 'namespace': 'systemspace',
+            'key': 'systemkey'})
+
+        client = apiclient.Client()
+
+        self.assertEqual(self.CLUSTER, client.base_url)
+        self.assertEqual('cachedspace', client.namespace)
+        self.assertEqual(self.CACHED_KEY, client.key)
+
+    @mock.patch.dict('os.environ', {}, clear=True)
+    def test_the_user_configuration_file_is_used_when_there_is_no_cache(self):
+        # Nobody has logged in, so the behaviour is exactly what it was
+        # before the cache existed.
+        self.configuration_files(user_conf={
+            'apiurl': self.OTHER_CLUSTER, 'namespace': 'filespace',
+            'key': 'filekey'})
+
+        client = apiclient.Client()
+
+        self.assertEqual(self.OTHER_CLUSTER, client.base_url)
+        self.assertEqual('filespace', client.namespace)
+        self.assertEqual('filekey', client.key)
+
+    @mock.patch.dict('os.environ', {}, clear=True)
+    def test_the_user_configuration_file_still_beats_the_system_one(self):
+        self.configuration_files(
+            user_conf={'apiurl': self.OTHER_CLUSTER, 'namespace': 'filespace',
+                       'key': 'filekey'},
+            system_conf={'apiurl': self.CLUSTER, 'namespace': 'systemspace',
+                         'key': 'systemkey'})
+
+        client = apiclient.Client()
+
+        self.assertEqual(self.OTHER_CLUSTER, client.base_url)
+        self.assertEqual('filespace', client.namespace)
+        self.assertEqual('filekey', client.key)
+
+    @mock.patch.dict('os.environ', {}, clear=True)
+    def test_an_expired_cached_credential_is_not_used(self):
+        # The cluster stops honouring the key the moment its expiry passes,
+        # so a cache which went on presenting one would turn a lapsed login
+        # into an unexplained authorisation failure.
+        self.cache([self.credential(expiry=1.0)])
+        self.configuration_files(user_conf={
+            'apiurl': self.OTHER_CLUSTER, 'namespace': 'filespace',
+            'key': 'filekey'})
+
+        client = apiclient.Client()
+
+        self.assertEqual(self.OTHER_CLUSTER, client.base_url)
+        self.assertEqual('filespace', client.namespace)
+        self.assertEqual('filekey', client.key)
+
+    @mock.patch.dict('os.environ', {}, clear=True)
+    def test_an_unselected_cache_supplies_nothing(self):
+        # Several credentials and no selection: the person has not said which
+        # namespace they mean, and nothing here guesses.
+        self.cache([self.credential(),
+                    self.credential(namespace='other', key_name='cached-bbbb',
+                                    key=self.OTHER_CACHED_KEY)],
+                   current=None)
+        self.configuration_files(user_conf={
+            'apiurl': self.OTHER_CLUSTER, 'namespace': 'filespace',
+            'key': 'filekey'})
+
+        client = apiclient.Client()
+
+        self.assertEqual(self.OTHER_CLUSTER, client.base_url)
+        self.assertEqual('filespace', client.namespace)
+        self.assertEqual('filekey', client.key)
+
+    @mock.patch.dict('os.environ', {}, clear=True)
+    def test_a_cache_which_cannot_be_read_is_refused_not_passed_over(self):
+        # A world readable cache is indistinguishable from "nobody has logged
+        # in" to anything which only checks whether a credential came back,
+        # so falling through to the configuration file would quietly use a
+        # different identity and say nothing about a long lived secret other
+        # users can now read.
+        self.cache([self.credential()], mode=0o644)
+        self.configuration_files(user_conf={
+            'apiurl': self.OTHER_CLUSTER, 'namespace': 'filespace',
+            'key': 'filekey'})
+
+        e = self.assertRaises(credentials.CredentialCacheException,
+                              apiclient.Client)
+
+        self.assertIn(self.cache_path, str(e))
+
+    @mock.patch.dict('os.environ', {}, clear=True)
+    def test_a_corrupt_cache_is_refused_not_passed_over(self):
+        self.cache([self.credential()])
+        with open(self.cache_path, 'w') as f:
+            f.write('{"version": 1, "credentials": [')
+        self.configuration_files(user_conf={
+            'apiurl': self.OTHER_CLUSTER, 'namespace': 'filespace',
+            'key': 'filekey'})
+
+        e = self.assertRaises(credentials.CredentialCacheException,
+                              apiclient.Client)
+
+        self.assertIn(self.cache_path, str(e))
+
+    @mock.patch.dict('os.environ', {}, clear=True)
+    def test_a_cache_which_cannot_be_read_does_not_break_a_pinned_caller(self):
+        # The file is read only where the cache would have been used, so a
+        # caller which brought its own credentials never reads it and cannot
+        # be stopped by one it did not ask to use.
+        self.cache([self.credential()], mode=0o644)
+
+        client = apiclient.Client(base_url=self.OTHER_CLUSTER,
+                                  namespace='flagspace', key='flagkey')
+
+        self.assertEqual(self.OTHER_CLUSTER, client.base_url)
+        self.assertEqual('flagspace', client.namespace)
+        self.assertEqual('flagkey', client.key)
+
+    # -- a caller which named a cluster but no credential ------------------
+
+    @mock.patch.dict('os.environ', {}, clear=True)
+    def test_the_cache_completes_a_flag_supplied_url(self):
+        # An API URL and nothing else reaches none of the sources below,
+        # because they are all gated on there being no API URL yet, so such a
+        # caller has no credential at all today. The cache can answer that
+        # for the cluster it names.
+        self.cache([self.credential()])
+
+        client = apiclient.Client(base_url=self.CLUSTER)
+
+        self.assertEqual(self.CLUSTER, client.base_url)
+        self.assertEqual('cachedspace', client.namespace)
+        self.assertEqual(self.CACHED_KEY, client.key)
+
+    @mock.patch.dict('os.environ',
+                     {'SHAKENFIST_API_URL': 'http://sf.example.com/api'},
+                     clear=True)
+    def test_the_cache_completes_an_environment_supplied_url(self):
+        self.cache([self.credential()])
+
+        client = apiclient.Client()
+
+        self.assertEqual(self.CLUSTER, client.base_url)
+        self.assertEqual('cachedspace', client.namespace)
+        self.assertEqual(self.CACHED_KEY, client.key)
+
+    @mock.patch.dict('os.environ', {
+        'SHAKENFIST_NAMESPACE': 'testspace',
+        'SHAKENFIST_KEY': 'testkey',
+    }, clear=True)
+    def test_an_environment_credential_beats_the_cache_for_a_named_cluster(self):
+        # The caller named a cluster, so the environment's own API URL never
+        # came up -- but its credential still outranks a login, for the same
+        # reason it does when it supplies the URL too. A job which exports
+        # SHAKENFIST_KEY and passes an API URL must not quietly run as
+        # whoever last logged in on the machine.
+        self.cache([self.credential()])
+
+        client = apiclient.Client(base_url=self.CLUSTER)
+
+        self.assertEqual('testspace', client.namespace)
+        self.assertEqual('testkey', client.key)
+
+    @mock.patch.dict('os.environ', {'SHAKENFIST_KEY': 'testkey'}, clear=True)
+    def test_an_environment_key_alone_is_not_completed_from_the_cache(self):
+        # Half a credential from the environment is still a pinned
+        # credential, and completing the other half from a login would
+        # present a pair that neither ever had.
+        self.cache([self.credential()])
+
+        client = apiclient.Client(base_url=self.CLUSTER)
+
+        self.assertEqual('testkey', client.key)
+        self.assertIsNone(client.namespace)
+
+    @mock.patch.dict('os.environ', {}, clear=True)
+    def test_another_cluster_is_not_answered_from_the_cache(self):
+        # A namespace key is scoped to the cluster which minted it, so a
+        # login against one cluster says nothing about another.
+        self.cache([self.credential()])
+
+        client = apiclient.Client(base_url=self.OTHER_CLUSTER)
+
+        self.assertEqual(self.OTHER_CLUSTER, client.base_url)
+        self.assertIsNone(client.namespace)
+        self.assertIsNone(client.key)
+
+    @mock.patch.dict('os.environ', {}, clear=True)
+    def test_a_half_supplied_credential_is_not_completed_from_the_cache(self):
+        # A caller which named a namespace is pinning a credential.
+        # Completing the other half of it from a login would present a pair
+        # that neither the caller nor the login ever had.
+        self.cache([self.credential()])
+
+        client = apiclient.Client(base_url=self.CLUSTER, namespace='flagspace')
+
+        self.assertEqual('flagspace', client.namespace)
+        self.assertIsNone(client.key)
+
+    @mock.patch.dict('os.environ', {}, clear=True)
+    def test_a_single_credential_answers_a_named_cluster_unselected(self):
+        # The selection is against another cluster, so it cannot answer for
+        # this one -- but one credential for the cluster asked about is not
+        # ambiguous, and leaving the caller with no credential at all when
+        # there is exactly one would be a surprise and not a safeguard.
+        elsewhere = self.credential(apiurl=self.OTHER_CLUSTER,
+                                    namespace='other', key_name='cached-bbbb',
+                                    key=self.OTHER_CACHED_KEY)
+        self.cache([self.credential(), elsewhere],
+                   current=self.selection(elsewhere))
+
+        client = apiclient.Client(base_url=self.CLUSTER)
+
+        self.assertEqual('cachedspace', client.namespace)
+        self.assertEqual(self.CACHED_KEY, client.key)
+
+    @mock.patch.dict('os.environ', {}, clear=True)
+    def test_several_credentials_for_a_named_cluster_are_not_guessed_between(self):
+        self.cache([self.credential(),
+                    self.credential(namespace='other', key_name='cached-bbbb',
+                                    key=self.OTHER_CACHED_KEY)],
+                   current=None)
+
+        client = apiclient.Client(base_url=self.CLUSTER)
+
+        self.assertIsNone(client.namespace)
+        self.assertIsNone(client.key)
+
+    @mock.patch.dict('os.environ', {}, clear=True)
+    def test_a_url_only_caller_is_refused_an_unreadable_cache(self):
+        # The cache is the only source such a caller has, so an unsafe mode
+        # is told to it rather than swallowed: the alternative is a person
+        # whose cached keys are readable by every account on the machine
+        # never hearing about it.
+        self.cache([self.credential()], mode=0o644)
+
+        e = self.assertRaises(credentials.CredentialCacheException,
+                              apiclient.Client, base_url=self.CLUSTER)
+
+        self.assertIn(self.cache_path, str(e))
 
 
 class InstanceCreateBudgetTestCase(testtools.TestCase):

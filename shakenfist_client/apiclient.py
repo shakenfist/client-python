@@ -11,6 +11,8 @@ from uuid import UUID
 
 import requests
 
+from shakenfist_client import credentials
+
 
 LOG = logging.getLogger(__name__)
 LOG.setLevel(logging.INFO)
@@ -448,6 +450,37 @@ def _correct_blob_indexes(d):
     return d
 
 
+def _cached_credential(apiurl=None):
+    """The credential a human login left behind for this client, or None.
+
+    Without an API URL this is the cache's current selection, which carries
+    the API URL along with the namespace and key -- the same three things
+    together that every other source of credentials supplies.
+
+    With one, the caller already knows which cluster it is talking to, and a
+    namespace key is scoped to the cluster which minted it, so only that
+    cluster's entries can answer. The selection does if it was made against
+    that cluster. Otherwise a single cached credential for the cluster is
+    unambiguous and is used, and several are not: choosing between them by
+    guessing is a command run against the wrong namespace, so nothing is
+    returned and it is left to the caller to ask the person which they meant.
+
+    A cache which cannot be read raises rather than returning None. See the
+    reasoning where this is called.
+    """
+    if not apiurl:
+        return credentials.current_credential()
+
+    credential = credentials.current_credential(apiurl=apiurl)
+    if credential:
+        return credential
+
+    for_cluster = credentials.credentials_for_apiurl(apiurl)
+    if len(for_cluster) == 1:
+        return for_cluster[0]
+    return None
+
+
 class Client:
     def __init__(self, base_url=None, verbose=False,
                  namespace=None, key=None, sync_request_timeout=300,
@@ -471,8 +504,9 @@ class Client:
 
         if not suppress_configuration_lookup:
             # Where do we find authentication details? First off, we try command line
-            # flags; then environment variables; ~/.shakenfist (which is a JSON file);
-            # and finally /etc/sf/shakenfist.json. click reads the environment
+            # flags; then environment variables; then the credentials a human login
+            # cached; then ~/.shakenfist (which is a JSON file); and finally
+            # /etc/sf/shakenfist.json. click reads the environment
             # variables for free in the CLI, but we must also do it here so that
             # other library callers (the ansible collection for example) behave the
             # same way as the CLI.
@@ -485,6 +519,75 @@ class Client:
                         namespace = os.environ.get('SHAKENFIST_NAMESPACE')
                     if not key:
                         key = os.environ.get('SHAKENFIST_KEY')
+
+            # A login is the most recent and the most explicit thing a person has
+            # said about which credential they want, so it beats both of the
+            # configuration files below. If a ~/.shakenfist written a year ago won
+            # instead, the login would appear to have done nothing and the failure
+            # would be an unexplained authorisation error rather than a message.
+            # Flags and the environment still win over it, because they are
+            # equally explicit and they are how a script or a CI job pins a
+            # credential: one which sets SHAKENFIST_KEY must not start using a
+            # person's own login because they happened to log in on the same
+            # machine.
+            #
+            # A cache which cannot be read raises out of here rather than being
+            # passed over -- an unsafe file mode, a corrupt file, or a format
+            # version only a newer client understands, each naming the file in its
+            # message. All three are indistinguishable from "nobody has logged in"
+            # to anything which only looks at whether a credential came back, so
+            # carrying on to the configuration files would quietly use an identity
+            # other than the one the person logged in as, and would say nothing
+            # about a long lived secret which other users can now read. A caller
+            # which brought a credential of its own is unaffected either way: the
+            # file is read only where the cache would have been used, which is to
+            # say only where nothing above it answered.
+            if not base_url:
+                LOG.debug('Testing the credential cache')
+                credential = _cached_credential()
+                if credential:
+                    LOG.debug('Loading configuration from the credential cache')
+                    base_url = credential['apiurl']
+                    if not namespace:
+                        namespace = credential['namespace']
+                    if not key:
+                        key = credential['key']
+
+            elif not namespace and not key:
+                # An API URL and nothing else, from a flag or from
+                # SHAKENFIST_API_URL on its own. None of the sources below are
+                # consulted for such a caller -- each of them is gated on there
+                # being no API URL yet -- so today it has no credential at all and
+                # gets an authentication failure from the first request it makes.
+                # The environment, and then the cache, can answer that for the
+                # named cluster without taking anything from a file.
+                #
+                # The environment is asked again here, and not only in the block
+                # above, because that block is reached only when the environment
+                # supplied the API URL as well. A job which exports a key and
+                # passes the cluster on the command line has still pinned a
+                # credential, and must not quietly run as whoever logged in last
+                # on the machine it runs on. It is also what the command line
+                # already does: the CLI reads both variables whether or not it was
+                # given an API URL, and a library caller is meant to behave the
+                # same way as the CLI.
+                #
+                # Both halves have to be missing, at each step. A caller, or an
+                # environment, which named a namespace or a key is pinning a
+                # credential, and completing the other half of it from a login
+                # would present a pair that neither of them ever had.
+                LOG.debug('Testing environment variables for a credential')
+                namespace = os.environ.get('SHAKENFIST_NAMESPACE')
+                key = os.environ.get('SHAKENFIST_KEY')
+
+                if not namespace and not key:
+                    LOG.debug('Testing the credential cache for %s' % base_url)
+                    credential = _cached_credential(base_url)
+                    if credential:
+                        LOG.debug('Loading credentials for %s from the credential '
+                                  'cache' % base_url)
+                        namespace = credential['namespace']
+                        key = credential['key']
 
             if not base_url:
                 LOG.debug('Testing for ~/.shakenfist')
