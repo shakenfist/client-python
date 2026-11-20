@@ -1,23 +1,40 @@
-"""Human login: the device authorization flow, and logging back out.
+"""Human login: two interactive flows, and logging back out.
 
 ``sf-client login`` turns an identity at an external provider into Shaken
-Fist credentials, and ``sf-client logout`` discards them again. The flow
-implemented here is the device authorization grant of RFC 8628: the
-client asks the provider for a short code, the person types that code
-into a browser wherever they have one, and the client polls until the
-provider says the login happened. It needs no browser, no loopback
-listener and no redirect registration on this host, which is why it is
-the flow that works over ssh and inside a container.
+Fist credentials, and ``sf-client logout`` discards them again. Two
+flows are implemented here and ``login`` runs whichever one the
+cluster's providers and this host can both manage, with ``--flow``
+overriding that choice:
+
+* The device authorization grant of RFC 8628: the client asks the
+  provider for a short code, the person types that code into a browser
+  wherever they have one, and the client polls until the provider says
+  the login happened. It needs no browser, no loopback listener and no
+  redirect registration on this host, which is why it is the flow that
+  works over ssh and inside a container, and why it is preferred
+  wherever a provider offers it.
+* The authorization code grant with PKCE, RFC 6749 section 4.1 and RFC
+  7636: the client opens a browser at the provider, waits on a loopback
+  port for the redirect which comes back, and exchanges the
+  authorization code that redirect carries for an identity token. It is
+  the fallback for a provider which advertises no device authorization
+  endpoint, and it is better where a browser exists because nobody has
+  to transcribe a code.
 
 Three properties of this module are deliberate and are easy to undo by
 accident:
 
 * No secret is ever printed or logged, in any output mode or at any log
   level. That covers the identity token the provider issues, the device
-  code the flow polls with, and the namespace keys the cluster mints.
-  The redaction filter ``sf-client`` installs over its own logging
-  matches a JWT, which a namespace key is not, so nothing here may rely
-  on it.
+  code the device flow polls with, the PKCE verifier and the
+  authorization code the browser flow exchanges, and the namespace keys
+  the cluster mints. The redaction filter ``sf-client`` installs over
+  its own logging matches a JWT, which none of those are, so nothing
+  here may rely on it. The single deliberate exception is the
+  authorization URL, printed only where a browser could not be opened:
+  that URL is what the person's browser has to receive for the flow to
+  happen at all, it carries neither the verifier nor the code, and the
+  ``state`` in it is protected by the verifier rather than by secrecy.
 * The instructions, warnings and refusals go to the error stream, and
   standard output carries only the command's own document. A login talks
   to a human in the middle of a command whose output may be being parsed
@@ -29,11 +46,20 @@ accident:
   ``login`` builds its own from an API URL alone.
 """
 
+import base64
 import datetime
+import hashlib
 import json
+import secrets
 import sys
 import time
+import webbrowser
+from http.server import BaseHTTPRequestHandler
+from http.server import HTTPServer
+from urllib.parse import parse_qsl
+from urllib.parse import urlencode
 from urllib.parse import urlparse
+from urllib.parse import urlunparse
 
 import click
 import requests
@@ -43,9 +69,79 @@ from shakenfist_client import apiclient
 from shakenfist_client import credentials
 
 
+# The two flows a login can run, spelled as --flow takes them.
+FLOW_DEVICE = 'device'
+FLOW_CODE = 'code'
+
+# What each flow needs from the issuer metadata the cluster serves. The
+# cluster sends an endpoint only when it has one, deliberately, so a
+# missing endpoint is the answer to "can this flow begin at this
+# provider" rather than something to work around by guessing a URL.
+FLOW_ENDPOINTS = {
+    FLOW_DEVICE: ('device_authorization_endpoint', 'token_endpoint'),
+    FLOW_CODE: ('authorization_endpoint', 'token_endpoint'),
+}
+
+# How to describe a flow, and what it needs, to somebody who has to go
+# and ask an operator to configure the missing half.
+FLOW_DESCRIPTIONS = {
+    FLOW_DEVICE: 'a device authorization login',
+    FLOW_CODE: 'an authorization code login',
+}
+FLOW_REQUIREMENTS = {
+    FLOW_DEVICE: 'a device authorization endpoint and a token endpoint',
+    FLOW_CODE: 'an authorization endpoint and a token endpoint',
+}
+
+# Said in two places, because the flow choice and the provider choice
+# both reach it, and an empty issuer list has exactly one meaning.
+NO_HUMAN_LOGIN = 'This cluster offers no human login.'
+
 # RFC 8628 section 3.4: what a client posts to the token endpoint while
 # it waits for the person to finish.
 DEVICE_CODE_GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:device_code'
+
+# RFC 6749 section 4.1: what the browser flow asks the authorization
+# endpoint for, and the grant it presents to the token endpoint
+# afterwards.
+AUTHORIZATION_RESPONSE_TYPE = 'code'
+AUTHORIZATION_CODE_GRANT_TYPE = 'authorization_code'
+
+# RFC 7636 section 4.2. S256 rather than the plain method the same
+# section allows: under plain the challenge *is* the verifier, so the
+# secret which proves this client started the flow would cross the
+# authorization endpoint's connection and sit in a browser's history.
+PKCE_CHALLENGE_METHOD = 'S256'
+
+# Bytes of randomness behind the verifier and the state. The verifier
+# becomes 86 characters of base64url, inside the 43 to 128 RFC 7636
+# allows, and both are far past guessing.
+PKCE_VERIFIER_BYTES = 64
+STATE_BYTES = 32
+
+# The loopback interface, spelled as an address rather than as a name.
+# RFC 8252 section 7.3 recommends the literal: "localhost" is whatever
+# this host's resolver says it is, which may be ::1, where this listener
+# is not bound. It must never be 0.0.0.0, which would offer a redirect
+# -- and the authorization code in it -- to anything that can reach this
+# machine.
+LOOPBACK_ADDRESS = '127.0.0.1'
+
+# How long the listener waits for the provider to send the person back.
+# Long enough to find a password manager and answer a second factor, and
+# bounded for the same reason the device flow stops at expires_in: the
+# alternative is a terminal which never comes back.
+REDIRECT_TIMEOUT = 300
+
+# How long one connection has to send its request line before the
+# listener gives up on it and goes back to waiting. The timeout above
+# bounds waiting for a connection and nothing else: once something has
+# connected, reading its request is a separate wait, and without this one
+# anything which opens the port and then says nothing holds a login open
+# for as long as it likes. A browser making a speculative connection does
+# exactly that by accident, and any other process on this host can do it
+# on purpose.
+REDIRECT_READ_TIMEOUT = 10
 
 # Section 3.5 again: a client which was not given an interval polls every
 # five seconds, and a provider which answers slow_down wants five seconds
@@ -131,20 +227,30 @@ def _oauth_error(response, document):
     return 'HTTP %s' % response.status_code
 
 
-def _warn_about_plaintext(issuer, tell):
-    """Say so when a provider endpoint is not https.
+def _warn_about_plaintext(issuer, tell, flow=FLOW_DEVICE):
+    """Say so when an endpoint this flow will use is not https.
 
-    An identity token crosses this connection, so a plaintext endpoint
-    hands it to anybody on the path between here and the provider. This
-    warns rather than refuses because the operator chose these endpoints
-    and a test provider on a loopback address is a legitimate thing to
-    log in to -- but it must not be silent.
+    Every one of them carries a credential: an identity token comes back
+    from the token endpoint, the device endpoint hands out the code the
+    poll loop presents, and the browser flow's authorization endpoint
+    takes the person's password at the provider and returns an
+    authorization code through the redirect. A plaintext endpoint offers
+    whichever of those it handles to anybody on the path.
+
+    Only the endpoints the chosen flow will actually use are checked.
+    The cluster may have an endpoint configured for a flow this login is
+    not running, and warning about a connection nothing will open would
+    teach a person to ignore the warning.
+
+    This warns rather than refuses because the operator chose these
+    endpoints and a test provider on a loopback address is a legitimate
+    thing to log in to -- but it must not be silent.
     """
-    for field in ('device_authorization_endpoint', 'token_endpoint'):
+    for field in FLOW_ENDPOINTS[flow]:
         endpoint = issuer.get(field)
         if endpoint and urlparse(endpoint).scheme != 'https':
-            tell('Warning: the %s at %s is not https, so the identity token this '
-                 'login sends will cross the network in plain text.'
+            tell('Warning: the %s at %s is not https, so the credentials this login '
+                 'exchanges with it will cross the network in plain text.'
                  % (field.replace('_', ' '), endpoint))
 
 
@@ -290,7 +396,7 @@ def device_authorization_login(issuer, sleep=None, clock=None, tell=None):
     clock = clock or time.monotonic
     tell = tell or _tell
 
-    _warn_about_plaintext(issuer, tell)
+    _warn_about_plaintext(issuer, tell, flow=FLOW_DEVICE)
     started = _request_device_code(issuer)
     _show_the_code(started, tell)
 
@@ -338,16 +444,598 @@ def device_authorization_login(issuer, sleep=None, clock=None, tell=None):
                           % _oauth_error(r, document))
 
 
-def _issuers_for_this_flow(issuers):
-    """The issuers whose metadata says a device login can begin there.
+def _base64url(raw):
+    """base64url with the padding stripped, which is what RFC 7636 uses."""
+    return base64.urlsafe_b64encode(raw).rstrip(b'=').decode('ascii')
+
+
+def _pkce_pair():
+    """A PKCE verifier and the challenge derived from it.
+
+    The verifier is the secret which proves that whatever asks the token
+    endpoint for a token is whatever asked the authorization endpoint
+    for the code. It never leaves this process until it goes to the
+    token endpoint: what the browser carries is the challenge, which is
+    its SHA-256 digest, so an authorization request read off the wire or
+    out of a browser history cannot be turned into a token request.
+
+    That is also what makes the state parameter safe to print. Somebody
+    who learns the state can send this listener a redirect carrying an
+    authorization code of their own, but the exchange of that code
+    requires a verifier generated here and never shown to them.
+    """
+    verifier = _base64url(secrets.token_bytes(PKCE_VERIFIER_BYTES))
+    challenge = _base64url(hashlib.sha256(verifier.encode('ascii')).digest())
+    return verifier, challenge
+
+
+def _new_state():
+    """A fresh state parameter for one authorization request.
+
+    The state ties the redirect this client receives to the
+    authorization request it sent. A redirect carrying anything else is
+    somebody else's: a stale browser tab, a bookmarked redirect, or an
+    attempt to hand this client an authorization code belonging to
+    another identity.
+    """
+    return secrets.token_urlsafe(STATE_BYTES)
+
+
+def _states_match(expected, received):
+    """Whether a redirect carries the state this login generated.
+
+    secrets.compare_digest rather than ``==``, and not because a timing
+    attack is available as this is written: the listener serves exactly
+    one request, so there is no second measurement for anybody to take.
+    It is the comparison which stays correct if that ever changes, and
+    it costs nothing to make now.
+
+    A redirect with no state, or with a state carrying anything outside
+    ASCII, is refused here rather than being allowed to raise out of the
+    request handler -- where the traceback would carry the request line,
+    and the request line is the authorization code.
+    """
+    if not expected or not received:
+        return False
+    try:
+        return secrets.compare_digest(expected, received)
+    except TypeError:
+        return False
+
+
+# What the browser is shown when the redirect arrives, served from here
+# rather than fetched: a login must not depend on reaching anything the
+# provider is not, and this page is the last thing the person sees, so a
+# blank tab would read as a flow which hung. Each kind of redirect gets
+# its own page and its own status, and none of them renders anything out
+# of the request -- the authorization code and the state are in there.
+REDIRECT_PAGE = """<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Shaken Fist login</title></head>
+<body style="font-family: sans-serif; margin: 4em auto; max-width: 34em;">
+<h1>%s</h1>
+<p>%s</p>
+</body>
+</html>
+"""
+
+REDIRECT_PAGES = {
+    'code': (200, 'Login complete',
+             'Shaken Fist has what it needs. You can close this tab and go back to '
+             'the terminal.'),
+    'state': (400, 'Login refused',
+              'This redirect does not match the login this client started, so nothing '
+              'in it was used. Start the login again from the terminal.'),
+    'error': (400, 'Login refused',
+              'The identity provider refused this login. The terminal says what it '
+              'answered.'),
+    'other': (404, 'Nothing to do here',
+              'This port is a Shaken Fist client waiting for one login redirect, and '
+              'this request was not one.'),
+}
+
+
+class _RedirectHandler(BaseHTTPRequestHandler):
+    """Answer one OAuth redirect, and record for the flow what it was.
+
+    The result is recorded on the server rather than returned, because a
+    handler is constructed per request and the flow outlives it.
+
+    Nothing here logs. The base class writes the request line to stderr
+    for every request it serves, and in this flow the request line is
+    the authorization code and the state: a credential and the nonce
+    protecting it, printed on the terminal and into whatever is
+    capturing it.
+
+    The timeout is the one the stream handler puts on the connection
+    socket, and it is the only thing bounding the read of a request which
+    has connected but not spoken. The server's own timeout does not cover
+    that, so without this the listener waits on such a connection
+    forever.
+    """
+
+    def setup(self):
+        """Bound the read of this connection before anything reads it.
+
+        The stream handler applies its own class level timeout to the
+        socket, and a class attribute belongs to every login at once, so
+        the value this login was given is put on the instance first. A
+        test can then bound the read by constructing a listener rather
+        than by patching the class -- which would override the bound it
+        was trying to prove was there.
+        """
+        self.timeout = self.server.read_timeout
+        super().setup()
+
+    def do_GET(self):
+        params = dict(parse_qsl(urlparse(self.path).query, keep_blank_values=True))
+        result = self._classify(params)
+        self.server.result = result
+        self._answer(result)
+
+    def _classify(self, params):
+        """What this request is, in the order the checks have to happen.
+
+        The state is compared before the code is read, so that the code
+        from a redirect which does not match this login is never put
+        anywhere the flow can reach it. Doing it the other way round
+        would leave the refusal correct and the code one edit away from
+        being used.
+        """
+        if not any(params.get(field) for field in ('state', 'code', 'error')):
+            return {'kind': 'other'}
+
+        if not _states_match(self.server.login_state, params.get('state')):
+            return {'kind': 'state'}
+
+        if params.get('error'):
+            return {'kind': 'error', 'error': params['error'],
+                    'description': params.get('error_description')}
+
+        if not params.get('code'):
+            return {'kind': 'other'}
+
+        return {'kind': 'code', 'code': params['code']}
+
+    def _answer(self, result):
+        status, heading, body = REDIRECT_PAGES[result['kind']]
+        page = (REDIRECT_PAGE % (heading, body)).encode('utf-8')
+        self.send_response(status)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Length', str(len(page)))
+        self.end_headers()
+        self.wfile.write(page)
+
+    def log_message(self, format, *args):
+        """Log nothing at all. See this class's docstring for why."""
+        ...
+
+
+class _RedirectServer(HTTPServer):
+    """An HTTP server which exists to receive one redirect.
+
+    Subclassed for three reasons. The state a handler compares against
+    and the result it records belong to the login rather than to one
+    request, and a handler is built per request. Whether anything
+    connected at all is a different answer from what it sent, and the
+    flow needs to tell a provider which never came back from one which
+    came back with something unusable. And a failure inside a handler
+    must not reach the terminal: the default prints a traceback, which
+    for this server may carry the request line the handler was parsing.
+    """
+
+    def __init__(self, address, state, read_timeout=REDIRECT_READ_TIMEOUT):
+        super().__init__(address, _RedirectHandler)
+        self.login_state = state
+        self.read_timeout = read_timeout
+        self.result = None
+        self.served = False
+
+    def process_request(self, request, client_address):
+        self.served = True
+        super().process_request(request, client_address)
+
+    def handle_error(self, request, client_address):
+        """Swallow a handler failure rather than printing it.
+
+        The result stays None, which the flow reports as a request that
+        arrived and could not be used. That is the whole of what a
+        person can act on, and the traceback the base class would print
+        here is the one which carries the authorization code.
+        """
+        ...
+
+
+class LoopbackRedirectListener:
+    """A loopback listener which receives one authorization redirect.
+
+    Three properties are load bearing, and each of them is one edit away
+    from being lost:
+
+    * It binds the loopback address and nothing else. A redirect carries
+      an authorization code, so a listener on 0.0.0.0 would offer
+      anything which can reach this machine the chance to race the
+      provider's browser to the port, or to hand this client a code of
+      its own.
+    * The port is ephemeral, chosen by the kernel. Nothing has to be
+      reserved for a login and two logins can run side by side.
+    * It serves exactly one request and then stops. The redirect is the
+      first thing the provider's browser sends here, so a second request
+      is not part of this login -- and serving one request is also what
+      denies anybody the repeated attempts that guessing the state would
+      take.
+
+    What has to be registered at the provider: RFC 8252 section 7.3
+    describes this listener, and requires an authorization server to
+    allow any port for a loopback redirect, comparing only the scheme,
+    the host and the path. So one registration covers every login this
+    client will ever run, and it is ``http://127.0.0.1/`` against the
+    client identifier the cluster publishes. Where that is missing, or
+    where the provider was given a fixed port or the name
+    ``localhost``, the provider refuses the authorization request in the
+    browser and redirects nothing here: the failure happens there and
+    nothing arrives here to explain it, which is why the timeout refusal
+    names the URI it was waiting on and says where to look.
+    """
+
+    def __init__(self, state, timeout=REDIRECT_TIMEOUT, address=LOOPBACK_ADDRESS,
+                 clock=None, read_timeout=REDIRECT_READ_TIMEOUT):
+        self._timeout = timeout
+        self._clock = clock or time.monotonic
+        self._server = _RedirectServer((address, 0), state,
+                                       read_timeout=read_timeout)
+        # handle_request() reads this off the server, and without it the
+        # one request this listener serves is waited for forever.
+        self._server.timeout = timeout
+
+    @property
+    def redirect_uri(self):
+        """Where the provider is asked to send the person back to."""
+        host, port = self._server.server_address[:2]
+        return 'http://%s:%d/' % (host, port)
+
+    def wait_for_redirect(self):
+        """Wait for the one redirect, and return the code it carried.
+
+        Every outcome other than a code is a refusal with something in
+        it a person can act on, and none of them renders the request.
+
+        One *request* is served, which is not the same as one connection.
+        A connection which never sends a request line is not an attempt at
+        this login -- a browser's speculative connection is the ordinary
+        way that happens -- and treating it as one would let it decide the
+        outcome of a login it was not part of. So such a connection is
+        abandoned and the wait resumes with whatever is left of the
+        deadline, while the first request which does arrive settles the
+        matter whatever it says. That is what keeps the single attempt
+        property: a redirect carrying the wrong state still stops the
+        login, rather than buying another guess.
+        """
+        deadline = self._clock() + self._timeout
+        while self._server.result is None:
+            remaining = deadline - self._clock()
+            if remaining <= 0:
+                break
+            self._server.timeout = remaining
+            self._server.handle_request()
+
+        if not self._server.served:
+            raise LoginFailed(
+                'The identity provider did not send the login back to %s within %d '
+                'seconds, so no credentials were minted. If the browser showed an error '
+                'at the provider rather than a login page, then this redirect is not '
+                'registered there for this cluster: a provider has to accept '
+                'http://%s/ with whatever port each login picks, which it is required '
+                'to allow for a loopback address.'
+                % (self.redirect_uri, self._timeout, LOOPBACK_ADDRESS))
+
+        result = self._server.result
+        if result is None or result['kind'] == 'other':
+            raise LoginFailed(
+                'Something reached %s which was not a login redirect, so this login has '
+                'nothing to continue with. Run it again.' % self.redirect_uri)
+
+        if result['kind'] == 'state':
+            raise LoginFailed(
+                'The login came back to this host carrying the wrong state, so it was '
+                'refused and nothing in it was used. The redirect did not belong to the '
+                'login this client started: run the login again, and if it keeps '
+                'happening then something other than your browser is sending redirects '
+                'to this port.')
+
+        if result['kind'] == 'error':
+            raise LoginFailed('The identity provider refused the login: %s'
+                              % _redirect_error(result))
+
+        return result['code']
+
+    def close(self):
+        """Give up the port. Safe to call more than once."""
+        self._server.server_close()
+
+
+def _redirect_error(result):
+    """Render the error a redirect carried, and nothing else from it.
+
+    The same two fields the token endpoint's refusals render, for the
+    same reason: they are the only ones which say what went wrong and
+    the only ones which are not part of a credential.
+    """
+    if result.get('description'):
+        return '%s (%s)' % (result['error'], result['description'])
+    return result['error']
+
+
+def _authorization_url(issuer, redirect_uri, challenge, state):
+    """The URL to send the person's browser to.
+
+    Built on top of whatever query the endpoint already carries rather
+    than by appending a question mark and hoping: an authorization
+    endpoint with parameters of its own is a real thing -- a tenant
+    identifier, say -- and replacing them would send the person
+    somewhere that does not know this cluster.
+
+    The scopes arrive from the cluster as one space separated string,
+    which is already the format the scope parameter takes.
+    """
+    parsed = urlparse(issuer['authorization_endpoint'])
+    params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    params.update({
+        'response_type': AUTHORIZATION_RESPONSE_TYPE,
+        'client_id': issuer['client_id'],
+        'redirect_uri': redirect_uri,
+        'state': state,
+        'code_challenge': challenge,
+        'code_challenge_method': PKCE_CHALLENGE_METHOD,
+    })
+    if issuer.get('oidc_scopes'):
+        params['scope'] = issuer['oidc_scopes']
+    return urlunparse(parsed._replace(query=urlencode(params)))
+
+
+def _open_browser(url):
+    """Open the person's browser at the provider, and say whether it worked.
+
+    webbrowser.open() answers False where it has no browser to open and
+    raises where it found one it could not start. Both are the same
+    answer here, and neither may end the login: the URL is printed
+    instead, which is the only thing somebody on a host without a
+    browser can act on.
+    """
+    try:
+        return bool(webbrowser.open(url))
+    except (webbrowser.Error, OSError):
+        return False
+
+
+def _browser_is_available():
+    """Whether this host has a browser at all.
+
+    Asked when the flow is being chosen rather than after one has
+    started, because the browser flow cannot be completed on a host
+    without one. The redirect comes back to a listener here, so a URL
+    printed here and opened on another machine sends the provider's
+    redirect to that machine's own loopback address, where nothing is
+    listening.
+
+    webbrowser.get() raises where it has nothing registered, which is
+    the state of a container, or of an ssh session with no display and
+    no terminal browser installed.
+    """
+    try:
+        webbrowser.get()
+        return True
+    except webbrowser.Error:
+        return False
+
+
+def _send_the_person_to_the_provider(url, issuer, open_browser, tell):
+    """Get the authorization request in front of the person, somehow.
+
+    The URL is printed only where the browser could not be opened. It
+    carries the state and the challenge rather than any secret the flow
+    depends on -- the verifier is the secret, and it stays here -- but it
+    is still the one thing this module prints which somebody could paste
+    somewhere, so it is printed when it is the only way forward and not
+    otherwise.
+    """
+    tell('')
+    if open_browser(url):
+        tell('A browser has been opened at your identity provider. Sign in there and '
+             'this login will carry on by itself.')
+    else:
+        tell('There is no browser here to open, so open this URL yourself, in a browser '
+             'on this machine -- the login comes back to a listener on this host, so a '
+             'browser elsewhere cannot complete it:')
+        tell('')
+        tell(url)
+        if issuer.get('device_authorization_endpoint'):
+            tell('')
+            tell('This provider also offers a login which needs no browser at all: '
+                 'interrupt this and run it again with --flow=%s.' % FLOW_DEVICE)
+    tell('')
+    tell('Waiting for the login to be completed...')
+
+
+def _exchange_code(issuer, code, verifier, redirect_uri):
+    """Exchange the authorization code for an identity token.
+
+    The redirect URI goes with it, as RFC 6749 section 4.1.3 requires:
+    the provider compares it with the one the authorization request
+    carried, and that comparison is what stops a code issued for one
+    redirect being spent against another.
+
+    Nothing here renders the body or the code. The body is a token
+    response, and the code is a live credential until the provider
+    answers.
+    """
+    endpoint = issuer['token_endpoint']
+    body = {
+        'grant_type': AUTHORIZATION_CODE_GRANT_TYPE,
+        'code': code,
+        'redirect_uri': redirect_uri,
+        'client_id': issuer['client_id'],
+        'code_verifier': verifier,
+    }
+
+    try:
+        r = requests.post(endpoint, data=body, timeout=ISSUER_REQUEST_TIMEOUT)
+    except requests.exceptions.RequestException as e:
+        raise LoginFailed('Could not reach the identity provider at %s: %s'
+                          % (endpoint, e))
+
+    document = _json_body(r)
+    if r.status_code != 200:
+        raise LoginFailed(
+            'The identity provider would not complete the login: %s. The login itself '
+            'happened -- the provider sent this client back a code -- so what it refused '
+            'is the exchange of that code. The cluster may be registered at the provider '
+            'as a client which has to send a secret, which a client running on a '
+            'workstation has no way to keep.' % _oauth_error(r, document))
+
+    token = document.get('id_token')
+    if not token:
+        raise LoginFailed(
+            'The identity provider completed the login but returned no identity token, '
+            'so there is nothing to present to the cluster. The provider may not be '
+            'configured to issue one for the scopes this cluster asks for.')
+    return token
+
+
+def authorization_code_login(issuer, listener_factory=None, open_browser=None,
+                             tell=None, timeout=REDIRECT_TIMEOUT):
+    """Run an authorization code flow with PKCE, and return an identity token.
+
+    The identity token is the only thing this returns, for the same
+    reason the device flow returns only that: the provider's access and
+    refresh tokens are credentials this cluster cannot revoke, so
+    nothing here keeps them.
+
+    The order matters. The listener is bound before the browser is
+    opened, because the redirect URI has to name a port something is
+    already listening on -- a browser which arrived first would be
+    refused by the kernel. The port is given up before the code is
+    exchanged, because it has done its job the moment the redirect
+    arrives and an open port is something else's opportunity.
+
+    listener_factory, open_browser and tell are injected so that a test
+    can run the flow without a browser and without reaching a provider.
+    The listener a test supplies is a real one on a real loopback port,
+    because the socket is the thing worth testing.
+    """
+    tell = tell or _tell
+    open_browser = open_browser or _open_browser
+    listener_factory = listener_factory or LoopbackRedirectListener
+
+    _warn_about_plaintext(issuer, tell, flow=FLOW_CODE)
+
+    verifier, challenge = _pkce_pair()
+    state = _new_state()
+
+    listener = listener_factory(state, timeout=timeout)
+    redirect_uri = listener.redirect_uri
+    try:
+        url = _authorization_url(issuer, redirect_uri, challenge, state)
+        _send_the_person_to_the_provider(url, issuer, open_browser, tell)
+        code = listener.wait_for_redirect()
+    finally:
+        listener.close()
+
+    return _exchange_code(issuer, code, verifier, redirect_uri)
+
+
+def _issuers_for_this_flow(issuers, flow=FLOW_DEVICE):
+    """The issuers whose metadata says this flow can begin there.
 
     The cluster sends an endpoint only when it has one, deliberately, so
-    the absence of a device authorization endpoint is the answer to "can
-    this provider do the device flow here". A client which posted to it
-    anyway would be sending a client identifier to a URL it invented.
+    the absence of one is the answer to "can this provider do this flow
+    here". A client which posted to it anyway would be sending a client
+    identifier to a URL it invented.
+
+    Both of a flow's endpoints are required, not only the one which
+    names it. The device flow polls the token endpoint and the browser
+    flow exchanges its code there, so a provider with no token endpoint
+    cannot finish either -- and it would fail after the person had
+    authenticated rather than before they started.
     """
+    required = FLOW_ENDPOINTS[flow]
     return [issuer for issuer in issuers
-            if issuer.get('device_authorization_endpoint')]
+            if all(issuer.get(field) for field in required)]
+
+
+def _issuer_names(issuers):
+    """The provider names, for a refusal which has to name them."""
+    return ', '.join(sorted(issuer['name'] for issuer in issuers))
+
+
+def _the_other_flow(issuers, flow):
+    """What to say about the flow the person did not ask for.
+
+    Said only where it would work. A provider which advertises what the
+    other flow needs is the difference between "this cluster cannot do
+    this" and "ask for the other one", and nobody at the terminal can
+    read the issuer metadata to work that out for themselves.
+    """
+    other = FLOW_CODE if flow == FLOW_DEVICE else FLOW_DEVICE
+    usable = _issuers_for_this_flow(issuers, other)
+    if not usable:
+        return ''
+    return (' %s advertises what %s needs, so "--flow=%s" would run here.'
+            % (_issuer_names(usable), FLOW_DESCRIPTIONS[other], other))
+
+
+def _choose_flow(issuers, requested=None, tell=None, browser_available=None):
+    """Pick which flow to run, from what is advertised and what is here.
+
+    The device flow is preferred wherever a provider offers it, because
+    it asks nothing of this host: no browser, no loopback listener, no
+    redirect registered at the provider. The browser flow is the
+    fallback, for a provider which advertises no device authorization
+    endpoint.
+
+    An automatic choice will not land on the browser flow on a host with
+    no browser, because the redirect has to come back to a listener
+    here. A flow the person asked for is run regardless: they know
+    things this cannot -- that a port is forwarded, or that the browser
+    here is the one their identity is signed in to -- and the flow
+    prints the URL rather than hanging when the browser will not open.
+    """
+    tell = tell or _tell
+    browser_available = browser_available or _browser_is_available
+
+    if not issuers:
+        raise LoginFailed(NO_HUMAN_LOGIN)
+
+    if requested:
+        # Deliberately not checked against what the providers advertise
+        # here. The provider choice reports that, and it can name which
+        # providers would have suited the other flow instead.
+        return requested
+
+    if _issuers_for_this_flow(issuers, FLOW_DEVICE):
+        return FLOW_DEVICE
+
+    if _issuers_for_this_flow(issuers, FLOW_CODE):
+        if browser_available():
+            # Said out loud, because a browser opening by itself is
+            # surprising on a verb which usually just prints a code.
+            tell('No provider here offers a login which works without a browser, so '
+                 'this login will open one.')
+            return FLOW_CODE
+        raise LoginFailed(
+            'The only login %s offers needs a browser on this host to send you to the '
+            'provider and a listener here for the answer to come back to, and there is '
+            'no browser here. Log in from a host which has one, or ask an operator to '
+            'configure a device authorization endpoint for this provider, which is the '
+            'login that needs no browser. "--flow=%s" runs this one anyway and prints '
+            'the URL for you to open.' % (_issuer_names(issuers), FLOW_CODE))
+
+    raise LoginFailed(
+        'This cluster offers human login through %s, but none of those providers '
+        'advertises what either of the logins this client can run needs: %s, or %s. An '
+        'operator configures those on the cluster trusted issuer.'
+        % (_issuer_names(issuers), FLOW_REQUIREMENTS[FLOW_DEVICE],
+           FLOW_REQUIREMENTS[FLOW_CODE]))
 
 
 def _prompt_for_issuer(issuers, tell):
@@ -365,26 +1053,33 @@ def _prompt_for_issuer(issuers, tell):
     return issuers[choice - 1]
 
 
-def _choose_issuer(issuers, tell=None, prompt=None):
-    """Pick the provider to log in through.
+def _choose_issuer(issuers, tell=None, prompt=None, flow=FLOW_DEVICE):
+    """Pick the provider to log in through, for the flow being run.
 
     An empty list is a complete answer rather than a fault: the cluster
     is saying it offers no human login, and the only thing to do with
     that is say so.
+
+    Only the providers which can run this flow are offered, and where
+    none of them can the refusal names what the flow needed. That
+    refusal is also where a flow the person asked for meets a cluster
+    which cannot run it, so it says whether the other flow would have
+    worked instead.
     """
     tell = tell or _tell
     prompt = prompt or _prompt_for_issuer
 
     if not issuers:
-        raise LoginFailed('This cluster offers no human login.')
+        raise LoginFailed(NO_HUMAN_LOGIN)
 
-    usable = sorted(_issuers_for_this_flow(issuers), key=lambda i: i['name'])
+    usable = sorted(_issuers_for_this_flow(issuers, flow), key=lambda i: i['name'])
     if not usable:
         raise LoginFailed(
             'This cluster offers human login through %s, but none of those providers '
-            'advertises a device authorization endpoint, so there is no login this '
-            'client can run against them.'
-            % ', '.join(sorted(issuer['name'] for issuer in issuers)))
+            'advertises %s, which is what %s needs, so there is no login this client '
+            'can run against them.%s'
+            % (_issuer_names(issuers), FLOW_REQUIREMENTS[flow],
+               FLOW_DESCRIPTIONS[flow], _the_other_flow(issuers, flow)))
 
     if len(usable) == 1:
         return usable[0]
@@ -635,23 +1330,36 @@ def _show_what_was_minted(ctx, stored):
 
 @click.command(name='login',
                help='Log in through an identity provider')
+@click.option('--flow', 'flow', default=None,
+              type=click.Choice([FLOW_DEVICE, FLOW_CODE]),
+              help=('Run a particular login flow instead of choosing one from what '
+                    'the cluster advertises and what this host can do'))
 @click.pass_context
-def login(ctx):
+def login(ctx, flow):
     """Log in to a cluster through one of the identity providers it trusts.
 
     Builds its own client, from an API URL alone, because the group
     cannot build one for somebody who has no credential yet -- which is
     the normal state for the first command a new user runs.
+
+    The flow is chosen before the provider, because which providers can
+    be used depends on which flow is being run. --flow is an override
+    rather than a hint: a flow the person asked for is attempted even
+    where the automatic choice would have avoided it.
     """
     try:
         client = _client_for_login(ctx.obj.get('APIURL'),
                                    verbose=bool(ctx.obj.get('VERBOSE')))
         issuers = _login_issuers(client)
         _check_the_cluster_can_mint(client)
-        issuer = _choose_issuer(issuers)
+        flow = _choose_flow(issuers, requested=flow)
+        issuer = _choose_issuer(issuers, flow=flow)
 
         _tell('Logging in to %s through %s.' % (client.base_url, issuer['name']))
-        token = device_authorization_login(issuer)
+        if flow == FLOW_CODE:
+            token = authorization_code_login(issuer)
+        else:
+            token = device_authorization_login(issuer)
 
         # The token is spent here and kept nowhere. What is cached is
         # what the cluster minted from it, which is a credential this

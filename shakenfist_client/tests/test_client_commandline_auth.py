@@ -1,8 +1,18 @@
+import base64
+import hashlib
 import json
 import os
 import shutil
+import socket
 import tempfile
+import threading
+import time
+import urllib.error
+import urllib.request
 from unittest import mock
+from urllib.parse import parse_qsl
+from urllib.parse import urlencode
+from urllib.parse import urlparse
 
 import testtools
 from click.testing import CliRunner
@@ -24,8 +34,19 @@ OTHER_CLUSTER = 'http://localhost:13001'
 IDENTITY_TOKEN = 'not-an-identity-token-1'
 PROVIDER_ACCESS_TOKEN = 'not-an-access-token-1'
 DEVICE_CODE = 'not-a-device-code-1'
+AUTHORIZATION_CODE = 'not-an-authorization-code-1'
+OTHER_AUTHORIZATION_CODE = 'not-an-authorization-code-2'
+REDIRECT_STATE = 'not-a-state-1'
+WRONG_STATE = 'not-the-state-this-login-generated'
 MINTED_KEY = 'not-a-key-1'
 OTHER_MINTED_KEY = 'not-a-key-2'
+
+# Stands in the place of a state value in a redirect a test asks for,
+# and is replaced with whatever state the authorization request actually
+# carried. A provider echoes the state back rather than inventing one,
+# and a test which pinned a state of its own would be testing a
+# comparison against itself.
+ECHO_THE_STATE = object()
 
 ISSUER = {
     'name': 'corporate',
@@ -131,6 +152,66 @@ class Teller:
     @property
     def text(self):
         return '\n'.join(self.said)
+
+
+def unused_port():
+    """A loopback port nothing is listening on.
+
+    Bound and released, which is the only way to be told a port is free.
+    Nothing in this process will take it afterwards, and a test which
+    used it is asserting that a redirect sent there is lost rather than
+    that the port stays free.
+    """
+    probe = socket.socket()
+    try:
+        probe.bind(('127.0.0.1', 0))
+        return probe.getsockname()[1]
+    finally:
+        probe.close()
+
+
+class Redirect:
+    """The request the provider's browser makes to the loopback listener.
+
+    Sent from a thread, because the two halves of a redirect are a
+    server waiting and a browser arriving: the listener blocks the
+    thread which called it, so a test which sent the request first would
+    be testing a socket backlog rather than a listener.
+
+    A real connection to the real port, which is the only honest test of
+    a listener. It goes to the loopback address and nowhere else, and
+    the thread is bounded by a timeout of its own so that a listener
+    which never answers cannot hang the suite.
+    """
+
+    def __init__(self, url):
+        self.url = url
+        self.status = None
+        self.page = None
+        self.error = None
+        self._thread = threading.Thread(target=self._go)
+        self._thread.daemon = True
+
+    def start(self):
+        self._thread.start()
+        return self
+
+    def _go(self):
+        try:
+            with urllib.request.urlopen(self.url, timeout=5) as r:
+                self.status = r.getcode()
+                self.page = r.read().decode('utf-8')
+        except urllib.error.HTTPError as e:
+            # A refusal is a page as much as a success is: it is what
+            # the person is left looking at.
+            self.status = e.code
+            self.page = e.read().decode('utf-8')
+        except Exception as e:
+            self.error = e
+
+    def wait(self):
+        self._thread.join(10)
+        return self
 
 
 class DeviceAuthorizationFlowTestCase(testtools.TestCase):
@@ -393,6 +474,644 @@ class DeviceAuthorizationFlowTestCase(testtools.TestCase):
         self.assertIn('Could not reach the identity provider', str(e))
 
 
+class PkceTestCase(testtools.TestCase):
+    """The verifier, the challenge and the state the browser flow makes."""
+
+    def test_the_verifier_is_a_legal_pkce_verifier(self):
+        verifier, _ = auth._pkce_pair()
+
+        # RFC 7636 section 4.1: 43 to 128 characters, and only the
+        # unreserved set, which is what base64url without padding is.
+        self.assertTrue(43 <= len(verifier) <= 128, len(verifier))
+        self.assertEqual('', verifier.strip('ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+                                            'abcdefghijklmnopqrstuvwxyz'
+                                            '0123456789-._~'))
+
+    def test_the_challenge_is_the_s256_digest_of_the_verifier(self):
+        # The whole point of S256: what the browser carries is a digest,
+        # so reading the authorization request does not hand anybody the
+        # secret which completes the exchange.
+        verifier, challenge = auth._pkce_pair()
+
+        expected = base64.urlsafe_b64encode(
+            hashlib.sha256(verifier.encode('ascii')).digest()).rstrip(b'=')
+        self.assertEqual(expected.decode('ascii'), challenge)
+        self.assertEqual('S256', auth.PKCE_CHALLENGE_METHOD)
+
+    def test_no_two_logins_share_a_verifier_or_a_state(self):
+        verifiers = {auth._pkce_pair()[0] for _ in range(20)}
+        states = {auth._new_state() for _ in range(20)}
+
+        self.assertEqual(20, len(verifiers))
+        self.assertEqual(20, len(states))
+        self.assertTrue(len(states.pop()) >= 32)
+
+    def test_the_state_comparison_refuses_everything_but_a_match(self):
+        self.assertTrue(auth._states_match(REDIRECT_STATE, REDIRECT_STATE))
+        self.assertFalse(auth._states_match(REDIRECT_STATE, WRONG_STATE))
+        # Same length, one character different: a comparison which
+        # stopped at the length would pass this.
+        self.assertFalse(auth._states_match(REDIRECT_STATE,
+                                            REDIRECT_STATE[:-1] + 'X'))
+        self.assertFalse(auth._states_match(REDIRECT_STATE, None))
+        self.assertFalse(auth._states_match(REDIRECT_STATE, ''))
+        self.assertFalse(auth._states_match('', ''))
+        # compare_digest raises on a string which is not ASCII, and that
+        # must be a refusal rather than a traceback out of the handler.
+        self.assertFalse(auth._states_match(REDIRECT_STATE, 'stäte'))
+
+
+class LoopbackListenerTestCase(testtools.TestCase):
+    """The listener, on a real loopback port, with real connections.
+
+    A socket is the thing worth testing, so these bind one. Every
+    listener here is given a timeout measured in fractions of a second:
+    a listener with no timeout at all hangs by design, so these tests
+    are also what stops that reaching the suite.
+    """
+
+    def _listener(self, state=REDIRECT_STATE, timeout=0.5, read_timeout=0.2):
+        listener = auth.LoopbackRedirectListener(state, timeout=timeout,
+                                                 read_timeout=read_timeout)
+        self.addCleanup(listener.close)
+        return listener
+
+    def _redirect(self, listener, **params):
+        """Send the redirect a provider's browser would send."""
+        query = dict(params)
+        return Redirect('%s?%s' % (listener.redirect_uri, urlencode(query))).start()
+
+    def test_it_binds_the_loopback_address_and_an_ephemeral_port(self):
+        # Never 0.0.0.0: a redirect carries an authorization code, so a
+        # listener reachable from the network is a code anybody on it
+        # can race the browser for.
+        first = self._listener()
+        second = self._listener()
+
+        self.assertEqual('127.0.0.1', auth.LOOPBACK_ADDRESS)
+        self.assertEqual('127.0.0.1', first._server.server_address[0])
+        self.assertNotEqual(0, first._server.server_address[1])
+        self.assertNotEqual(first._server.server_address[1],
+                            second._server.server_address[1])
+        self.assertTrue(first.redirect_uri.startswith('http://127.0.0.1:'))
+
+    def _stalled_connection(self, listener):
+        """A connection which says nothing, as a browser's preconnect does."""
+        sock = socket.create_connection(listener._server.server_address[:2])
+        self.addCleanup(sock.close)
+        return sock
+
+    def test_a_connection_which_says_nothing_does_not_decide_the_login(self):
+        # The server's own timeout bounds waiting for a connection and
+        # nothing else, so reading the request is a second wait: a
+        # connection which opens the port and then says nothing used to
+        # hold the login open for as long as it liked. A browser making a
+        # speculative connection does that by accident, and any other
+        # process on this host can do it on purpose.
+        listener = self._listener(timeout=5)
+
+        # The silent connection is accepted first and the real redirect
+        # waits in the backlog behind it, so this does not depend on the
+        # two racing: the listener has to give up on the first before it
+        # can reach the second.
+        self._stalled_connection(listener)
+        delivered = self._redirect(listener, code=AUTHORIZATION_CODE,
+                                   state=REDIRECT_STATE)
+
+        self.assertEqual(AUTHORIZATION_CODE, listener.wait_for_redirect())
+        delivered.wait()
+
+    def test_a_connection_which_says_nothing_is_still_bounded(self):
+        # And when nothing else ever arrives, the wait ends rather than
+        # lasting as long as whatever is holding the socket.
+        listener = self._listener(timeout=0.5)
+        self._stalled_connection(listener)
+
+        e = self.assertRaises(auth.LoginFailed, listener.wait_for_redirect)
+
+        self.assertIn('not a login redirect', str(e))
+
+    def test_the_read_is_bounded_by_default(self):
+        # Every test here injects a short bound, so none of them would
+        # notice a default of None -- which is what the stream handler
+        # uses when nothing sets one, and which is unbounded.
+        listener = auth.LoopbackRedirectListener(REDIRECT_STATE)
+        self.addCleanup(listener.close)
+
+        self.assertIsNotNone(auth.REDIRECT_READ_TIMEOUT)
+        self.assertGreater(auth.REDIRECT_READ_TIMEOUT, 0)
+        self.assertEqual(auth.REDIRECT_READ_TIMEOUT,
+                         listener._server.read_timeout)
+
+    def test_a_wrong_state_ends_the_login_rather_than_buying_a_guess(self):
+        # Waiting out a connection which said nothing must not have turned
+        # the single attempt into a retry loop. A redirect which carries
+        # the wrong state is an answer, so the login stops on it -- and
+        # whoever sent it does not get to try again with another state.
+        #
+        # Both redirects are queued before the listener runs, so the
+        # second is there to be served if anything is willing to serve it.
+        # A listener which answered it would hand this login a code from a
+        # redirect that arrived after it had already been told no.
+        listener = self._listener(timeout=5)
+        refused = self._redirect(listener, code=AUTHORIZATION_CODE,
+                                 state='not-the-state-this-login-sent')
+        second = self._redirect(listener, code=OTHER_AUTHORIZATION_CODE,
+                                state=REDIRECT_STATE)
+
+        e = self.assertRaises(auth.LoginFailed, listener.wait_for_redirect)
+
+        self.assertIn('wrong state', str(e))
+        refused.wait()
+        self.assertEqual(400, refused.status)
+        self.assertNotIn(AUTHORIZATION_CODE, refused.page)
+
+        # The second redirect is deliberately never waited on. Its job was
+        # to be sitting there ready to be served, and a listener which did
+        # the right thing leaves it unanswered -- so waiting would mean
+        # waiting out its own timeout for nothing. Its thread is a daemon
+        # and the cleanup closes the port under it.
+        self.assertIsNone(second.status)
+
+    def test_a_matching_redirect_hands_over_the_code(self):
+        listener = self._listener()
+        delivered = self._redirect(listener, code=AUTHORIZATION_CODE,
+                                   state=REDIRECT_STATE)
+
+        self.assertEqual(AUTHORIZATION_CODE, listener.wait_for_redirect())
+
+        delivered.wait()
+        self.assertEqual(200, delivered.status)
+        self.assertIn('close this tab', delivered.page)
+        # The page is the last thing the person sees, and it must not be
+        # the code they just exchanged.
+        self.assertNotIn(AUTHORIZATION_CODE, delivered.page)
+        self.assertNotIn(REDIRECT_STATE, delivered.page)
+
+    def test_a_mismatched_state_is_refused_and_the_code_discarded(self):
+        listener = self._listener()
+        delivered = self._redirect(listener, code=AUTHORIZATION_CODE,
+                                   state=WRONG_STATE)
+
+        e = self.assertRaises(auth.LoginFailed, listener.wait_for_redirect)
+
+        self.assertIn('wrong state', str(e))
+        self.assertNotIn(AUTHORIZATION_CODE, str(e))
+        # Checked before the code is read, so the code from a redirect
+        # which does not match this login is never recorded anywhere the
+        # flow could reach it.
+        self.assertEqual({'kind': 'state'}, listener._server.result)
+        delivered.wait()
+        self.assertEqual(400, delivered.status)
+        self.assertIn('does not match', delivered.page)
+
+    def test_a_redirect_with_no_state_at_all_is_refused(self):
+        listener = self._listener()
+        self._redirect(listener, code=AUTHORIZATION_CODE)
+
+        e = self.assertRaises(auth.LoginFailed, listener.wait_for_redirect)
+
+        self.assertIn('wrong state', str(e))
+        self.assertEqual({'kind': 'state'}, listener._server.result)
+
+    def test_a_redirect_to_the_wrong_port_is_never_received(self):
+        # The port is in the redirect URI the authorization request
+        # carried, and a provider registered with a fixed port instead
+        # sends the person somewhere nothing is listening. The listener
+        # holds one port, does not hear that, and ends in its timeout
+        # rather than accepting a redirect meant for elsewhere.
+        listener = self._listener(timeout=0.25)
+        elsewhere = unused_port()
+        self.assertNotEqual(elsewhere, listener._server.server_address[1])
+
+        delivered = Redirect(
+            'http://127.0.0.1:%d/?%s'
+            % (elsewhere, urlencode({'code': AUTHORIZATION_CODE,
+                                     'state': REDIRECT_STATE}))).start().wait()
+
+        e = self.assertRaises(auth.LoginFailed, listener.wait_for_redirect)
+
+        self.assertIsInstance(delivered.error, urllib.error.URLError)
+        self.assertIn('did not send the login back', str(e))
+        self.assertIn(listener.redirect_uri, str(e))
+
+    def test_it_times_out_rather_than_waiting_forever(self):
+        listener = self._listener(timeout=0.25)
+
+        started = time.monotonic()
+        e = self.assertRaises(auth.LoginFailed, listener.wait_for_redirect)
+        waited = time.monotonic() - started
+
+        self.assertTrue(waited < 10, waited)
+        self.assertIn('did not send the login back', str(e))
+        # The failure happens at the provider when the redirect is not
+        # registered there, and nothing arrives here to say so, which is
+        # why the refusal points at the registration.
+        self.assertIn('not registered there', str(e))
+        self.assertIn('127.0.0.1', str(e))
+
+    def test_a_provider_error_in_the_redirect_is_reported(self):
+        listener = self._listener()
+        delivered = self._redirect(listener, state=REDIRECT_STATE,
+                                   error='access_denied',
+                                   error_description='user said no')
+
+        e = self.assertRaises(auth.LoginFailed, listener.wait_for_redirect)
+
+        self.assertIn('access_denied', str(e))
+        self.assertIn('user said no', str(e))
+        delivered.wait()
+        self.assertEqual(400, delivered.status)
+
+    def test_a_request_which_is_not_a_redirect_ends_the_wait(self):
+        # The listener serves exactly one request, so anything else
+        # which reaches the port ends this login rather than being
+        # ignored while it keeps waiting. On a loopback port with an
+        # ephemeral number and a lifetime of seconds, that is a trade
+        # worth making: the redirect is the first thing the provider's
+        # browser sends here.
+        listener = self._listener()
+        delivered = Redirect(listener.redirect_uri).start()
+
+        e = self.assertRaises(auth.LoginFailed, listener.wait_for_redirect)
+
+        self.assertIn('not a login redirect', str(e))
+        delivered.wait()
+        self.assertEqual(404, delivered.status)
+        self.assertIn('waiting for one login redirect', delivered.page)
+
+    def test_a_request_the_handler_will_not_answer_ends_the_wait(self):
+        # Something connected and the handler recorded nothing, which is
+        # a different answer from nothing having connected at all: the
+        # refusal has to say so rather than reporting a timeout which
+        # did not happen.
+        listener = self._listener()
+        delivered = Redirect(urllib.request.Request(
+            listener.redirect_uri, data=b'', method='POST')).start()
+
+        e = self.assertRaises(auth.LoginFailed, listener.wait_for_redirect)
+
+        self.assertIn('not a login redirect', str(e))
+        self.assertTrue(listener._server.served)
+        self.assertIsNone(listener._server.result)
+        delivered.wait()
+
+    def test_the_port_does_not_outlive_the_login(self):
+        listener = self._listener()
+        self._redirect(listener, code=AUTHORIZATION_CODE, state=REDIRECT_STATE)
+        listener.wait_for_redirect()
+
+        listener.close()
+
+        after = Redirect('%s?%s' % (listener.redirect_uri,
+                                    urlencode({'code': AUTHORIZATION_CODE,
+                                               'state': REDIRECT_STATE}))).start().wait()
+        self.assertIsInstance(after.error, urllib.error.URLError)
+
+    def test_closing_twice_is_not_an_error(self):
+        # The flow closes the listener in a finally, and a test or a
+        # caller which also closes it must not turn a failed login into
+        # a traceback.
+        listener = self._listener()
+
+        listener.close()
+        listener.close()
+
+
+class AuthorizationCodeFlowTestCase(testtools.TestCase):
+    """The browser flow end to end, over a real loopback socket.
+
+    The browser and the provider's token endpoint are faked; the
+    listener is not. The redirect is sent from inside the fake browser
+    because that is the moment a real one would send it -- the port is
+    bound and the authorization URL exists -- and the state it echoes
+    back is read out of that URL, as a provider reads it.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.post = mock.patch(
+            'shakenfist_client.commandline.auth.requests.post').start()
+        self.addCleanup(mock.patch.stopall)
+        self.post.return_value = token_response()
+        self.teller = Teller()
+        self.opened = []
+        self.browser_works = True
+        self.answer = {'code': AUTHORIZATION_CODE, 'state': ECHO_THE_STATE}
+        self.timeout = 0.5
+        self.listener = None
+        self.delivered = None
+
+    def _open_browser(self, url):
+        self.opened.append(url)
+        if self.answer is not None:
+            params = dict(self.answer)
+            if params.get('state') is ECHO_THE_STATE:
+                params['state'] = dict(parse_qsl(urlparse(url).query))['state']
+            self.delivered = Redirect(
+                '%s?%s' % (self.listener.redirect_uri, urlencode(params))).start()
+        return self.browser_works
+
+    def _listener_factory(self, state, timeout=None):
+        self.listener = auth.LoopbackRedirectListener(state, timeout=self.timeout)
+        self.addCleanup(self.listener.close)
+        return self.listener
+
+    def _run(self, issuer_metadata=None):
+        return auth.authorization_code_login(
+            issuer_metadata or ISSUER, listener_factory=self._listener_factory,
+            open_browser=self._open_browser, tell=self.teller)
+
+    def _authorization_request(self):
+        return dict(parse_qsl(urlparse(self.opened[0]).query))
+
+    def test_a_completed_login_returns_the_identity_token(self):
+        self.assertEqual(IDENTITY_TOKEN, self._run())
+
+    def test_the_authorization_request_carries_pkce_and_the_state(self):
+        self._run()
+
+        asked = self._authorization_request()
+        self.assertEqual(ISSUER['authorization_endpoint'],
+                         self.opened[0].split('?')[0])
+        self.assertEqual('code', asked['response_type'])
+        self.assertEqual('shakenfist', asked['client_id'])
+        self.assertEqual('openid profile groups', asked['scope'])
+        self.assertEqual('S256', asked['code_challenge_method'])
+        self.assertEqual(self.listener.redirect_uri, asked['redirect_uri'])
+        self.assertTrue(len(asked['state']) >= 32)
+
+        # The verifier is the secret which completes the exchange, and
+        # the browser must never see it: what it carries is the digest.
+        verifier = self.post.call_args[1]['data']['code_verifier']
+        self.assertNotIn(verifier, self.opened[0])
+        self.assertEqual(
+            base64.urlsafe_b64encode(
+                hashlib.sha256(verifier.encode('ascii')).digest()
+            ).rstrip(b'=').decode('ascii'),
+            asked['code_challenge'])
+
+    def test_the_endpoints_own_query_parameters_survive(self):
+        # An authorization endpoint with a tenant in its query is a real
+        # thing, and replacing it would send the person somewhere which
+        # does not know this cluster.
+        self._run(issuer_metadata=issuer(
+            authorization_endpoint='https://idp.example.com/authorize?tenant=42'))
+
+        self.assertEqual('42', self._authorization_request()['tenant'])
+        self.assertEqual('code', self._authorization_request()['response_type'])
+
+    def test_the_exchange_presents_the_code_and_the_verifier(self):
+        self._run()
+
+        self.assertEqual(ISSUER['token_endpoint'], self.post.call_args[0][0])
+        body = self.post.call_args[1]['data']
+        self.assertEqual(auth.AUTHORIZATION_CODE_GRANT_TYPE, body['grant_type'])
+        self.assertEqual(AUTHORIZATION_CODE, body['code'])
+        self.assertEqual('shakenfist', body['client_id'])
+        # RFC 6749 section 4.1.3 requires the redirect URI again: the
+        # provider compares it with the one the authorization request
+        # carried, which is what stops a code being spent elsewhere.
+        self.assertEqual(self.listener.redirect_uri, body['redirect_uri'])
+        self.assertEqual(auth.ISSUER_REQUEST_TIMEOUT,
+                         self.post.call_args[1]['timeout'])
+
+    def test_nothing_the_person_is_told_is_a_secret(self):
+        self._run()
+
+        verifier = self.post.call_args[1]['data']['code_verifier']
+        state = self._authorization_request()['state']
+        for secret in (IDENTITY_TOKEN, PROVIDER_ACCESS_TOKEN,
+                       AUTHORIZATION_CODE, verifier, state):
+            self.assertNotIn(secret, self.teller.text)
+        # The negative control: the conversation did happen.
+        self.assertIn('Waiting for the login', self.teller.text)
+
+    def test_no_browser_prints_the_url_instead_of_hanging(self):
+        self.browser_works = False
+
+        self.assertEqual(IDENTITY_TOKEN, self._run())
+
+        # The URL is the one thing printed, because it is the only thing
+        # somebody on a host with no browser can act on. It carries the
+        # state and the challenge; it carries neither the verifier nor
+        # the code.
+        self.assertIn(self.opened[0], self.teller.text)
+        self.assertNotIn(self.post.call_args[1]['data']['code_verifier'],
+                         self.teller.text)
+        self.assertIn('no browser here', self.teller.text)
+        # This provider can also do the flow which needs no browser, so
+        # the better answer is offered rather than left to be found.
+        self.assertIn('--flow=device', self.teller.text)
+
+    def test_a_browser_which_opened_is_not_asked_to_print_the_url(self):
+        self._run()
+
+        self.assertNotIn(self.opened[0], self.teller.text)
+        self.assertIn('browser has been opened', self.teller.text)
+
+    def test_no_browser_and_no_device_endpoint_offers_no_alternative(self):
+        self.browser_works = False
+
+        self._run(issuer_metadata=issuer(device_authorization_endpoint=None))
+
+        self.assertIn(self.opened[0], self.teller.text)
+        self.assertNotIn('--flow=device', self.teller.text)
+
+    def test_a_mismatched_state_stops_the_flow_before_the_exchange(self):
+        self.answer = {'code': AUTHORIZATION_CODE, 'state': WRONG_STATE}
+
+        e = self.assertRaises(auth.LoginFailed, self._run)
+
+        self.assertIn('wrong state', str(e))
+        # The code in that redirect is never presented to the provider,
+        # which is the whole purpose of the check.
+        self.post.assert_not_called()
+
+    def test_the_flow_times_out_rather_than_waiting_forever(self):
+        self.answer = None
+        self.timeout = 0.25
+
+        started = time.monotonic()
+        e = self.assertRaises(auth.LoginFailed, self._run)
+        waited = time.monotonic() - started
+
+        self.assertTrue(waited < 10, waited)
+        self.assertIn('did not send the login back', str(e))
+        self.post.assert_not_called()
+
+    def test_the_port_is_given_up_even_when_the_login_fails(self):
+        self.answer = None
+        self.timeout = 0.25
+
+        self.assertRaises(auth.LoginFailed, self._run)
+
+        after = Redirect(self.listener.redirect_uri).start().wait()
+        self.assertIsInstance(after.error, urllib.error.URLError)
+
+    def test_a_plaintext_authorization_endpoint_is_called_out(self):
+        self._run(issuer_metadata=issuer(
+            authorization_endpoint='http://idp.example.com/authorize'))
+
+        self.assertIn('not https', self.teller.text)
+        self.assertIn('authorization endpoint', self.teller.text)
+
+    def test_a_plaintext_endpoint_this_flow_will_not_use_is_not_called_out(self):
+        # Warning about a connection this login will never open teaches
+        # a person to ignore the warning.
+        self._run(issuer_metadata=issuer(
+            device_authorization_endpoint='http://idp.example.com/device'))
+
+        self.assertNotIn('not https', self.teller.text)
+
+    def test_a_refused_exchange_says_the_login_itself_worked(self):
+        self.post.return_value = response(400, {'error': 'invalid_grant',
+                                                'error_description': 'bad code'})
+
+        e = self.assertRaises(auth.LoginFailed, self._run)
+
+        self.assertIn('invalid_grant', str(e))
+        self.assertIn('bad code', str(e))
+        self.assertIn('would not complete the login', str(e))
+        self.assertNotIn(AUTHORIZATION_CODE, str(e))
+
+    def test_an_exchange_which_returns_no_identity_token_is_refused(self):
+        self.post.return_value = response(
+            200, {'access_token': PROVIDER_ACCESS_TOKEN})
+
+        e = self.assertRaises(auth.LoginFailed, self._run)
+
+        self.assertIn('no identity token', str(e))
+        self.assertNotIn(PROVIDER_ACCESS_TOKEN, str(e))
+
+    def test_an_unreachable_token_endpoint_stops_the_flow(self):
+        self.post.side_effect = apiclient.requests.exceptions.ConnectTimeout(
+            'timed out')
+
+        e = self.assertRaises(auth.LoginFailed, self._run)
+
+        self.assertIn('Could not reach the identity provider', str(e))
+
+
+class BrowserTestCase(testtools.TestCase):
+    """Opening a browser, and finding out whether there is one."""
+
+    def test_a_browser_which_opens_is_reported_as_working(self):
+        with mock.patch('shakenfist_client.commandline.auth.webbrowser.open',
+                        return_value=True) as opened:
+            self.assertTrue(auth._open_browser('https://idp.example.com/authorize'))
+
+        opened.assert_called_once_with('https://idp.example.com/authorize')
+
+    def test_no_browser_is_not_an_exception(self):
+        # webbrowser answers False where it has nothing to open, and
+        # raises where it found something it could not start. Neither
+        # may end the login: the URL is printed instead.
+        with mock.patch('shakenfist_client.commandline.auth.webbrowser.open',
+                        return_value=False):
+            self.assertFalse(auth._open_browser('https://idp.example.com/'))
+
+        with mock.patch('shakenfist_client.commandline.auth.webbrowser.open',
+                        side_effect=auth.webbrowser.Error('no browser')):
+            self.assertFalse(auth._open_browser('https://idp.example.com/'))
+
+        with mock.patch('shakenfist_client.commandline.auth.webbrowser.open',
+                        side_effect=OSError('xdg-open died')):
+            self.assertFalse(auth._open_browser('https://idp.example.com/'))
+
+    def test_a_host_with_no_browser_registered_says_so(self):
+        with mock.patch('shakenfist_client.commandline.auth.webbrowser.get',
+                        side_effect=auth.webbrowser.Error('nothing here')):
+            self.assertFalse(auth._browser_is_available())
+
+        with mock.patch('shakenfist_client.commandline.auth.webbrowser.get',
+                        return_value=object()):
+            self.assertTrue(auth._browser_is_available())
+
+
+class ChooseFlowTestCase(testtools.TestCase):
+    """Which flow runs, given what is advertised and what is here."""
+
+    def setUp(self):
+        super().setUp()
+        self.teller = Teller()
+        self.browser = True
+        self.asked_about_the_browser = 0
+
+    def _browser_available(self):
+        self.asked_about_the_browser += 1
+        return self.browser
+
+    def _choose(self, issuers, requested=None):
+        return auth._choose_flow(issuers, requested=requested, tell=self.teller,
+                                 browser_available=self._browser_available)
+
+    def test_an_empty_list_is_a_complete_answer(self):
+        e = self.assertRaises(auth.LoginFailed, self._choose, [])
+
+        self.assertIn('no human login', str(e))
+
+    def test_the_device_flow_is_preferred(self):
+        # It needs no browser, no listener and no redirect registered at
+        # the provider, which is why it wins wherever it is offered.
+        self.assertEqual(auth.FLOW_DEVICE, self._choose([issuer()]))
+        self.assertEqual(0, self.asked_about_the_browser)
+
+    def test_the_browser_flow_is_the_fallback(self):
+        chosen = self._choose([issuer(device_authorization_endpoint=None)])
+
+        self.assertEqual(auth.FLOW_CODE, chosen)
+        # Said out loud, because a browser opening by itself is
+        # surprising on a verb which usually prints a code.
+        self.assertIn('will open one', self.teller.text)
+
+    def test_the_browser_flow_is_not_chosen_without_a_browser(self):
+        # The redirect comes back to a listener on this host, so a URL
+        # opened on another machine cannot complete the login.
+        self.browser = False
+
+        e = self.assertRaises(
+            auth.LoginFailed, self._choose,
+            [issuer(name='legacy', device_authorization_endpoint=None)])
+
+        self.assertIn('no browser here', str(e))
+        self.assertIn('legacy', str(e))
+        self.assertIn('--flow=code', str(e))
+
+    def test_a_requested_flow_is_run_without_a_browser(self):
+        # The person at the terminal knows things this cannot: that a
+        # port is forwarded, or which browser holds their identity.
+        self.browser = False
+
+        self.assertEqual(auth.FLOW_CODE,
+                         self._choose([issuer()], requested=auth.FLOW_CODE))
+        self.assertEqual(0, self.asked_about_the_browser)
+
+    def test_a_requested_flow_overrides_the_preference(self):
+        self.assertEqual(auth.FLOW_DEVICE,
+                         self._choose([issuer()], requested=auth.FLOW_DEVICE))
+        self.assertEqual(auth.FLOW_CODE,
+                         self._choose([issuer()], requested=auth.FLOW_CODE))
+
+    def test_one_provider_for_each_flow_still_prefers_the_device_one(self):
+        chosen = self._choose([issuer(name='corporate',
+                                      authorization_endpoint=None),
+                               issuer(name='partner',
+                                      device_authorization_endpoint=None)])
+
+        self.assertEqual(auth.FLOW_DEVICE, chosen)
+
+    def test_a_cluster_which_can_run_neither_flow_names_both(self):
+        # No token endpoint, so neither flow can finish -- and it would
+        # fail after the person had authenticated rather than before.
+        e = self.assertRaises(auth.LoginFailed, self._choose,
+                              [issuer(name='legacy', token_endpoint=None)])
+
+        self.assertIn('legacy', str(e))
+        self.assertIn('device authorization endpoint', str(e))
+        self.assertIn('an authorization endpoint and a token endpoint', str(e))
+
+
 class ChooseIssuerTestCase(testtools.TestCase):
     def setUp(self):
         super().setUp()
@@ -403,9 +1122,9 @@ class ChooseIssuerTestCase(testtools.TestCase):
         self.prompted.append(issuers)
         return issuers[0]
 
-    def _choose(self, issuers):
+    def _choose(self, issuers, flow=auth.FLOW_DEVICE):
         return auth._choose_issuer(issuers, tell=self.teller,
-                                   prompt=self._prompt)
+                                   prompt=self._prompt, flow=flow)
 
     def test_an_empty_list_is_a_complete_answer(self):
         # The cluster documents an empty list as "this cluster offers no
@@ -443,10 +1162,45 @@ class ChooseIssuerTestCase(testtools.TestCase):
     def test_no_issuer_can_do_the_flow_says_so(self):
         e = self.assertRaises(
             auth.LoginFailed, self._choose,
-            [issuer(name='legacy', device_authorization_endpoint=None)])
+            [issuer(name='legacy', device_authorization_endpoint=None,
+                    authorization_endpoint=None)])
 
         self.assertIn('device authorization endpoint', str(e))
         self.assertIn('legacy', str(e))
+
+    def test_the_flow_decides_which_providers_are_offered(self):
+        issuers = [issuer(name='corporate', authorization_endpoint=None),
+                   issuer(name='partner', device_authorization_endpoint=None)]
+
+        self.assertEqual('corporate',
+                         self._choose(issuers, flow=auth.FLOW_DEVICE)['name'])
+        self.assertEqual('partner',
+                         self._choose(issuers, flow=auth.FLOW_CODE)['name'])
+        self.assertEqual([], self.prompted)
+
+    def test_a_provider_with_no_token_endpoint_can_do_neither_flow(self):
+        # Both flows finish at the token endpoint, so a provider without
+        # one would fail after the person had authenticated.
+        for flow in (auth.FLOW_DEVICE, auth.FLOW_CODE):
+            e = self.assertRaises(auth.LoginFailed, self._choose,
+                                  [issuer(name='legacy', token_endpoint=None)],
+                                  flow)
+
+            self.assertIn('token endpoint', str(e))
+
+    def test_a_flow_no_provider_offers_names_the_one_that_would_work(self):
+        # The person cannot read the issuer metadata, so this is the
+        # difference between "this cluster cannot do this" and "ask for
+        # the other one".
+        e = self.assertRaises(
+            auth.LoginFailed, self._choose,
+            [issuer(name='corporate', authorization_endpoint=None)],
+            auth.FLOW_CODE)
+
+        self.assertIn('an authorization endpoint', str(e))
+        self.assertIn('corporate advertises what a device authorization login '
+                      'needs', str(e))
+        self.assertIn('"--flow=device"', str(e))
 
 
 class RefusalTestCase(testtools.TestCase):
@@ -602,11 +1356,19 @@ class LoginCommandTestCase(CacheIsolatedTestCase):
         self.flow = mock.patch(
             'shakenfist_client.commandline.auth.device_authorization_login',
             return_value=IDENTITY_TOKEN).start()
+        self.code_flow = mock.patch(
+            'shakenfist_client.commandline.auth.authorization_code_login',
+            return_value=IDENTITY_TOKEN).start()
+        # Nothing in these tests may consult the host for a browser: the
+        # answer would differ between a workstation and a CI container.
+        self.browser = mock.patch(
+            'shakenfist_client.commandline.auth._browser_is_available',
+            return_value=True).start()
 
-    def _invoke(self, output='pretty', namespace=None, apiurl=CLUSTER):
+    def _invoke(self, output='pretty', namespace=None, apiurl=CLUSTER, args=None):
         return CliRunner().invoke(
-            auth.login, [], obj={'OUTPUT': output, 'APIURL': apiurl,
-                                 'NAMESPACE': namespace},
+            auth.login, args or [], obj={'OUTPUT': output, 'APIURL': apiurl,
+                                         'NAMESPACE': namespace},
             catch_exceptions=False)
 
     def test_a_login_caches_what_it_minted(self):
@@ -752,6 +1514,63 @@ class LoginCommandTestCase(CacheIsolatedTestCase):
         self.assertEqual(1, result.exit_code)
         self.assertIn('mapping rules', result.output)
         self.assertFalse(os.path.exists(self.path))
+
+    def test_the_device_flow_runs_where_a_provider_offers_it(self):
+        result = self._invoke()
+
+        self.assertEqual(0, result.exit_code)
+        self.flow.assert_called_once_with(self.client.get_login_issuers()[0])
+        self.code_flow.assert_not_called()
+
+    def test_the_flow_override_runs_the_browser_flow_instead(self):
+        result = self._invoke(args=['--flow=code'])
+
+        self.assertEqual(0, result.exit_code)
+        self.code_flow.assert_called_once_with(
+            self.client.get_login_issuers()[0])
+        self.flow.assert_not_called()
+        self.client.login.assert_called_once_with(IDENTITY_TOKEN)
+        cached = credentials.read_credentials(path=self.path)
+        self.assertEqual('ci', cached['credentials'][0]['namespace'])
+
+    def test_the_browser_flow_runs_where_the_device_one_is_not_offered(self):
+        self.client.get_login_issuers.return_value = [
+            issuer(device_authorization_endpoint=None)]
+
+        result = self._invoke()
+
+        self.assertEqual(0, result.exit_code)
+        self.code_flow.assert_called_once()
+        self.flow.assert_not_called()
+
+    def test_a_flow_the_cluster_cannot_run_exits_with_the_alternative(self):
+        self.client.get_login_issuers.return_value = [
+            issuer(authorization_endpoint=None)]
+
+        result = self._invoke(args=['--flow=code'])
+
+        self.assertEqual(1, result.exit_code)
+        self.assertIn('--flow=device', result.output)
+        self.code_flow.assert_not_called()
+        self.flow.assert_not_called()
+        self.assertFalse(os.path.exists(self.path))
+
+    def test_an_unknown_flow_is_refused_by_the_command_line(self):
+        result = CliRunner().invoke(
+            auth.login, ['--flow=carrier-pigeon'],
+            obj={'OUTPUT': 'pretty', 'APIURL': CLUSTER, 'NAMESPACE': None})
+
+        self.assertEqual(2, result.exit_code)
+        self.flow.assert_not_called()
+        self.code_flow.assert_not_called()
+
+    def test_the_help_names_both_flows(self):
+        result = self._invoke(args=['--help'])
+
+        self.assertEqual(0, result.exit_code)
+        self.assertIn('--flow', result.output)
+        self.assertIn('device', result.output)
+        self.assertIn('code', result.output)
 
     def test_a_cache_which_cannot_be_written_says_so(self):
         # The secrets are in hand and will never be issued again, so the
