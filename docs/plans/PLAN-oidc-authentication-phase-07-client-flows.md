@@ -411,9 +411,25 @@ repository's pre-commit stashes repo-wide.
       `shakenfist_client/credentials.py`,
       `shakenfist_client/commandline/auth.py`,
       `shakenfist_client/main.py`, files under
-      `shakenfist_client/tests/`, `README.md` and files under
-      `docs/`. No change to this repository's packaging, and no
+      `shakenfist_client/tests/`, `README.md`, `ARCHITECTURE.md`,
+      `pyproject.toml`'s test extra, and files under `docs/`. No
+      change to what this repository installs at runtime, and no
       change in the shakenfist repository at all.
+
+      Two of those were added to this list during execution, and
+      the original list was wrong rather than the work. The step
+      row for documentation instructs the implementer to update
+      `ARCHITECTURE.md` where the component inventory changed, and
+      it did, so the list contradicted its own step table. And the
+      login tests assert that what a login says to a person goes
+      to the error stream while standard output carries only the
+      command's own document, which is what keeps `--json`
+      parseable while a login talks to a human; the test runner
+      separates the two streams only from click 8.2, while this
+      package installs against 8.0, so the floor is raised for the
+      test extra alone. Nothing about what an installed client
+      depends on has changed, which is what this item was written
+      to protect.
 
 ## Back brief
 
@@ -545,6 +561,26 @@ command resolves the surviving selection and talks to the other
 cluster as the other namespace, so a login which had just
 succeeded appears to have done nothing. The other cluster and
 namespace are now named in the message.
+
+**Two findings this phase did not fix, and did not introduce**
+(2026-11-20, AEDT). `ARCHITECTURE.md` still lists an
+`ansible.py` CLI module, an `ansible/` directory and a section
+describing Ansible modules, none of which exist: they were retired
+in `8da6876`. The inventory correction this phase made sits in the
+same list, so the drift was noticed while editing it, but deciding
+where this repository's Ansible story now belongs is not this
+phase's work. And the shakenfist repository's
+`docs/release_notes/v07-v08.md` documents federated identity
+without mentioning human login at all -- not the exchange routes
+that earlier phases of this plan added, and not the verbs this one
+adds. Both want an issue rather than a quiet fix here.
+
+**Release notes, in this repository, are the commit messages.**
+There is no notes file and no changelog: the release workflow sets
+`generate_release_notes: true`, so GitHub builds them from the
+commits between tags. The step row's instruction to update them is
+met by the commit messages, and a notes file invented here would
+start a second convention.
 
 ## Results
 
