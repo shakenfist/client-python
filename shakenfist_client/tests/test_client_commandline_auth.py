@@ -183,7 +183,16 @@ class Redirect:
     a listener. It goes to the loopback address and nowhere else, and
     the thread is bounded by a timeout of its own so that a listener
     which never answers cannot hang the suite.
+
+    It never goes through a proxy. A browser sends a loopback address
+    straight to the loopback interface whatever proxy it is configured
+    with, but urllib follows http_proxy for every host: on a runner
+    which sets one, the request went to the proxy instead, the listener
+    waited out its window, and a request to a port nothing listened on
+    came back with the proxy's answer rather than a refused connection.
     """
+
+    _opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     def __init__(self, url):
         self.url = url
@@ -199,7 +208,7 @@ class Redirect:
 
     def _go(self):
         try:
-            with urllib.request.urlopen(self.url, timeout=5) as r:
+            with self._opener.open(self.url, timeout=5) as r:
                 self.status = r.getcode()
                 self.page = r.read().decode('utf-8')
         except urllib.error.HTTPError as e:
