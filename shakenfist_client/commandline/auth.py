@@ -606,6 +606,24 @@ class _RedirectHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(page)
 
+    def send_error(self, code, message=None, explain=None):
+        """Record that a request arrived which this listener cannot use.
+
+        The base class answers an unsupported method or an unparseable
+        request itself, without reaching do_GET, so without this the flow
+        would see no result and go on waiting -- and a single stray
+        request would hold a login open for the rest of its window. A
+        request which arrived and could not be used is an answer.
+
+        This is what separates that from a connection which never sent a
+        request at all: one reaches here, and the other is abandoned when
+        its read bound passes. Nothing from the request is rendered; the
+        base class's own page is generic.
+        """
+        if self.server.result is None:
+            self.server.result = {'kind': 'other'}
+        super().send_error(code, message, explain)
+
     def log_message(self, format, *args):
         """Log nothing at all. See this class's docstring for why."""
         ...
@@ -721,7 +739,7 @@ class LoopbackRedirectListener:
 
         if not self._server.served:
             raise LoginFailed(
-                'The identity provider did not send the login back to %s within %d '
+                'The identity provider did not send the login back to %s within %g '
                 'seconds, so no credentials were minted. If the browser showed an error '
                 'at the provider rather than a login page, then this redirect is not '
                 'registered there for this cluster: a provider has to accept '

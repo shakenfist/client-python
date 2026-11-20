@@ -531,7 +531,16 @@ class LoopbackListenerTestCase(testtools.TestCase):
     are also what stops that reaching the suite.
     """
 
-    def _listener(self, state=REDIRECT_STATE, timeout=0.5, read_timeout=0.2):
+    def _listener(self, state=REDIRECT_STATE, timeout=10, read_timeout=5):
+        """A listener for one test, bounded so a failure cannot hang the suite.
+
+        Both bounds are generous by default and short only in the tests
+        which are about a bound being reached. A test which expects the
+        redirect to arrive never waits for either of these, so a large
+        value costs it nothing -- while a small one costs it everything on
+        a machine slower or busier than the one it was written on, which
+        is how twenty-four of these first failed in CI while passing here.
+        """
         listener = auth.LoopbackRedirectListener(state, timeout=timeout,
                                                  read_timeout=read_timeout)
         self.addCleanup(listener.close)
@@ -601,7 +610,10 @@ class LoopbackListenerTestCase(testtools.TestCase):
         # hold the login open for as long as it liked. A browser making a
         # speculative connection does that by accident, and any other
         # process on this host can do it on purpose.
-        listener = self._listener(timeout=5)
+        #
+        # The read bound is short because this test needs it reached, and
+        # the overall one is long because this test must not reach that.
+        listener = self._listener(timeout=10, read_timeout=0.2)
 
         # The silent connection is accepted first and the real redirect
         # waits in the backlog behind it, so this does not depend on the
@@ -616,8 +628,9 @@ class LoopbackListenerTestCase(testtools.TestCase):
 
     def test_a_connection_which_says_nothing_is_still_bounded(self):
         # And when nothing else ever arrives, the wait ends rather than
-        # lasting as long as whatever is holding the socket.
-        listener = self._listener(timeout=0.5)
+        # lasting as long as whatever is holding the socket. Short bounds
+        # here on purpose: this test is about reaching them.
+        listener = self._listener(timeout=0.5, read_timeout=0.2)
         self._stalled_connection(listener)
 
         e = self.assertRaises(auth.LoginFailed, listener.wait_for_redirect)
@@ -779,19 +792,28 @@ class LoopbackListenerTestCase(testtools.TestCase):
         self.assertIn('waiting for one login redirect', delivered.page)
 
     def test_a_request_the_handler_will_not_answer_ends_the_wait(self):
-        # Something connected and the handler recorded nothing, which is
-        # a different answer from nothing having connected at all: the
-        # refusal has to say so rather than reporting a timeout which
+        # Something connected and made a request this listener cannot use,
+        # which is a different answer from nothing having connected at
+        # all: the refusal says so rather than reporting a timeout which
         # did not happen.
-        listener = self._listener()
+        #
+        # And it says so *now*. The base class answers an unsupported
+        # method itself, without ever reaching the handler's own method,
+        # so a listener which only watched for a recorded result would
+        # wait out the rest of its window on one stray request. That is
+        # the whole difference between this and a connection which sends
+        # nothing: this one arrived.
+        listener = self._listener(timeout=10)
         delivered = Redirect(urllib.request.Request(
             listener.redirect_uri, data=b'', method='POST')).start()
 
+        started = time.monotonic()
         e = self.assertRaises(auth.LoginFailed, listener.wait_for_redirect)
+        waited = time.monotonic() - started
 
         self.assertIn('not a login redirect', str(e))
         self.assertTrue(listener._server.served)
-        self.assertIsNone(listener._server.result)
+        self.assertLess(waited, 5, 'waited out the window: %.1fs' % waited)
         delivered.wait()
 
     def test_the_port_does_not_outlive_the_login(self):
@@ -836,7 +858,10 @@ class AuthorizationCodeFlowTestCase(testtools.TestCase):
         self.opened = []
         self.browser_works = True
         self.answer = {'code': AUTHORIZATION_CODE, 'state': ECHO_THE_STATE}
-        self.timeout = 0.5
+        # Long enough that a slow or busy machine does not read a redirect
+        # which is on its way as a redirect which never came. The two
+        # tests which are about the timeout being reached set their own.
+        self.timeout = 10
         self.listener = None
         self.delivered = None
 
