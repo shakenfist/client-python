@@ -1415,7 +1415,278 @@ def logout(ctx):
               % (discarded, '' if discarded == 1 else 's', path))
 
 
+# How long the live read waits on any one request. The listing is a
+# nicety on top of what the cache already knows, so a cluster which does
+# not answer must not hold it up for the client's usual five minutes.
+LIVE_METADATA_TIMEOUT = 10
+
+# Why a credential is being reported from the cache and not from the
+# cluster. Fixed text rather than anything taken from an exception: an
+# exception raised while presenting a key may quote what it was sent, and
+# these strings are printed and serialised.
+REASON_NOT_ASKED = 'not asked for'
+REASON_UNREACHABLE = 'the cluster could not be reached'
+REASON_INCAPABLE = 'the cluster does not serve key metadata'
+REASON_REFUSED = 'the cluster refused the keys held for this namespace'
+REASON_FAILED = 'the cluster could not answer'
+REASON_NOT_LISTED = 'the cluster does not list this key'
+
+# What a row says about where its expiry and scopes came from.
+SOURCE_LIVE = 'live'
+SOURCE_CACHE = 'cache'
+
+
+class _ClusterUnavailable(Exception):
+    """Nothing more can be read from this cluster, for this reason."""
+
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.reason = reason
+
+
+def _client_for_credential(credential):
+    """A client which presents this one credential, and reads no configuration.
+
+    Each namespace is read with a key of its own: the route is namespace
+    scoped and authenticates first, so the selected credential can read
+    its own namespace and no other, and a cache holding several would
+    otherwise be reported almost entirely from itself.
+    """
+    return apiclient.Client(
+        base_url=credential['apiurl'], namespace=credential['namespace'],
+        key=credential['key'], suppress_configuration_lookup=True,
+        sync_request_timeout=LIVE_METADATA_TIMEOUT)
+
+
+def _read_namespace(held, make_client=None):
+    """Read one namespace's live key metadata with a key held for it.
+
+    Returns a dict of key name to metadata and None, or None and the
+    reason it could not be read. Raises _ClusterUnavailable for a
+    failure which says the whole cluster is out of reach. A key
+    the cluster refuses is not the end: the next one held for the
+    namespace may be the one still alive.
+    """
+    make_client = make_client or _client_for_credential
+    refused = False
+    for credential in held:
+        try:
+            client = make_client(credential)
+            listing = client.get_namespace_keys(credential['namespace'])
+        except apiclient.IncapableException:
+            raise _ClusterUnavailable(REASON_INCAPABLE)
+        except requests.exceptions.RequestException:
+            raise _ClusterUnavailable(REASON_UNREACHABLE)
+        except (apiclient.UnauthenticatedException, apiclient.UnauthorizedException):
+            refused = True
+            continue
+        except Exception:
+            # Deliberately broad and deliberately silent. This is a
+            # best-effort read on top of a listing which needs none of it,
+            # and what the exception says is not repeated because it may
+            # quote what was presented.
+            return None, REASON_FAILED
+
+        return {k['key_name']: k for k in listing
+                if isinstance(k, dict) and 'key_name' in k}, None
+
+    return None, REASON_REFUSED if refused else REASON_FAILED
+
+
+def _live_metadata(cached, make_client=None):
+    """Read what the cluster says about each cached credential.
+
+    Returns a dict keyed by (apiurl, namespace, key_name) of
+    (metadata or None, reason or None). One request per namespace
+    rather than per key, because the listing answers for the whole
+    namespace and includes expired keys.
+
+    A cluster which cannot be reached, or does not serve the metadata,
+    is asked about once: every other namespace on it would fail the same
+    way, after the same wait.
+    """
+    answers = {}
+    unavailable = {}
+
+    namespaces = {}
+    for credential in cached:
+        namespaces.setdefault((credential['apiurl'], credential['namespace']), []).append(credential)
+
+    for (apiurl, namespace), held in namespaces.items():
+        metadata, reason = None, unavailable.get(apiurl)
+        if not reason:
+            try:
+                metadata, reason = _read_namespace(held, make_client)
+            except _ClusterUnavailable as e:
+                unavailable[apiurl] = reason = e.reason
+
+        for credential in held:
+            found = metadata.get(credential['key_name']) if metadata is not None else None
+            answers[(apiurl, namespace, credential['key_name'])] = (
+                found, reason if metadata is None else (None if found else REASON_NOT_LISTED))
+
+    return answers
+
+
+def _is_current(credential, current):
+    current = current or {}
+    return (credential['apiurl'] == current.get('apiurl') and
+            credential['namespace'] == current.get('namespace') and
+            credential['key_name'] == current.get('key_name'))
+
+
+def _credential_rows(cache, answers=None, reason=REASON_NOT_ASKED):
+    """What the person holds, with every secret left out.
+
+    Built field by field from a fixed list, for the reason _minted_rows()
+    is. Where the cluster answered for a credential its expiry and
+    scopes are the cluster's, and the row says so; otherwise they are the
+    cache's, and the row says why the cluster was not used.
+    """
+    rows = []
+    for credential in cache['credentials']:
+        found, why = (answers or {}).get(
+            (credential['apiurl'], credential['namespace'], credential['key_name']), (None, reason))
+        source = found if found is not None else credential
+        rows.append({
+            'apiurl': credential['apiurl'],
+            'namespace': credential['namespace'],
+            'key_name': credential['key_name'],
+            'expiry': source.get('expiry'),
+            'scopes': source.get('scopes') or [],
+            'current': _is_current(credential, cache.get('current')),
+            'source': SOURCE_LIVE if found is not None else SOURCE_CACHE,
+            'reason': '' if found is not None else (why or reason),
+        })
+    return rows
+
+
+def _show_credential_rows(ctx, rows):
+    output = ctx.obj.get('OUTPUT')
+
+    if output == 'json':
+        print(json.dumps(rows, indent=4, sort_keys=True))
+
+    elif output == 'simple':
+        print('apiurl,namespace,key_name,expiry,scopes,current,source,reason')
+        for row in rows:
+            print(','.join([
+                row['apiurl'], row['namespace'], row['key_name'],
+                '' if not row['expiry'] else repr(row['expiry']),
+                ' '.join(row['scopes']),
+                'yes' if row['current'] else 'no',
+                row['source'], row['reason']]))
+
+    else:
+        t = PrettyTable(['cluster', 'namespace', 'key name', 'expiry', 'scopes', 'current', 'metadata'])
+        t.align = 'l'
+        for row in rows:
+            t.add_row([row['apiurl'], row['namespace'], row['key_name'], _expiry(row['expiry']),
+                       ' '.join(row['scopes']), 'yes' if row['current'] else 'no',
+                       row['source'] if not row['reason'] else '%s (%s)' % (row['source'], row['reason'])])
+        print(t)
+
+
+@click.group(name='credential',
+             help='Show and choose among the credentials a login cached on this host')
+def credential():
+    """The credentials held on this host, and which one is in use.
+
+    Neither verb needs the group to build a client. Showing what the
+    cache holds and choosing among it are local, and a person asking
+    what they hold is as likely to be somewhere the cluster cannot be
+    reached as anywhere else. A verb which wants the cluster builds its
+    own, and treats failing to as a normal answer.
+    """
+
+
+@credential.command(name='list', help='List the cached credentials, and which one is current')
+@click.option('--offline', is_flag=True, default=False,
+              help='Report what the cache holds without asking any cluster about it')
+@click.pass_context
+def credential_list(ctx, offline):
+    """List the cached credentials.
+
+    Expired credentials are not listed: reading the cache drops them, as
+    it does for every other caller. Where a cluster advertises key
+    metadata its answer replaces the cache's for the expiry and scopes,
+    and the last column of each row says which was used and, if the
+    cache, why.
+    """
+    try:
+        cache = credentials.read_credentials()
+    except credentials.CredentialCacheException as e:
+        _tell(str(e))
+        sys.exit(1)
+
+    if not cache or not cache['credentials']:
+        if ctx.obj.get('OUTPUT') == 'pretty':
+            _tell('There are no cached credentials. Run "sf-client login" to get some.')
+        _show_credential_rows(ctx, [])
+        return
+
+    answers = None if offline else _live_metadata(cache['credentials'])
+    rows = _credential_rows(cache, answers)
+    _show_credential_rows(ctx, rows)
+
+    live = len([r for r in rows if r['source'] == SOURCE_LIVE])
+    if offline:
+        _tell('Reported from the cache: no cluster was asked.')
+    elif live == len(rows):
+        _tell('Expiry and scopes are the cluster\'s own.')
+    else:
+        _tell('Expiry and scopes are the cluster\'s own for %d of %d; the rest are reported from the cache.'
+              % (live, len(rows)))
+
+
+def _apiurl_to_select(ctx, cache):
+    """Which cluster a selection is for, without guessing."""
+    named = ctx.obj.get('APIURL')
+    if named:
+        return named
+
+    if cache['current']:
+        return cache['current']['apiurl']
+
+    apiurls = sorted({c['apiurl'] for c in cache['credentials']})
+    if len(apiurls) == 1:
+        return apiurls[0]
+
+    raise credentials.CredentialCacheException(
+        'Credentials are cached for more than one cluster and none is selected. Name one with '
+        '--apiurl: %s.' % ', '.join(apiurls))
+
+
+@credential.command(name='select', help=('Make the cached credential for a namespace the one in use.\n\n'
+                                         'NAMESPACE: The namespace to use'))
+@click.argument('namespace', type=click.STRING)
+@click.option('--key-name', default=None,
+              help='Which key, where more than one is held for the namespace')
+@click.pass_context
+def credential_select(ctx, namespace, key_name):
+    """Select a cached credential. No cluster is involved.
+
+    Selecting edits a file on this host, so it must work with the
+    cluster down. An ambiguous or unmatched selection is refused with
+    the cache's own message rather than guessed at.
+    """
+    try:
+        cache = credentials.read_credentials()
+        if not cache:
+            raise credentials.CredentialCacheException(
+                'There are no cached credentials to select from in %s.' % credentials.credentials_path())
+        chosen = credentials.select_current(_apiurl_to_select(ctx, cache), namespace, key_name=key_name)
+    except credentials.CredentialCacheException as e:
+        _tell(str(e))
+        sys.exit(1)
+
+    _show_credential_rows(ctx, _credential_rows({
+        'credentials': [chosen],
+        'current': {'apiurl': chosen['apiurl'], 'namespace': chosen['namespace'],
+                    'key_name': chosen['key_name']}}))
+
+
 # The verbs the CLI group must not build an API client for; each
 # command's docstring says why it cannot have one. Derived from the
 # commands themselves so that renaming one cannot leave this behind.
-COMMANDS_WITHOUT_A_CLIENT = frozenset([login.name, logout.name])
+COMMANDS_WITHOUT_A_CLIENT = frozenset([login.name, logout.name, credential.name])

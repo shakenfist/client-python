@@ -14,6 +14,7 @@ from urllib.parse import parse_qsl
 from urllib.parse import urlencode
 from urllib.parse import urlparse
 
+import requests
 import testtools
 from click.testing import CliRunner
 
@@ -1712,3 +1713,290 @@ class LogoutCommandTestCase(CacheIsolatedTestCase):
         result = self._invoke(output='simple')
 
         self.assertEqual(['discarded', '3'], result.stdout.strip().split('\n'))
+
+
+class CredentialCommandTestCase(CacheIsolatedTestCase):
+    """The verbs which show what is held, and choose among it."""
+
+    def setUp(self):
+        super().setUp()
+        self.live = {}
+        self.attempts = []
+        self.clients = mock.patch(
+            'shakenfist_client.commandline.auth._client_for_credential',
+            side_effect=self._client_for).start()
+
+    def _client_for(self, held):
+        self.attempts.append((held['apiurl'], held['namespace'], held['key_name']))
+        client = mock.MagicMock()
+
+        def keys(namespace):
+            answer = self.live[(held['apiurl'], held['namespace'], held['key_name'])]
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        client.get_namespace_keys.side_effect = keys
+        return client
+
+    def _write_cache(self, credentials_, current=None, mode=0o600):
+        os.makedirs(os.path.dirname(self.path), mode=0o700, exist_ok=True)
+        with open(self.path, 'w') as f:
+            json.dump({'version': 1, 'credentials': credentials_, 'current': current}, f)
+        os.chmod(self.path, mode)
+
+    def _held(self, namespace, key_name, apiurl=CLUSTER, key=MINTED_KEY, expiry=None, scopes=None):
+        entry = minted(namespace=namespace, key_name=key_name, key=key,
+                       expiry=expiry or time.time() + 3600, scopes=scopes)
+        entry['apiurl'] = apiurl
+        return entry
+
+    def _list(self, output='pretty', args=None, apiurl=None):
+        return CliRunner().invoke(
+            auth.credential, ['list'] + (args or []),
+            obj={'OUTPUT': output, 'APIURL': apiurl}, catch_exceptions=False)
+
+    def _select(self, args, apiurl=None):
+        return CliRunner().invoke(
+            auth.credential, ['select'] + args,
+            obj={'OUTPUT': 'pretty', 'APIURL': apiurl}, catch_exceptions=False)
+
+    def _two_namespaces(self):
+        a = self._held('ci', 'one', key=MINTED_KEY)
+        b = self._held('dev', 'two', key=OTHER_MINTED_KEY)
+        self._write_cache([a, b], current={'apiurl': CLUSTER, 'namespace': 'ci', 'key_name': 'one'})
+        return a, b
+
+    def test_the_current_credential_is_marked(self):
+        self._two_namespaces()
+
+        rows = json.loads(self._list(output='json', args=['--offline']).stdout)
+
+        self.assertEqual({'one': True, 'two': False}, {r['key_name']: r['current'] for r in rows})
+
+    def test_live_metadata_replaces_the_caches_copy_and_says_so(self):
+        a, b = self._two_namespaces()
+        self.live[(CLUSTER, 'ci', 'one')] = [{'key_name': 'one', 'expiry': 5000.0, 'scopes': ['live.scope']}]
+        self.live[(CLUSTER, 'dev', 'two')] = [{'key_name': 'two', 'expiry': 6000.0, 'scopes': []}]
+
+        rows = json.loads(self._list(output='json').stdout)
+
+        self.assertEqual(['live', 'live'], [r['source'] for r in rows])
+        self.assertEqual(5000.0, rows[0]['expiry'])
+        self.assertEqual(['live.scope'], rows[0]['scopes'])
+
+    def test_one_request_per_namespace_not_per_key(self):
+        a = self._held('ci', 'one')
+        b = self._held('ci', 'two', key=OTHER_MINTED_KEY)
+        self._write_cache([a, b])
+        listing = [{'key_name': 'one', 'expiry': 1.0, 'scopes': []},
+                   {'key_name': 'two', 'expiry': 2.0, 'scopes': []}]
+        self.live[(CLUSTER, 'ci', 'one')] = listing
+
+        self._list(output='json')
+
+        self.assertEqual([(CLUSTER, 'ci', 'one')], self.attempts)
+
+    def test_a_namespace_which_cannot_be_read_does_not_stop_the_others(self):
+        self._two_namespaces()
+        self.live[(CLUSTER, 'ci', 'one')] = apiclient.UnauthenticatedException('no', 'POST', 'u', 401, '')
+        self.live[(CLUSTER, 'dev', 'two')] = [{'key_name': 'two', 'expiry': 6000.0, 'scopes': ['x']}]
+
+        result = self._list(output='json')
+        rows = json.loads(result.stdout)
+
+        self.assertEqual(['cache', 'live'], [r['source'] for r in rows])
+        self.assertEqual(auth.REASON_REFUSED, rows[0]['reason'])
+        self.assertIn('1 of 2', result.stderr)
+
+    def test_the_next_key_for_a_namespace_is_tried_when_one_is_refused(self):
+        a = self._held('ci', 'one')
+        b = self._held('ci', 'two', key=OTHER_MINTED_KEY)
+        self._write_cache([a, b])
+        self.live[(CLUSTER, 'ci', 'one')] = apiclient.UnauthenticatedException('no', 'POST', 'u', 401, '')
+        self.live[(CLUSTER, 'ci', 'two')] = [{'key_name': 'two', 'expiry': 2.0, 'scopes': []}]
+
+        rows = json.loads(self._list(output='json').stdout)
+
+        self.assertEqual(['cache', 'live'], [r['source'] for r in rows])
+        self.assertEqual(auth.REASON_NOT_LISTED, rows[0]['reason'])
+
+    def test_an_unreachable_cluster_is_asked_once_and_the_cache_answers(self):
+        self._two_namespaces()
+        self.live[(CLUSTER, 'ci', 'one')] = requests.exceptions.ConnectionError('down')
+
+        result = self._list(output='json')
+        rows = json.loads(result.stdout)
+
+        self.assertEqual(0, result.exit_code)
+        self.assertEqual([(CLUSTER, 'ci', 'one')], self.attempts)
+        self.assertEqual({'cache'}, {r['source'] for r in rows})
+        self.assertEqual({auth.REASON_UNREACHABLE}, {r['reason'] for r in rows})
+
+    def test_a_cluster_without_the_capability_is_reported_from_the_cache(self):
+        self._two_namespaces()
+        self.live[(CLUSTER, 'ci', 'one')] = apiclient.IncapableException('no')
+
+        rows = json.loads(self._list(output='json').stdout)
+
+        self.assertEqual({auth.REASON_INCAPABLE}, {r['reason'] for r in rows})
+
+    def test_an_unexpected_failure_is_not_a_traceback(self):
+        self._two_namespaces()
+        self.live[(CLUSTER, 'ci', 'one')] = KeyError(MINTED_KEY)
+        self.live[(CLUSTER, 'dev', 'two')] = ValueError(OTHER_MINTED_KEY)
+
+        for output in ('pretty', 'simple', 'json'):
+            result = self._list(output=output)
+
+            self.assertEqual(0, result.exit_code)
+            self.assertNotIn(MINTED_KEY, result.output)
+            self.assertNotIn(OTHER_MINTED_KEY, result.output)
+
+    def test_a_key_the_cluster_no_longer_lists_is_said_to_be_missing(self):
+        self._write_cache([self._held('ci', 'one')])
+        self.live[(CLUSTER, 'ci', 'one')] = [{'key_name': 'other', 'expiry': 1.0, 'scopes': []}]
+
+        rows = json.loads(self._list(output='json').stdout)
+
+        self.assertEqual('cache', rows[0]['source'])
+        self.assertEqual(auth.REASON_NOT_LISTED, rows[0]['reason'])
+
+    def test_offline_asks_no_cluster_at_all(self):
+        self._two_namespaces()
+
+        result = self._list(output='json', args=['--offline'])
+
+        self.assertEqual([], self.attempts)
+        self.assertEqual({auth.REASON_NOT_ASKED}, {r['reason'] for r in json.loads(result.stdout)})
+
+    def test_no_key_is_printed_in_any_output_mode(self):
+        self._two_namespaces()
+        self.live[(CLUSTER, 'ci', 'one')] = [{'key_name': 'one', 'key': MINTED_KEY, 'expiry': 1.0,
+                                              'scopes': ['s']}]
+        self.live[(CLUSTER, 'dev', 'two')] = requests.exceptions.ConnectionError(OTHER_MINTED_KEY)
+
+        for output in ('pretty', 'simple', 'json'):
+            for args in ([], ['--offline']):
+                result = self._list(output=output, args=args)
+
+                self.assertEqual(0, result.exit_code)
+                self.assertNotIn(MINTED_KEY, result.output)
+                self.assertNotIn(OTHER_MINTED_KEY, result.output)
+
+    def test_a_field_the_cluster_adds_is_not_printed(self):
+        self._write_cache([self._held('ci', 'one')])
+        self.live[(CLUSTER, 'ci', 'one')] = [{'key_name': 'one', 'expiry': 1.0, 'scopes': [],
+                                              'new_secret': 'not-a-field-we-name'}]
+
+        result = self._list(output='json')
+
+        self.assertNotIn('not-a-field-we-name', result.output)
+
+    def test_the_simple_output_has_a_header_and_no_serialised_objects(self):
+        self._two_namespaces()
+
+        lines = self._list(output='simple', args=['--offline']).stdout.strip().split('\n')
+
+        self.assertEqual('apiurl,namespace,key_name,expiry,scopes,current,source,reason', lines[0])
+        self.assertEqual(3, len(lines))
+        for line in lines:
+            self.assertEqual(8, len(line.split(',')))
+            self.assertNotIn('{', line)
+            self.assertNotIn('[', line)
+
+    def test_the_conversation_goes_to_standard_error(self):
+        self._two_namespaces()
+
+        result = self._list(output='json', args=['--offline'])
+
+        json.loads(result.stdout)
+        self.assertIn('no cluster was asked', result.stderr)
+
+    def test_an_empty_cache_is_not_a_failure(self):
+        for output in ('pretty', 'simple', 'json'):
+            result = self._list(output=output)
+
+            self.assertEqual(0, result.exit_code)
+
+        self.assertEqual([], json.loads(self._list(output='json').stdout))
+
+    def test_a_cache_which_cannot_be_read_says_so(self):
+        self._write_cache([self._held('ci', 'one')], mode=0o644)
+
+        result = self._list()
+
+        self.assertEqual(1, result.exit_code)
+        self.assertIn(self.path, result.stderr)
+        self.assertNotIn(MINTED_KEY, result.output)
+
+    def test_an_expired_credential_is_not_listed(self):
+        self._write_cache([self._held('ci', 'one', expiry=time.time() - 10)])
+
+        self.assertEqual([], json.loads(self._list(output='json', args=['--offline']).stdout))
+
+    def test_selecting_changes_the_current_credential(self):
+        self._two_namespaces()
+
+        result = self._select(['dev'])
+
+        self.assertEqual(0, result.exit_code)
+        self.assertEqual('two', credentials.current_credential()['key_name'])
+        self.assertEqual([], self.attempts)
+        self.assertNotIn(OTHER_MINTED_KEY, result.output)
+
+    def test_selecting_what_is_not_held_is_refused_with_the_caches_words(self):
+        self._two_namespaces()
+
+        result = self._select(['nowhere'])
+
+        self.assertEqual(1, result.exit_code)
+        self.assertIn('There is no cached credential for namespace nowhere', result.stderr)
+        self.assertEqual('one', credentials.current_credential()['key_name'])
+
+    def test_an_ambiguous_selection_is_refused_not_guessed(self):
+        self._write_cache([self._held('ci', 'one'), self._held('ci', 'two', key=OTHER_MINTED_KEY)])
+
+        result = self._select(['ci'])
+
+        self.assertEqual(1, result.exit_code)
+        self.assertIn('Name one of one, two', result.stderr)
+        self.assertIsNone(credentials.current_credential())
+
+        result = self._select(['ci', '--key-name', 'two'])
+
+        self.assertEqual(0, result.exit_code)
+        self.assertEqual('two', credentials.current_credential()['key_name'])
+
+    def test_several_clusters_and_no_selection_asks_which(self):
+        self._write_cache([self._held('ci', 'one'), self._held('ci', 'two', apiurl=OTHER_CLUSTER)])
+
+        result = self._select(['ci'])
+
+        self.assertEqual(1, result.exit_code)
+        self.assertIn(CLUSTER, result.stderr)
+        self.assertIn(OTHER_CLUSTER, result.stderr)
+
+        result = self._select(['ci'], apiurl=OTHER_CLUSTER)
+
+        self.assertEqual(0, result.exit_code)
+        self.assertEqual('two', credentials.current_credential()['key_name'])
+
+    def test_the_cluster_of_the_current_selection_is_the_default(self):
+        self._write_cache([self._held('ci', 'one'), self._held('ci', 'two', apiurl=OTHER_CLUSTER),
+                           self._held('dev', 'three', apiurl=OTHER_CLUSTER)],
+                          current={'apiurl': OTHER_CLUSTER, 'namespace': 'dev', 'key_name': 'three'})
+
+        result = self._select(['ci'])
+
+        self.assertEqual(0, result.exit_code)
+        self.assertEqual('two', credentials.current_credential()['key_name'])
+
+    def test_selecting_with_nothing_cached_says_so(self):
+        result = self._select(['ci'])
+
+        self.assertEqual(1, result.exit_code)
+        self.assertIn('no cached credentials', result.stderr)
+
+    def test_the_group_is_kept_out_of_client_construction(self):
+        self.assertIn(auth.credential.name, auth.COMMANDS_WITHOUT_A_CLIENT)

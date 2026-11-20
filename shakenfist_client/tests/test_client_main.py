@@ -490,6 +490,15 @@ class ClientConstructionTestCase(LoggingStateTestCase):
         self.assertEqual(0, result.exit_code)
         self.construct.assert_not_called()
 
+    def test_the_credential_verbs_get_no_client_at_all(self):
+        # Showing and choosing among what is cached is local, and has to
+        # work where the cluster cannot be reached.
+        for verb in ('list', 'select'):
+            args = ['credential', verb] + (['ci'] if verb == 'select' else ['--offline'])
+            self._invoke(['--apiurl', self.CLUSTER] + args)
+
+        self.construct.assert_not_called()
+
     def test_login_builds_its_own_client_from_the_api_url(self):
         # Not the group's call, which passes a namespace, a key and a
         # logger: this one skips the credential resolution altogether.
@@ -505,7 +514,8 @@ class ClientConstructionTestCase(LoggingStateTestCase):
     def test_the_login_verbs_are_registered(self):
         self.assertIn('login', main.cli.commands)
         self.assertIn('logout', main.cli.commands)
-        self.assertEqual(frozenset(['login', 'logout']),
+        self.assertIn('credential', main.cli.commands)
+        self.assertEqual(frozenset(['login', 'logout', 'credential']),
                          auth.COMMANDS_WITHOUT_A_CLIENT)
 
     def test_the_group_passes_on_the_cluster_a_login_needs(self):
