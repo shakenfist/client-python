@@ -55,6 +55,14 @@ write_to = "shakenfist_client/_version.py"
 
 [project.optional-dependencies]
 test = [
+    # Higher than the runtime floor above on purpose. This package only
+    # needs click's err=True, which is ancient, but the login tests assert
+    # that the instructions a login prints go to the error stream and that
+    # standard output carries nothing but the command's own document --
+    # which is what keeps --json parseable while a login talks to a human.
+    # CliRunner only separates the two streams from 8.2, so on anything
+    # older those assertions cannot be written rather than merely failing.
+    "click >= 8.2.0",      # bsd
     "coverage",            # apache2
     "testtools",           # mit
     "mock",                # bsd
