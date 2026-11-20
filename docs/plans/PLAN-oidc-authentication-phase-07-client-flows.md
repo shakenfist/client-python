@@ -509,6 +509,43 @@ no `SHAKENFIST_API_URL` the first verb a new user ever runs,
 this phase and affects every verb, but `login` is the one where
 having no configuration is the normal case. Step 7d owns it.
 
+**The steps ran in one worktree, not the isolated ones two rows
+asked for** (2026-11-20, AEDT). The isolation column exists so
+that steps running at the same time do not collide over a
+pre-commit stash which is taken repository wide. Nothing ran at
+the same time: the browser flow extends the file the device flow
+creates, so those two are ordered by the work itself, and every
+other row either writes to the shared tree or is the only thing
+running. What the column would have bought was therefore nothing,
+and what it would have cost was transferring each step's work
+between trees before review, which means reviewing a tree the
+step never ran its own checks in.
+
+**A defect the review of the credential precedence found.** The
+step filled in a credential for a caller which had named a
+cluster but no namespace or key -- which nothing answered before,
+since every source is gated on there being no API URL yet -- and
+did it without re-reading the environment. The environment block
+above it only runs when the environment supplied the API URL too,
+so a caller which passed the cluster as a flag with
+`SHAKENFIST_KEY` set in its environment had the cache outrank
+that key: the inversion the precedence decision exists to
+prevent, in the words that decision uses. Fixed by consulting the
+environment there before the cache, which is also what the
+command line already does, since click reads both variables
+whether or not it was given an API URL.
+
+**A defect the review of the device flow found.** A login which
+minted several credentials and selected none of them said nothing
+at all when the cache already held a selection for a *different*
+cluster, because the advice was conditioned on there being no
+selection rather than on none of this login's own credentials
+being selected. That is the worse of the two cases: the next
+command resolves the surviving selection and talks to the other
+cluster as the other namespace, so a login which had just
+succeeded appears to have done nothing. The other cluster and
+namespace are now named in the message.
+
 ## Results
 
 Nothing yet.
