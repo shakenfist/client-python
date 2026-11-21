@@ -318,6 +318,25 @@ once will keep using the login until they log out. `logout`
 restores the previous behaviour exactly, and the documentation
 says so.
 
+**Amended after review round six, with Michael's decision.** This
+decision had one case wrong, and the wrongness was in the *cluster*
+rather than the credential. A caller which pinned a credential and
+no cluster was given the cache's cluster -- so an operator whose
+`~/.shakenfist` names cluster A, who had since logged in to cluster
+B, presented a pinned key to B. A namespace key is scoped to the
+cluster which minted it, so B could only refuse it; the problem is
+that the secret had already crossed to a host nobody named.
+
+So the cache sits third as above *for a caller which pinned
+nothing*, and below both configuration files for the cluster of a
+pinned credential. It is still asked last on a host where neither
+file names a cluster, because there is nothing there for the key to
+be sent to instead and refusing would take away "log in once, then
+pin a credential and have it work"; it supplies only the cluster in
+that case, never either half of the credential. Michael chose this
+over refusing the cache outright for a pinned credential, which
+would have left such a host unconfigured.
+
 **D8. The refusals the server can give are handled by name.**
 `POST /auth/login` can answer 401 (refused), 429 (rate limited,
 with a budget separate from the exchange's), 413 (body too large)
@@ -1195,4 +1214,48 @@ killable.
 * `.tox/py3/bin/python -m stestr run`: 746 tests passing, 0
   failing. The baseline was 735; the 11 added are this round's.
 * `tools/flake8wrap.sh` over the package: clean.
+* `pre-commit run --all-files`: passed.
+
+#### The referred item, decided
+
+Michael chose the first of the three options: a caller which pinned a
+credential and no cluster asks the two configuration files for its
+cluster before the cache, and the cache last of all. D7 above is
+amended accordingly, and `docs/human-login.md` and `AGENTS.md` both
+name the exception and why it exists.
+
+What this buys is the case the review described: an operator whose
+`~/.shakenfist` names cluster A, who has since logged in to cluster B,
+now presents a pinned key to A rather than to B. What it keeps is a
+host with no configuration file at all, where the cache is still the
+cluster of last resort -- refusing there would have left such a host
+unconfigured and taken away "log in once, then pin a credential and
+have it work", which was the argument against the stricter second
+option.
+
+Two things fell out of the implementation which are worth recording.
+`test_a_flag_beats_the_cache_without_an_api_url`, which looked like
+the test this change would have to rewrite, passes untouched: it
+mocks every configuration file away, so it exercises the host with no
+file, which is exactly the case the chosen option preserves. And the
+first cache block's inner `if not namespace and not key` became dead
+once the block itself was gated on `pinned`, so it is gone -- which
+means the correctness of that unconditional fill now rests entirely
+on `pinned` being `or` rather than `and`. The mutation table below
+pins that.
+
+**Six mutants, six killed.** One survived the first pass because the
+mutant named a test with no cache populated; re-aimed at one which
+has, it dies.
+
+| Property | Mutant | Killed by |
+|----------|--------|-----------|
+| a pinned key keeps the file's cluster | the cache supplies it first again | `test_a_pinned_credential_keeps_the_files_cluster` |
+| a pinned key keeps the file's cluster | an environment credential does not count as pinned | `test_an_environment_credential_keeps_the_files_cluster_too` |
+| half a credential is still pinned | pinning is judged on both halves rather than either | `test_an_environment_key_alone_with_no_url_is_not_completed` |
+| the cache is still the last resort | the cache no longer answers a pinned credential at all | `test_the_cache_still_answers_a_pinned_credential_with_no_file` |
+| only the cluster, never the credential | the last-resort cache fills the credential too | `test_the_cache_still_answers_a_pinned_credential_with_no_file` |
+| a named cluster still gets a credential | the named-cluster branch stops asking the cache | `test_the_cache_completes_a_flag_supplied_url` |
+
+* `.tox/py3/bin/python -m stestr run`: 749 tests passing, 0 failing.
 * `pre-commit run --all-files`: passed.

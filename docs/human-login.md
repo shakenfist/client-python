@@ -191,6 +191,29 @@ so had no credential at all. Such a caller now gets the environment's
 credential if it has one, and otherwise the cache's, for that named
 cluster only.
 
+### Where a pinned credential's cluster comes from
+
+The order above describes a caller which pinned nothing. **A caller
+which pinned a credential, and no cluster, asks the two configuration
+files for its cluster before the cache.** That is the one place the
+cache sits below them.
+
+The reason is that a namespace key is scoped to the cluster which
+minted it. Taking the cluster from a login, for a credential somebody
+else pinned, sends that key to a host nobody named: the cluster can
+only refuse it, and by then the secret has crossed to it. So for an
+operator whose `~/.shakenfist` names cluster A, who has since logged in
+to cluster B, `sf-client --namespace=ns --key=K ...` presents K to A,
+which is where it went before the cache existed and where it was meant
+to go.
+
+The cache is still asked, last of all, on a host where neither
+configuration file names a cluster -- there is nothing there for the key
+to be sent to instead, and refusing would take away "log in once, then
+pin a credential and have it work". It supplies only the cluster in that
+case. A pinned credential is never completed from the cache, here or
+anywhere above.
+
 ## Seeing and switching what you hold
 
 ```bash

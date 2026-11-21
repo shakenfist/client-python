@@ -583,25 +583,28 @@ class Client:
             # which brought a credential of its own is unaffected either way: the
             # file is read only where the cache would have been used, which is to
             # say only where nothing above it answered.
-            if not base_url:
+            # Whether anything above pinned a credential, which decides
+            # where the cache sits for the *cluster*. A namespace key is
+            # scoped to the cluster which minted it, so taking the cluster
+            # from a login for a credential somebody else pinned would send
+            # that key to a host nobody named: the cluster can only refuse
+            # it, and by then the secret has crossed to it. So a pinned
+            # credential asks the configuration files for its cluster
+            # first, which is where that answer came from before the cache
+            # existed, and falls back to the cache's cluster only on a host
+            # where neither file names one.
+            pinned = bool(namespace or key)
+
+            if not base_url and not pinned:
                 LOG.debug('Testing the credential cache')
                 credential = _cached_credential()
                 if credential:
                     LOG.debug('Loading configuration from the credential cache')
-                    # The cluster is taken from the cache whatever else was
-                    # pinned, because for a caller which named no cluster the
-                    # cache is the only source of one above the configuration
-                    # files. Its credential is taken only where neither half
-                    # was pinned: completing one half of a pinned credential
-                    # from a login would present a pair that neither ever had,
-                    # which is the same rule the named-cluster branch below
-                    # applies.
                     base_url = credential['apiurl']
-                    if not namespace and not key:
-                        namespace = credential['namespace']
-                        key = credential['key']
+                    namespace = credential['namespace']
+                    key = credential['key']
 
-            elif not namespace and not key:
+            elif not pinned:
                 # An API URL and nothing else, from a flag or from
                 # SHAKENFIST_API_URL on its own. None of the sources below are
                 # consulted for such a caller -- each of them is gated on there
@@ -610,6 +613,9 @@ class Client:
                 # The cache can answer that for the named cluster without taking
                 # anything from a file. The environment has already been asked,
                 # above, whether or not it named the cluster.
+                #
+                # Reached only when base_url is set, because the branch above
+                # takes every case where it is not.
                 LOG.debug('Testing the credential cache for %s' % base_url)
                 credential = _cached_credential(base_url)
                 if credential:
@@ -649,6 +655,24 @@ class Client:
                 except OSError as e:
                     if e.errno != errno.EACCES:
                         raise
+
+            # The cache's cluster for a pinned credential, last of all.
+            # Neither configuration file named one, so there is nothing for
+            # the key to be sent to instead, and refusing here would take
+            # away what a host with no configuration file at all has today:
+            # log in once, then pin a credential and have it work. What this
+            # ordering buys is the case where a file *does* name a cluster,
+            # which now keeps the key going there rather than to whichever
+            # cluster happened to be logged in to last.
+            #
+            # Only the cluster. A pinned credential is never completed from
+            # the cache, here or anywhere above.
+            if not base_url and pinned:
+                LOG.debug('Testing the credential cache for a cluster')
+                credential = _cached_credential()
+                if credential:
+                    LOG.debug('Taking the cluster from the credential cache')
+                    base_url = credential['apiurl']
 
         if not base_url:
             raise UnconfiguredException(

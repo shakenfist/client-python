@@ -280,6 +280,13 @@ which read as tidy-up targets:
   key are read whether or not the environment also names the cluster. An
   automated caller which exports `SHAKENFIST_KEY` must never run as
   whoever last logged in on the machine.
+- The one exception to that position: a caller which pinned a
+  **credential and no cluster** asks the configuration files for its
+  cluster before the cache, and the cache last of all. A namespace key is
+  scoped to the cluster which minted it, so taking the cluster from a
+  login would send a pinned key to a host nobody named -- which can only
+  refuse it, after the secret has already crossed to it. The cache then
+  supplies the cluster and never either half of the credential.
 
 ## Code Conventions
 

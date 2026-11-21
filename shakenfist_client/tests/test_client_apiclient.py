@@ -1957,6 +1957,68 @@ class ApiClientConfigurationLookupTestCase(testtools.TestCase):
         self.assertEqual('flagspace', client.namespace)
         self.assertIsNone(client.key)
 
+    # -- where a pinned credential's cluster comes from ---------------------
+
+    @mock.patch.dict('os.environ', {}, clear=True)
+    def test_a_pinned_credential_keeps_the_files_cluster(self):
+        # A namespace key is scoped to the cluster which minted it, so
+        # taking the cluster from a login for a credential somebody else
+        # pinned sends that key to a host nobody named. The cluster can
+        # only refuse it -- and by then the secret has crossed to it.
+        #
+        # The shape: an operator whose ~/.shakenfist names one cluster,
+        # who has since logged in to another, running a command with
+        # --namespace and --key. The file's cluster is the one the key was
+        # meant for, and before the cache existed it is the one it went to.
+        self.cache([self.credential(apiurl=self.OTHER_CLUSTER)])
+        self.configuration_files(user_conf={
+            'apiurl': self.CLUSTER, 'namespace': 'filespace',
+            'key': 'filekey'})
+
+        client = apiclient.Client(namespace='flagspace', key='flagkey')
+
+        self.assertEqual(self.CLUSTER, client.base_url)
+        self.assertEqual('flagspace', client.namespace)
+        self.assertEqual('flagkey', client.key)
+
+    @mock.patch.dict('os.environ', {
+        'SHAKENFIST_NAMESPACE': 'testspace',
+        'SHAKENFIST_KEY': 'testkey',
+    }, clear=True)
+    def test_an_environment_credential_keeps_the_files_cluster_too(self):
+        # The same for the way a CI job pins one. This is the case which
+        # matters most: the job did not choose the cluster its key goes to,
+        # and must not inherit whoever logged in on the machine.
+        self.cache([self.credential(apiurl=self.OTHER_CLUSTER)])
+        self.configuration_files(user_conf={
+            'apiurl': self.CLUSTER, 'namespace': 'filespace',
+            'key': 'filekey'})
+
+        client = apiclient.Client()
+
+        self.assertEqual(self.CLUSTER, client.base_url)
+        self.assertEqual('testspace', client.namespace)
+        self.assertEqual('testkey', client.key)
+
+    @mock.patch.dict('os.environ', {
+        'SHAKENFIST_NAMESPACE': 'testspace',
+        'SHAKENFIST_KEY': 'testkey',
+    }, clear=True)
+    def test_the_cache_still_answers_a_pinned_credential_with_no_file(self):
+        # The other half of the trade, and why the configuration files are
+        # asked first rather than the cache being refused outright: on a
+        # host with no configuration file there is nothing for the key to
+        # be sent to instead, and refusing would take away "log in once,
+        # then pin a credential and have it work". Only the cluster comes
+        # from the cache here -- never either half of the credential.
+        self.cache([self.credential()])
+
+        client = apiclient.Client()
+
+        self.assertEqual(self.CLUSTER, client.base_url)
+        self.assertEqual('testspace', client.namespace)
+        self.assertEqual('testkey', client.key)
+
     @mock.patch.dict('os.environ', {'SHAKENFIST_NAMESPACE': 'testspace'},
                      clear=True)
     def test_half_an_environment_credential_pairs_with_a_files_other_half(self):
