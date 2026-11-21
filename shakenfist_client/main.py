@@ -205,8 +205,15 @@ class GroupCatchExceptions(click.Group):
             LOG.error('Agent operation failed: %s' % e)
             sys.exit(1)
 
-        except apiclient.requests.exceptions.ConnectionError as e:
-            LOG.error('Unable to connect to server: %s' % e)
+        # RequestException rather than ConnectionError alone: a refused
+        # connection was the only network failure handled here, so a
+        # read timeout, a TLS failure or a connection reset mid-response
+        # reached the terminal as a traceback. They are the same thing to
+        # the person running the command -- the cluster could not be
+        # talked to -- and ConnectionError is a subclass of this, so the
+        # message it used to produce is unchanged.
+        except apiclient.requests.exceptions.RequestException as e:
+            LOG.error('Unable to talk to the server: %s' % e)
             sys.exit(1)
 
 

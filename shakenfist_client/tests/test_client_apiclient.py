@@ -2784,6 +2784,25 @@ class BaseUrlRedirectTestCase(testtools.TestCase):
         self.assertEqual('http://sf.example.com/elsewhere/api',
                          client.base_url)
 
+    def test_a_301_with_no_location_leaves_the_cluster_alone(self):
+        # Malformed, but a broken proxy in front of a cluster can produce
+        # one, and indexing the header would raise a KeyError out of
+        # Client.__init__ -- a traceback on every verb, login included.
+        # Leaving base_url alone is the honest answer: nothing said where
+        # to move it to.
+        session = mock.MagicMock()
+        response = self._response(True, self.ROOT_HTML, json_body=[])
+        response.history[0].headers = {}
+        session.request.return_value = response
+
+        with mock.patch('shakenfist_client.apiclient.requests.Session',
+                        return_value=session):
+            client = apiclient.Client(suppress_configuration_lookup=True,
+                                      base_url=self.REDIRECTED_FROM)
+
+        self.assertEqual(self.REDIRECTED_FROM, client.base_url)
+        self.assertTrue(client.check_capability('human-login'))
+
     def test_a_trailing_slash_does_not_double_up(self):
         # Every caller appends a path which begins with a slash.
         client, session = self._client_redirected_to(

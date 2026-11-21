@@ -711,9 +711,21 @@ class Client:
                                  timeout=self.sync_request_timeout)
         if r.history and r.history[0].status_code == 301:
             hop = r.history[0]
-            target = urljoin(hop.url, hop.headers['Location']).rstrip('/')
-            LOG.debug('API server redirects to %s' % target)
-            self.base_url = target
+            # Read rather than indexed. A 301 without a Location is
+            # malformed, but a broken proxy in front of a cluster can
+            # produce one, and a KeyError here would come out of
+            # Client.__init__ as a traceback on every verb -- including
+            # login, where this phase has worked to make sure a person
+            # gets a sentence instead. Leaving base_url alone is the
+            # honest answer: nothing said where to move it to.
+            location = hop.headers.get('Location')
+            if location:
+                target = urljoin(hop.url, location).rstrip('/')
+                LOG.debug('API server redirects to %s' % target)
+                self.base_url = target
+            else:
+                LOG.debug('API server answered 301 with no Location; '
+                          'leaving the API URL as %s' % self.base_url)
         self.root_html = r.text
 
     def check_capability(self, capability_string):

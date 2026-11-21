@@ -274,6 +274,22 @@ class GroupCatchExceptionsTestCase(testtools.TestCase):
         self.assertIn('Agent operation failed', message)
         self.assertIn('expired', message)
 
+    def test_every_network_failure_is_reported_not_traced(self):
+        # A refused connection was the only one handled here, so a read
+        # timeout, a TLS failure or a reset mid-response reached the
+        # terminal as a traceback. They are the same thing to the person
+        # running the command: the cluster could not be talked to.
+        for failure in (apiclient.requests.exceptions.ConnectionError('refused'),
+                        apiclient.requests.exceptions.ReadTimeout('too slow'),
+                        apiclient.requests.exceptions.SSLError('bad certificate'),
+                        apiclient.requests.exceptions.ChunkedEncodingError('reset'),
+                        apiclient.requests.exceptions.TooManyRedirects('loop')):
+            log = self._run(failure)
+
+            log.error.assert_called_once()
+            self.assertIn('Unable to talk to the server',
+                          log.error.call_args[0][0])
+
     def test_an_unmapped_api_exception_is_not_swallowed(self):
         # There is no bare APIException fallback, deliberately: a status
         # nobody has taught the CLI about should be loud rather than

@@ -1065,3 +1065,134 @@ way a killed process would, and names no constant at all.
   failing. The baseline was 717; the 18 added are this round's.
 * `tools/flake8wrap.sh` over the package: clean.
 * `pre-commit run --all-files`: passed.
+
+### Review round six
+
+The review on `8967c0d` raised 11 items: 3 `fix`, 1 `document`, 6
+`consider` and 1 `none`. Nine were taken, three declined, and one
+`fix` item was referred to Michael because it reverses a shape the
+back brief settled.
+
+One of the three `fix` items was round five's own fault, and it is
+the failure mode worth naming: **incomplete generalisation.** Round
+five translated `requests.exceptions.RequestException` in
+`_client_for_login()` and left the two cluster-facing request paths
+beside it -- `_login_issuers()` and `_mint_credentials()` -- alone,
+so a read timeout, a TLS failure or a reset mid-exchange still
+reached the terminal as a traceback. The mint is the worst place in
+the flow for one: the person has already authenticated at their
+provider and the identity token is spent, so what they need to be
+told is that the login itself worked and that running it again is
+both safe and necessary.
+
+Swept properly this time. Every path in `auth.py` which reaches the
+network now translates: the three provider requests already did,
+`_client_for_login()` did from round five, and the issuer list, the
+mint and the live metadata read do now. `main.py`'s group handler
+caught only `ConnectionError`, which is the backstop for every
+*other* verb in the client, and now catches `RequestException` --
+`ConnectionError` is a subclass, so the message it used to produce
+is unchanged.
+
+**`credential select` asked the person to name one of no clusters.**
+`read_credentials()` drops what has expired, so a cache whose every
+entry has lapsed is a truthy document with an empty credential list.
+The verb's guard tested only the document, so an empty cache reached
+`_apiurl_to_select()` and fell through to its last branch: "credentials
+are cached for more than one cluster and none is selected. Name one
+with --apiurl: ." -- a false claim and an empty list, reachable by
+letting a login lapse and then trying to switch namespace.
+
+Refused in `_apiurl_to_select()` rather than in the verb, so that it
+holds for every caller of that function. The verb keeps the narrower
+guard for the missing-file case, which is a different condition.
+Guarding the same condition in both places was the first attempt, and
+the mutation pass caught it: with two guards for one condition neither
+was individually necessary and no mutant could tell them apart.
+
+Taken from the `consider` items:
+
+* **The provider requests followed redirects.** `requests` re-sends a
+  body unchanged on a 307 or a 308, and these bodies are the login's
+  own secrets -- the device code the poll loop presents, and the
+  authorization code together with the PKCE verifier, whose entire
+  purpose is to travel only between this process and the token
+  endpoint registered at the provider. A redirect would have handed
+  both to whatever host it named. All three requests now go through
+  one `_post_to_provider()` helper which passes
+  `allow_redirects=False` and treats any 3xx as a refusal, so the
+  next request added to the module cannot be the one which forgets.
+* A 301 with no `Location` header raised `KeyError` out of
+  `Client.__init__`, which is a traceback on every verb including
+  `login`. Read rather than indexed now, leaving `base_url` alone --
+  nothing said where to move it to.
+* `_tell()`'s docstring claimed sanitising covered everything,
+  which round four wrote and which was never true of the document on
+  standard output. The pretty and comma separated renderers now put
+  their cluster-supplied fields through `_printable()`; the JSON
+  renderer does not need to, because `json.dumps()` escapes a control
+  character rather than emitting it. The docstring says which.
+* `AGENTS.md` described `COMMANDS_WITHOUT_A_CLIENT` as the set
+  `main.py` checks, which round five made false. Both sets are named
+  now, with why they are kept apart.
+
+**Declined, with reasons:**
+
+* The speculative-connection path in the loopback listener choosing
+  the generic timeout message over the actionable one. Real, but the
+  listener is the most concurrency-sensitive code in the phase and
+  already cost this plan one flake; the message is suboptimal rather
+  than wrong, and the change is not worth re-opening that file for in
+  a review round.
+* `--namespace` naming a namespace the login did not mint being
+  silently ignored. A missing message rather than wrong behaviour,
+  and the advice line this phase already rewrote covers the case the
+  person actually hits.
+* The nested conditional in `_live_metadata()`. Pure readability, no
+  behaviour, and every edit in a module under review is a chance to
+  break something.
+
+**Referred to Michael rather than decided here.** The review's first
+`fix` item is that the cache supplies the *cluster* even when a
+credential was explicitly pinned, so an operator whose
+`~/.shakenfist` names cluster A, who has since logged in to cluster
+B, and who runs `sf-client --namespace=ns --key=K ...` now sends K to
+B. The key is scoped to the cluster which minted it, so B can only
+refuse it -- but the secret has been transmitted to a host the caller
+never named, which is the part that matters. This is step 7a's
+deliberate behaviour, pinned by
+`test_a_flag_beats_the_cache_without_an_api_url` and stated in D7, so
+changing it is not a review-round decision. The options put to him
+were: prefer the configuration files' API URL when a credential was
+pinned, keeping the cache's cluster only for a host with no file;
+never let the cache supply a cluster for a pinned credential at all;
+or keep the behaviour and document it. Whichever he chooses lands as
+its own commit.
+
+#### Mutation testing
+
+**Eleven mutants, eleven killed.** One survived the first pass, and
+it was the double guard described above rather than a missing test;
+removing the redundant guard made each remaining one necessary and
+killable.
+
+| Property | Mutant | Killed by |
+|----------|--------|-----------|
+| network failures are sentences | the mint does not translate a network failure | `test_the_mint_losing_the_cluster_mid_exchange` |
+| network failures are sentences | the issuer list does not translate one | `test_the_issuer_list_losing_the_cluster` |
+| network failures are sentences | the group handler narrows back to a refused connection | `test_every_network_failure_is_reported_not_traced` |
+| honest refusals | a missing cache file reaches the selection logic | `test_selecting_with_nothing_cached_says_so` |
+| honest refusals | the cluster question is asked of an empty cache | `test_the_cluster_question_is_never_asked_of_an_empty_cache` |
+| secrets stay with the endpoint | the provider requests follow redirects again | `test_the_provider_requests_do_not_follow_a_redirect` |
+| secrets stay with the endpoint | a 3xx from the provider is not a refusal | `test_a_redirecting_device_endpoint_is_refused` |
+| secrets stay with the endpoint | only a permanent redirect is refused | `test_a_redirecting_token_endpoint_is_refused` |
+| no tracebacks from the root fetch | a 301 with no Location raises | `test_a_301_with_no_location_leaves_the_cluster_alone` |
+| the document is sanitised | the table is not sanitised | `test_the_document_is_sanitised_too_not_only_the_conversation` |
+| the document is sanitised | the comma separated listing is not | `test_the_document_is_sanitised_too_not_only_the_conversation` |
+
+#### Checks
+
+* `.tox/py3/bin/python -m stestr run`: 746 tests passing, 0
+  failing. The baseline was 735; the 11 added are this round's.
+* `tools/flake8wrap.sh` over the package: clean.
+* `pre-commit run --all-files`: passed.

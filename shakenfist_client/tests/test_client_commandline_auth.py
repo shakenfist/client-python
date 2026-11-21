@@ -540,6 +540,37 @@ class DeviceAuthorizationFlowTestCase(testtools.TestCase):
 
         self.assertIn('Could not reach the identity provider', str(e))
 
+    def test_the_provider_requests_do_not_follow_a_redirect(self):
+        # requests re-sends a body unchanged on a 307 or a 308, and these
+        # bodies are the login's own secrets: the device code the poll
+        # loop presents, and later the authorization code with the PKCE
+        # verifier. Following one would hand them to whatever host the
+        # redirect named.
+        self._run([response(200, dict(STARTED)), token_response()])
+
+        for call in self.post.call_args_list:
+            self.assertFalse(call[1]['allow_redirects'])
+
+    def test_a_redirecting_device_endpoint_is_refused(self):
+        redirect = response(307, None)
+        redirect.headers = {'Location': 'https://elsewhere.example.com/device'}
+
+        e = self.assertRaises(auth.LoginFailed, self._run, [redirect])
+
+        self.assertIn('redirected', str(e))
+        self.assertIn('another host', str(e))
+
+    def test_a_redirecting_token_endpoint_is_refused(self):
+        # The worse of the two: this body carries the authorization code
+        # and the PKCE verifier together.
+        redirect = response(308, None)
+        redirect.headers = {'Location': 'https://elsewhere.example.com/token'}
+
+        e = self.assertRaises(auth.LoginFailed, self._run,
+                              [response(200, dict(STARTED)), redirect])
+
+        self.assertIn('redirected', str(e))
+
 
 class TellTestCase(testtools.TestCase):
     """What reaches the terminal, when a provider wrote some of it.
@@ -1410,6 +1441,28 @@ class RefusalTestCase(testtools.TestCase):
 
         self.assertIn('refused this identity', str(e))
         self.assertIn('mapping rule', str(e))
+
+    def test_the_mint_losing_the_cluster_mid_exchange(self):
+        # The worst moment in the flow for a traceback: the person has
+        # authenticated at their provider and the identity token is
+        # spent, so the message has to say the login itself worked and
+        # that running it again is both safe and what is needed.
+        for failure in (requests.exceptions.ReadTimeout('too slow'),
+                        requests.exceptions.SSLError('bad certificate'),
+                        requests.exceptions.ChunkedEncodingError('reset'),
+                        requests.exceptions.ConnectionError('refused')):
+            e = self._mint_refusal(failure)
+
+            self.assertIn('identity provider accepted the login', str(e))
+            self.assertIn('run the login again', str(e))
+
+    def test_the_issuer_list_losing_the_cluster(self):
+        # Nothing has happened yet here, which the message says: this one
+        # is safe to re-run with nothing spent.
+        e = self._issuers_refusal(requests.exceptions.ReadTimeout('too slow'))
+
+        self.assertIn('could not be reached', str(e))
+        self.assertIn('safe to run again', str(e))
 
     def test_the_mint_rate_limiting(self):
         e = self._mint_refusal(self._api_exception(429))
@@ -2329,6 +2382,59 @@ class CredentialCommandTestCase(CacheIsolatedTestCase):
 
         self.assertEqual(1, result.exit_code)
         self.assertIn('no cached credentials', result.stderr)
+
+    def test_selecting_from_a_wholly_expired_cache_says_the_same(self):
+        # read_credentials() drops what has expired, so a cache whose
+        # every entry has lapsed is a truthy document with an empty
+        # credential list. The guard tested only the document, so the
+        # person was told that credentials were cached for more than one
+        # cluster and asked to name one of none -- a false claim and an
+        # empty list, reachable by letting a login lapse and then trying
+        # to switch namespace.
+        self._write_cache([self._held('ci', 'one', expiry=1.0),
+                           self._held('dev', 'two', apiurl=OTHER_CLUSTER,
+                                      expiry=1.0)])
+
+        result = self._select(['ci'])
+
+        self.assertEqual(1, result.exit_code)
+        self.assertIn('no cached credentials', result.stderr)
+        self.assertNotIn('more than one cluster', result.stderr)
+
+    def test_the_cluster_question_is_never_asked_of_an_empty_cache(self):
+        # The same property at the function which produces the message,
+        # so that it cannot make the false claim whatever its caller did.
+        e = self.assertRaises(
+            credentials.CredentialCacheException,
+            auth._apiurl_to_select, mock.MagicMock(obj={'APIURL': None}),
+            {'version': 1, 'credentials': [], 'current': None})
+
+        self.assertIn('no cached credentials', str(e))
+
+    def test_the_document_is_sanitised_too_not_only_the_conversation(self):
+        # _printable() covers everything a login says, through _tell().
+        # The document on standard output is separate, and its fields come
+        # from the cluster -- a key name embeds the operator-configured
+        # issuer name -- so the pretty and comma separated renderers put
+        # them through it at the point of printing. The JSON renderer does
+        # not need to, because json.dumps() escapes a control character
+        # rather than emitting it.
+        self._write_cache([self._held('ci', 'one\x1b[31m')])
+
+        for output in ('pretty', 'simple'):
+            result = self._list(output=output, args=['--offline'])
+
+            self.assertNotIn('\x1b', result.stdout)
+            self.assertIn('one[31m', result.stdout)
+
+    def test_the_json_document_escapes_rather_than_emitting(self):
+        self._write_cache([self._held('ci', 'one\x1b[31m')])
+
+        result = self._list(output='json', args=['--offline'])
+
+        self.assertNotIn('\x1b', result.stdout)
+        self.assertEqual('one\x1b[31m',
+                         json.loads(result.stdout)[0]['key_name'])
 
     def test_the_group_is_kept_out_of_client_construction(self):
         self.assertIn(auth.credential.name, auth.COMMANDS_WITHOUT_A_CLIENT)

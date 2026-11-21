@@ -218,10 +218,17 @@ def _tell(message):
     something else can parse it. A login still has to talk to a human
     while it runs, so everything it says goes to stderr.
 
-    Everything a login says passes through here, which is why the
+    Everything a login *says* passes through here, which is why the
     sanitising is here rather than at each site which interpolates a
-    provider's string into a message: one added later cannot forget to
-    ask for it.
+    provider's string into a message: a message added later cannot
+    forget to ask for it.
+
+    The command's document on standard output is a separate matter. Its
+    fields come from the cluster rather than from the provider, and the
+    pretty and comma separated renderers put them through _printable()
+    at the point of printing; the JSON renderer does not need to,
+    because json.dumps() escapes a control character rather than
+    emitting it.
     """
     click.echo(_printable(message), err=True)
 
@@ -288,6 +295,41 @@ def _warn_about_plaintext(issuer, tell, flow=FLOW_DEVICE):
                  % (field.replace('_', ' '), endpoint))
 
 
+def _post_to_provider(endpoint, body):
+    """POST to one of an issuer's endpoints. Redirects are not followed.
+
+    Every body sent through here carries a secret of the login's own:
+    the device code the poll loop presents, and the authorization code
+    with the PKCE verifier, whose entire purpose is to travel only
+    between this process and the token endpoint registered at the
+    provider. requests re-sends a body unchanged on a 307 or a 308, so
+    following one would hand those to whatever host the redirect names.
+
+    A 3xx is therefore a refusal rather than a route. An endpoint which
+    redirects is a provider configuration problem, or an interception,
+    and neither is something a login should carry on through.
+
+    One helper rather than a flag at each call site, so that the next
+    request added to this module cannot be the one which forgets.
+    """
+    try:
+        r = requests.post(endpoint, data=body, allow_redirects=False,
+                          timeout=ISSUER_REQUEST_TIMEOUT)
+    except requests.exceptions.RequestException as e:
+        raise LoginFailed('Could not reach the identity provider at %s: %s'
+                          % (endpoint, e))
+
+    if 300 <= r.status_code < 400:
+        raise LoginFailed(
+            'The identity provider redirected the request sent to %s, which this '
+            'client will not follow: that request body carries the login\'s own '
+            'secrets, and a redirect would send them to another host. Whoever '
+            'configured this issuer needs to give the endpoint which answers '
+            'directly.' % endpoint)
+
+    return r
+
+
 def _request_device_code(issuer):
     """Ask the provider to start a device authorization.
 
@@ -305,11 +347,7 @@ def _request_device_code(issuer):
     if issuer.get('oidc_scopes'):
         body['scope'] = issuer['oidc_scopes']
 
-    try:
-        r = requests.post(endpoint, data=body, timeout=ISSUER_REQUEST_TIMEOUT)
-    except requests.exceptions.RequestException as e:
-        raise LoginFailed('Could not reach the identity provider at %s: %s'
-                          % (endpoint, e))
+    r = _post_to_provider(endpoint, body)
 
     document = _json_body(r)
     if r.status_code != 200:
@@ -357,12 +395,7 @@ def _request_token(issuer, device_code):
         'client_id': issuer['client_id'],
     }
 
-    try:
-        return requests.post(endpoint, data=body,
-                             timeout=ISSUER_REQUEST_TIMEOUT)
-    except requests.exceptions.RequestException as e:
-        raise LoginFailed('Could not reach the identity provider at %s: %s'
-                          % (endpoint, e))
+    return _post_to_provider(endpoint, body)
 
 
 def _poll_interval(document):
@@ -945,11 +978,7 @@ def _exchange_code(issuer, code, verifier, redirect_uri):
         'code_verifier': verifier,
     }
 
-    try:
-        r = requests.post(endpoint, data=body, timeout=ISSUER_REQUEST_TIMEOUT)
-    except requests.exceptions.RequestException as e:
-        raise LoginFailed('Could not reach the identity provider at %s: %s'
-                          % (endpoint, e))
+    r = _post_to_provider(endpoint, body)
 
     document = _json_body(r)
     if r.status_code != 200:
@@ -1218,6 +1247,10 @@ def _login_issuers(client):
         raise LoginFailed(
             'The cluster could not say which identity providers it offers just now. '
             'That is temporary rather than a refusal: try again in a moment.')
+    except requests.exceptions.RequestException as e:
+        raise LoginFailed(
+            'The cluster could not be reached to ask which identity providers it '
+            'offers: %s. Nothing has happened yet, so this is safe to run again.' % e)
     except apiclient.APIException as e:
         if e.status_code == 429:
             raise LoginFailed(
@@ -1278,6 +1311,20 @@ def _mint_credentials(client, token):
         raise LoginFailed(
             'The cluster could not check this login just now. That is temporary rather '
             'than a refusal: try again in a moment.')
+    except requests.exceptions.RequestException as e:
+        # The worst moment in the flow for a bare traceback: the person
+        # has already authenticated at their provider and the identity
+        # token is spent, so what they need is to be told the login itself
+        # worked and that running it again is both safe and necessary.
+        # Whether the exchange happened is not knowable from here -- the
+        # request may have been answered and the answer lost -- but
+        # re-running mints a fresh set either way, and the cluster
+        # replaces this cluster's entries rather than adding to them.
+        raise LoginFailed(
+            'The identity provider accepted the login, but the cluster could not be '
+            'reached to exchange it: %s. The identity token is spent, so run the login '
+            'again -- it mints a fresh set, and whatever this attempt may have minted '
+            'is replaced rather than added to.' % e)
     except apiclient.APIException as e:
         if e.status_code == 429:
             raise LoginFailed(
@@ -1362,17 +1409,18 @@ def _show_what_was_minted(ctx, stored):
         print('namespace,key_name,expiry,scopes,current')
         for row in rows:
             print(','.join([
-                row['namespace'], row['key_name'],
+                _printable(row['namespace']), _printable(row['key_name']),
                 '' if not row['expiry'] else repr(row['expiry']),
-                ' '.join(row['scopes']),
+                _printable(' '.join(row['scopes'])),
                 'yes' if row['current'] else 'no']))
 
     else:
         t = PrettyTable(['namespace', 'key name', 'expiry', 'scopes', 'current'])
         t.align = 'l'
         for row in rows:
-            t.add_row([row['namespace'], row['key_name'], _expiry(row['expiry']),
-                       ' '.join(row['scopes']),
+            t.add_row([_printable(row['namespace']), _printable(row['key_name']),
+                       _expiry(row['expiry']),
+                       _printable(' '.join(row['scopes'])),
                        'yes' if row['current'] else 'no'])
         print(t)
 
@@ -1701,9 +1749,10 @@ def _show_credential_rows(ctx, rows):
         print('apiurl,namespace,key_name,expiry,scopes,current,source,reason')
         for row in rows:
             print(','.join([
-                row['apiurl'], row['namespace'], row['key_name'],
+                _printable(row['apiurl']), _printable(row['namespace']),
+                _printable(row['key_name']),
                 '' if not row['expiry'] else repr(row['expiry']),
-                ' '.join(row['scopes']),
+                _printable(' '.join(row['scopes'])),
                 'yes' if row['current'] else 'no',
                 row['source'], row['reason']]))
 
@@ -1711,8 +1760,10 @@ def _show_credential_rows(ctx, rows):
         t = PrettyTable(['cluster', 'namespace', 'key name', 'expiry', 'scopes', 'current', 'metadata'])
         t.align = 'l'
         for row in rows:
-            t.add_row([row['apiurl'], row['namespace'], row['key_name'], _expiry(row['expiry']),
-                       ' '.join(row['scopes']), 'yes' if row['current'] else 'no',
+            t.add_row([_printable(row['apiurl']), _printable(row['namespace']),
+                       _printable(row['key_name']), _expiry(row['expiry']),
+                       _printable(' '.join(row['scopes'])),
+                       'yes' if row['current'] else 'no',
                        row['source'] if not row['reason'] else '%s (%s)' % (row['source'], row['reason'])])
         print(t)
 
@@ -1794,6 +1845,16 @@ def _apiurl_to_select(ctx, cache):
     if len(apiurls) == 1:
         return apiurls[0]
 
+    # A cache whose every entry has expired is a truthy document with an
+    # empty credential list, which used to arrive here and fall through to
+    # the message below -- telling the person that credentials were cached
+    # for more than one cluster and asking them to name one of none. Both
+    # halves of that were false. Refused here rather than in the verb so
+    # that it holds for every caller of this function.
+    if not apiurls:
+        raise credentials.CredentialCacheException(
+            'There are no cached credentials to select from in %s.' % credentials.credentials_path())
+
     raise _NotEnoughToChoose(
         'Credentials are cached for more than one cluster and none is selected. Name one with '
         '--apiurl: %s.' % ', '.join(apiurls))
@@ -1814,6 +1875,11 @@ def credential_select(ctx, namespace, key_name):
     """
     try:
         cache = credentials.read_credentials()
+        # No cache file at all. A cache whose every entry has expired is a
+        # different condition -- a truthy document with an empty credential
+        # list -- and is refused by _apiurl_to_select() rather than here,
+        # so that it is refused for every caller of that function and not
+        # only for this one.
         if not cache:
             raise credentials.CredentialCacheException(
                 'There are no cached credentials to select from in %s.' % credentials.credentials_path())

@@ -266,10 +266,15 @@ which read as tidy-up targets:
   prefix of `human-login-metadata`. Simplifying it back to `in` makes a
   cluster which advertises only the metadata route pass a check for the
   mint.
-- `COMMANDS_WITHOUT_A_CLIENT` is the list of verbs `main.py` must not
-  build a client for. `logout` is there because it is the remedy for a
-  cache every other verb refuses to read; building a client would make
-  the remedy fail for the same reason as the problem.
+- Two sets name the verbs `main.py` must not build a client for, and
+  they are kept apart on purpose. `COMMANDS_WITHOUT_A_CLIENT` in
+  `auth.py` is the verbs which *cannot* resolve a credential -- `logout`
+  is there because it is the remedy for a cache every other verb refuses
+  to read, so building a client would make the remedy fail for the same
+  reason as the problem. `CLIENT_FREE_COMMANDS` in `main.py` is that set
+  plus `version`, which can resolve one perfectly well and simply has no
+  use for it. `main.py` tests the second. Folding `version` into the
+  first would make its name a lie.
 - The cache sits **between the environment and the two configuration
   files** in credential precedence, and the environment's namespace and
   key are read whether or not the environment also names the cluster. An
