@@ -55,6 +55,12 @@ write_to = "shakenfist_client/_version.py"
 
 [project.optional-dependencies]
 test = [
+    # No click pin here, deliberately. The login tests assert which stream
+    # each message went to, and CliRunner separates the two unconditionally
+    # only from 8.2 -- which requires Python >= 3.10 and so cannot be asked
+    # for while this package supports 3.7. The tests build their runner
+    # through a factory which asks older click for the separation instead;
+    # see runner() in tests/test_client_commandline_auth.py.
     "coverage",            # apache2
     "testtools",           # mit
     "mock",                # bsd

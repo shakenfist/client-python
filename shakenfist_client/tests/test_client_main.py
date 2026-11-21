@@ -1,5 +1,9 @@
 import io
+import json
 import logging
+import os
+import shutil
+import tempfile
 from unittest import mock
 
 import click
@@ -7,7 +11,9 @@ import testtools
 from click.testing import CliRunner
 
 from shakenfist_client import apiclient
+from shakenfist_client import credentials
 from shakenfist_client import main
+from shakenfist_client.commandline import auth
 
 
 # A structurally valid JWT: three base64url segments, the header being
@@ -268,6 +274,22 @@ class GroupCatchExceptionsTestCase(testtools.TestCase):
         self.assertIn('Agent operation failed', message)
         self.assertIn('expired', message)
 
+    def test_every_network_failure_is_reported_not_traced(self):
+        # A refused connection was the only one handled here, so a read
+        # timeout, a TLS failure or a reset mid-response reached the
+        # terminal as a traceback. They are the same thing to the person
+        # running the command: the cluster could not be talked to.
+        for failure in (apiclient.requests.exceptions.ConnectionError('refused'),
+                        apiclient.requests.exceptions.ReadTimeout('too slow'),
+                        apiclient.requests.exceptions.SSLError('bad certificate'),
+                        apiclient.requests.exceptions.ChunkedEncodingError('reset'),
+                        apiclient.requests.exceptions.TooManyRedirects('loop')):
+            log = self._run(failure)
+
+            log.error.assert_called_once()
+            self.assertIn('Unable to talk to the server',
+                          log.error.call_args[0][0])
+
     def test_an_unmapped_api_exception_is_not_swallowed(self):
         # There is no bare APIException fallback, deliberately: a status
         # nobody has taught the CLI about should be loud rather than
@@ -283,3 +305,300 @@ class GroupCatchExceptionsTestCase(testtools.TestCase):
 
         self.assertRaises(apiclient.APIException, cli, ['boom'],
                           standalone_mode=False)
+
+
+class UnconfiguredHostTestCase(LoggingStateTestCase):
+    """What happens on a host which has told this client nothing.
+
+    That is the normal state for the first command a new user ever runs,
+    and the group callback resolves a credential before any verb runs. So
+    this is about which verbs survive having nothing to resolve, and what
+    the ones which do not say about it.
+    """
+
+    # Deliberately unconvincing, and not shaped like the thing it stands
+    # in for: a credential scanner runs over this repository's history
+    # with a positive control.
+    CACHED_KEY = 'not-a-cached-key-1'
+    CLUSTER = 'http://localhost:13000'
+
+    def setUp(self):
+        super().setUp()
+
+        # No configuration file on the machine running the tests.
+        mock.patch('shakenfist_client.apiclient.os.path.exists',
+                   return_value=False).start()
+
+        # No credential cache on it either. The cache module is asked
+        # where its file is rather than being told, so that one function
+        # is the only seam a test needs.
+        self.tempdir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tempdir, True)
+        self.cache_path = os.path.join(self.tempdir, 'shakenfist',
+                                       'credentials.json')
+        mock.patch('shakenfist_client.credentials.credentials_path',
+                   side_effect=lambda path=None: path or self.cache_path).start()
+
+        # And nothing in the environment, which click reads for the group
+        # options as well as apiclient reading it for a library caller.
+        environ = {k: v for k, v in os.environ.items()
+                   if not k.startswith('SHAKENFIST_')}
+        mock.patch.dict(os.environ, environ, clear=True).start()
+
+        self.addCleanup(mock.patch.stopall)
+
+    def _write_cache(self, mode=0o600, content=None):
+        os.makedirs(os.path.dirname(self.cache_path), mode=0o700,
+                    exist_ok=True)
+        if content is None:
+            content = json.dumps({
+                'version': 1,
+                'credentials': [{'apiurl': self.CLUSTER, 'namespace': 'ci',
+                                 'key_name': 'corporate-aaaa',
+                                 'key': self.CACHED_KEY, 'expiry': None,
+                                 'scopes': []}],
+                'current': None})
+        with open(self.cache_path, 'w') as f:
+            f.write(content)
+        os.chmod(self.cache_path, mode)
+
+    def _run(self, args):
+        """Call the group the way a console script does.
+
+        CliRunner invokes main() directly, which goes straight past the
+        exception handling the group installs in __call__, so the verbs
+        which end in a message rather than a traceback have to be driven
+        like this.
+        """
+        with mock.patch.object(main, 'LOG') as log:
+            exit_code = 0
+            try:
+                main.cli(args, standalone_mode=False)
+            except SystemExit as e:
+                exit_code = e.code
+        return exit_code, log
+
+    def test_an_ordinary_verb_says_what_is_missing(self):
+        # It was a traceback until logging in made "nothing configured
+        # yet" an ordinary starting state rather than a mistake.
+        exit_code, log = self._run(['namespace', 'list'])
+
+        self.assertEqual(1, exit_code)
+        log.error.assert_called_once()
+        message = log.error.call_args[0][0]
+        self.assertIn('Not configured', message)
+        self.assertIn('--apiurl', message)
+        self.assertIn('sf-client login', message)
+
+    def test_login_runs_and_asks_to_be_told_the_cluster(self):
+        # The whole point: a login must be runnable on a host which has
+        # nothing, so it cannot be refused for having nothing. What it
+        # does need is somewhere to log in to.
+        result = CliRunner().invoke(main.cli, ['login'],
+                                    catch_exceptions=False)
+
+        self.assertEqual(1, result.exit_code)
+        self.assertIn('--apiurl', result.output)
+        self.assertIn('SHAKENFIST_API_URL', result.output)
+
+    def test_logout_runs_on_a_host_with_nothing(self):
+        result = CliRunner().invoke(main.cli, ['logout'],
+                                    catch_exceptions=False)
+
+        self.assertEqual(0, result.exit_code)
+        self.assertIn('no cached credentials', result.output)
+
+    def test_an_unreadable_cache_breaks_an_ordinary_verb_with_a_message(self):
+        # A cache which cannot be read is a refusal rather than something
+        # to pass over, so it takes down every verb which needs a
+        # credential. The message has to name the verb which clears it.
+        self._write_cache(mode=0o644)
+
+        exit_code, log = self._run(['namespace', 'list'])
+
+        self.assertEqual(1, exit_code)
+        message = log.error.call_args[0][0]
+        self.assertIn(self.cache_path, message)
+        self.assertIn('sf-client logout', message)
+        self.assertNotIn(self.CACHED_KEY, message)
+
+    def test_the_logout_advice_is_not_said_twice(self):
+        # Several of the cache's own messages name the verb already,
+        # because the module which raises them knows which refusals a
+        # chmod can fix. The handler must not append a second copy.
+        self._write_cache(mode=0o644)
+
+        _, log = self._run(['namespace', 'list'])
+
+        self.assertEqual(1, log.error.call_args[0][0].count('sf-client logout'))
+
+    def test_a_cache_from_a_newer_client_is_also_a_message(self):
+        # Not every unusable cache may be replaced: one written by a
+        # newer client may hold credentials in fields this one cannot
+        # see. That refusal is a different exception class from the
+        # repairable ones, so a handler which caught only those would
+        # let this reach the terminal as a traceback.
+        self._write_cache(content=json.dumps(
+            {'version': 99, 'credentials': [], 'current': None}))
+
+        exit_code, log = self._run(['namespace', 'list'])
+
+        self.assertEqual(1, exit_code)
+        message = log.error.call_args[0][0]
+        self.assertIn('newer client', message)
+        self.assertIn(self.cache_path, message)
+
+    def test_the_advice_is_added_where_the_message_lacks_it(self):
+        self._write_cache(content='{"version": 1}')
+
+        _, log = self._run(['namespace', 'list'])
+
+        message = log.error.call_args[0][0]
+        self.assertIn('holds no credential list', message)
+        self.assertIn('sf-client logout', message)
+
+    def test_logout_still_runs_when_the_cache_cannot_be_read(self):
+        # The state logout exists to clear is the state in which every
+        # other verb refuses, so this is the one which must not need a
+        # client.
+        self._write_cache(mode=0o644)
+
+        result = CliRunner().invoke(main.cli, ['logout'],
+                                    catch_exceptions=False)
+
+        self.assertEqual(0, result.exit_code)
+        self.assertFalse(os.path.exists(self.cache_path))
+        self.assertNotIn(self.CACHED_KEY, result.output)
+
+
+class ClientConstructionTestCase(LoggingStateTestCase):
+    """Which verbs the group builds an API client for.
+
+    Building one resolves a credential and reaches the cluster for its
+    capability list, and the two login verbs must do neither: one runs
+    before there is a credential, and the other runs when the credential
+    there is cannot be read.
+    """
+
+    CLUSTER = 'http://localhost:13000'
+
+    def setUp(self):
+        super().setUp()
+        self.construct = mock.patch(
+            'shakenfist_client.apiclient.Client').start()
+        self.addCleanup(mock.patch.stopall)
+
+    def _invoke(self, args):
+        return CliRunner().invoke(main.cli, args, catch_exceptions=False)
+
+    def test_an_ordinary_verb_gets_a_client_from_the_group(self):
+        # A verb which actually talks to the cluster. This used to be
+        # `version`, which does not and no longer gets a client at all,
+        # so it could no longer demonstrate what this test is about.
+        self._invoke(['--apiurl', self.CLUSTER, 'node', 'list'])
+
+        self.construct.assert_called_once_with(
+            namespace=None, key=None, base_url=self.CLUSTER, logger=main.LOG,
+            async_strategy='pause')
+
+    def test_logout_gets_no_client_at_all(self):
+        with mock.patch.object(credentials, 'delete_credentials',
+                               return_value=0):
+            result = self._invoke(['--apiurl', self.CLUSTER, 'logout'])
+
+        self.assertEqual(0, result.exit_code)
+        self.construct.assert_not_called()
+
+    def test_the_credential_verbs_get_no_client_at_all(self):
+        # Showing and choosing among what is cached is local, and has to
+        # work where the cluster cannot be reached.
+        for verb in ('list', 'select'):
+            args = ['credential', verb] + (['ci'] if verb == 'select' else ['--offline'])
+            self._invoke(['--apiurl', self.CLUSTER] + args)
+
+        self.construct.assert_not_called()
+
+    def test_login_builds_its_own_client_from_the_api_url(self):
+        # Not the group's call, which passes a namespace, a key and a
+        # logger: this one skips the credential resolution altogether.
+        self.construct.return_value.get_login_issuers.return_value = []
+
+        result = self._invoke(['--apiurl', self.CLUSTER, 'login'])
+
+        self.assertEqual(1, result.exit_code)
+        self.construct.assert_called_once_with(
+            base_url=self.CLUSTER, verbose=False,
+            suppress_configuration_lookup=True)
+
+    def test_the_login_verbs_are_registered(self):
+        self.assertIn('login', main.cli.commands)
+        self.assertIn('logout', main.cli.commands)
+        self.assertIn('credential', main.cli.commands)
+        self.assertEqual(frozenset(['login', 'logout', 'credential']),
+                         auth.COMMANDS_WITHOUT_A_CLIENT)
+
+    def test_version_needs_no_cluster(self):
+        # It answers from the installed package and never touches one.
+        # Resolving a credential for it meant it failed on a host which
+        # has none -- the state a fresh install is in, and the one
+        # somebody is most likely to be asking a version question from.
+        result = self._invoke(['version'])
+
+        self.assertEqual(0, result.exit_code)
+        self.construct.assert_not_called()
+
+    def test_version_still_answers_with_no_configuration_at_all(self):
+        # The end to end version of the above, through the failure it
+        # used to produce.
+        self.construct.side_effect = apiclient.UnconfiguredException(
+            'You have not specified the server to communicate with')
+
+        result = self._invoke(['version'])
+
+        self.assertEqual(0, result.exit_code)
+        self.assertIn('shaken fist', result.output.lower())
+
+    def test_the_client_free_set_is_the_login_verbs_and_version(self):
+        # Two sets unioned rather than one, because
+        # COMMANDS_WITHOUT_A_CLIENT is documented as the verbs which
+        # cannot resolve a credential, and version simply has no use for
+        # one.
+        self.assertEqual(
+            frozenset(['login', 'logout', 'credential', 'version']),
+            main.CLIENT_FREE_COMMANDS)
+
+    def test_the_group_passes_on_the_cluster_a_login_needs(self):
+        # The verb has to be told which cluster was named, because it is
+        # building the client the group did not.
+        client = mock.MagicMock()
+        client.get_login_issuers.return_value = []
+
+        with mock.patch.object(auth, '_client_for_login',
+                               return_value=client) as built:
+            self._invoke(['--apiurl', self.CLUSTER, 'login'])
+
+        built.assert_called_once_with(self.CLUSTER, verbose=False)
+
+    def test_the_group_passes_on_the_namespace_a_login_selects_with(self):
+        client = mock.MagicMock()
+        client.base_url = self.CLUSTER
+        client.get_login_issuers.return_value = [
+            {'name': 'corporate', 'issuer_url': 'https://idp.example.com/',
+             'client_id': 'shakenfist', 'oidc_scopes': 'openid',
+             'device_authorization_endpoint': 'https://idp.example.com/device',
+             'token_endpoint': 'https://idp.example.com/token'}]
+        client.check_capability.return_value = True
+        client.login.return_value = [{'namespace': 'ci'}]
+
+        with mock.patch.object(auth, '_client_for_login',
+                               return_value=client):
+            with mock.patch.object(auth, 'device_authorization_login',
+                                   return_value='not-an-identity-token-1'):
+                with mock.patch.object(
+                        auth, '_store',
+                        return_value={'credentials': [],
+                                      'current': None}) as store:
+                    self._invoke(['--apiurl', self.CLUSTER, '--namespace',
+                                  'ci', 'login'])
+
+        store.assert_called_once_with(self.CLUSTER, [{'namespace': 'ci'}], 'ci')

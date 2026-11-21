@@ -28,8 +28,16 @@ sf-client instance vdiconsole <ref>
 ```
 
 The client reads its credentials from the environment
-(`SHAKENFIST_NAMESPACE`, `SHAKENFIST_KEY`, `SHAKENFIST_API_URL`),
-from `~/.shakenfist`, or from `/etc/sf/shakenfist.json`.
+(`SHAKENFIST_NAMESPACE`, `SHAKENFIST_KEY`, `SHAKENFIST_API_URL`), from
+the cache `sf-client login` writes, from `~/.shakenfist`, or from
+`/etc/sf/shakenfist.json`.
+
+```bash
+sf-client login
+```
+
+logs in through an identity provider the cluster trusts, where an
+operator has configured one.
 
 ## Documentation
 
@@ -45,6 +53,9 @@ from `~/.shakenfist`, or from `/etc/sf/shakenfist.json`.
 - [Namespace capacity claims](https://github.com/shakenfist/client-python/blob/develop/docs/namespace-claims.md)
   -- claiming aggregate cluster capacity for a namespace, the two claim
   states, and what each refusal means
+- [Logging in as a person](https://github.com/shakenfist/client-python/blob/develop/docs/human-login.md)
+  -- the two interactive login flows, where the credentials they mint are
+  cached, and what that cache outranks
 - [Reading a namespace key's metadata](https://github.com/shakenfist/client-python/blob/develop/docs/namespace-keys.md)
   -- a key's expiry, scopes and provenance, who is served which fields,
   and the capability the reads are gated on

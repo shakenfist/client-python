@@ -11,8 +11,10 @@ except ImportError:
 from shakenfist_utilities import logs
 
 from shakenfist_client import apiclient
+from shakenfist_client import credentials
 from shakenfist_client.commandline import admin
 from shakenfist_client.commandline import artifact
+from shakenfist_client.commandline import auth
 from shakenfist_client.commandline import backup
 from shakenfist_client.commandline import blob
 from shakenfist_client.commandline import instance
@@ -115,6 +117,37 @@ class GroupCatchExceptions(click.Group):
         try:
             return self.main(*args, **kwargs)
 
+        except apiclient.UnconfiguredException as e:
+            # Raised while the client is being constructed, before any verb
+            # runs, on a host which has not been told which cluster to talk
+            # to. It reached the terminal as a traceback until logging in
+            # made "no configuration at all" an ordinary starting state
+            # rather than a mistake, and it is the first thing a new user
+            # sees, so it has to say what to do about it.
+            LOG.error('Not configured: %s. Name one with --apiurl, set '
+                      'SHAKENFIST_API_URL, or run "sf-client login".' % e)
+            sys.exit(1)
+
+        except credentials.CredentialCacheException as e:
+            # A credential cache which cannot be read is a refusal rather
+            # than something to pass over, because to anything which only
+            # checks whether a credential came back it is indistinguishable
+            # from nobody having logged in. It is raised while the client is
+            # being constructed, so it would otherwise take every verb down
+            # with it -- which is why the message names the verb that clears
+            # it, and why that verb is built to run without a client.
+            #
+            # Some of these messages name that verb already, because the
+            # module which raises them knows which refusals a chmod can fix
+            # and which it cannot. Only the ones which do not are given the
+            # advice here, so that the common case does not read as two
+            # sentences saying the same thing.
+            message = str(e)
+            if 'sf-client logout' not in message:
+                message = '%s Discard the cache with "sf-client logout".' % message
+            LOG.error(message)
+            sys.exit(1)
+
         except apiclient.RequestMalformedException as e:
             LOG.error('Malformed Request: %s' % error_text(e.text))
             sys.exit(1)
@@ -172,8 +205,15 @@ class GroupCatchExceptions(click.Group):
             LOG.error('Agent operation failed: %s' % e)
             sys.exit(1)
 
-        except apiclient.requests.exceptions.ConnectionError as e:
-            LOG.error('Unable to connect to server: %s' % e)
+        # RequestException rather than ConnectionError alone: a refused
+        # connection was the only network failure handled here, so a
+        # read timeout, a TLS failure or a connection reset mid-response
+        # reached the terminal as a traceback. They are the same thing to
+        # the person running the command -- the cluster could not be
+        # talked to -- and ConnectionError is a subclass of this, so the
+        # message it used to produce is unchanged.
+        except apiclient.requests.exceptions.RequestException as e:
+            LOG.error('Unable to talk to the server: %s' % e)
             sys.exit(1)
 
 
@@ -186,6 +226,15 @@ def error_text(json_text):
         pass
 
     return json_text
+
+
+# The verbs this group builds no API client for. The login verbs bring
+# their own reasons, which auth.py documents beside them; `version`
+# answers from the installed package and never touches a cluster, so
+# making it resolve a credential meant it failed on a host which has
+# none -- the state a fresh install is in, and the one somebody is most
+# likely to be asking a version question from.
+CLIENT_FREE_COMMANDS = auth.COMMANDS_WITHOUT_A_CLIENT | frozenset(['version'])
 
 
 @click.group(cls=GroupCatchExceptions)
@@ -226,7 +275,27 @@ def cli(ctx, output, verbose, namespace, key, apiurl, async_strategy):
     else:
         LOG.setLevel(logging.INFO)
 
+    # The two login verbs build their own client, or none at all, and need
+    # these to do it.
+    ctx.obj['APIURL'] = apiurl
+    ctx.obj['NAMESPACE'] = namespace
+
     global CLIENT
+    if ctx.invoked_subcommand in CLIENT_FREE_COMMANDS:
+        # Constructing a client resolves a credential, and both of the login
+        # verbs exist for people who cannot do that. Logging in is what
+        # somebody does before they have a credential at all, so the
+        # resolution would raise for having found nothing; logging out is
+        # what they do when the credential they have is the problem, and the
+        # resolution raises for every unreadable cache -- which is the state
+        # logout is there to clear. Building one here would make each verb
+        # unavailable in exactly the situation it was written for, so the
+        # group builds neither and login builds what it needs itself.
+        LOG.debug('No client constructed for %s' % ctx.invoked_subcommand)
+        CLIENT = None
+        ctx.obj['CLIENT'] = None
+        return
+
     CLIENT = apiclient.Client(
         namespace=namespace,
         key=key,
@@ -250,6 +319,9 @@ cli.add_command(blob.blob)
 cli.add_command(instance.instance)
 cli.add_command(interface.interface)
 cli.add_command(label.label)
+cli.add_command(auth.credential)
+cli.add_command(auth.login)
+cli.add_command(auth.logout)
 cli.add_command(namespace.namespace)
 cli.add_command(network.network)
 cli.add_command(node.node)

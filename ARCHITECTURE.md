@@ -16,11 +16,13 @@ shakenfist_client/
 ├── __init__.py
 ├── main.py              # CLI entry point, plugin loading
 ├── apiclient.py         # REST API client (Client class)
+├── credentials.py       # The on disk cache for a human login's credentials
 ├── util.py              # Shared utilities
 ├── commandline/         # CLI subcommands (one per resource type)
 │   ├── admin.py         # Administrative commands
 │   ├── ansible.py       # Ansible integration helpers
 │   ├── artifact.py      # Artifact management
+│   ├── auth.py          # Human login, logout, credential selection
 │   ├── backup.py        # Backup operations
 │   ├── blob.py          # Blob storage
 │   ├── instance.py      # VM instance management
@@ -49,10 +51,21 @@ shakenfist_client/
 The `Client` class handles all communication with the Shaken Fist
 REST API:
 
-- **Authentication**: API key-based, configured from environment
-  variables (`SHAKENFIST_NAMESPACE`, `SHAKENFIST_KEY`,
-  `SHAKENFIST_API_URL`), `~/.shakenfist`, or
-  `/etc/sf/shakenfist.json`
+- **Authentication**: API key-based, configured from command line
+  arguments, environment variables (`SHAKENFIST_NAMESPACE`,
+  `SHAKENFIST_KEY`, `SHAKENFIST_API_URL`), the credential cache a human
+  login wrote, `~/.shakenfist`, or `/etc/sf/shakenfist.json`, in that
+  order. Each source is consulted only while no API URL has been
+  established yet, which is why a cached credential records the cluster
+  it was minted against; the environment's namespace and key are the
+  exception, read whether or not the environment also names the cluster,
+  so that an automated caller cannot acquire a person's login. Because
+  the cache is read during construction, constructing a `Client` can
+  raise `credentials.CredentialCacheException` for a cache which exists
+  but cannot be used -- a new failure mode for library embedders, which
+  `suppress_configuration_lookup=True` opts out of.
+  `docs/human-login.md` describes the order and what the cache beating
+  both configuration files costs
 - **Request handling**: Wraps HTTP methods with retry logic and
   error handling
 - **Async operations**: Supports configurable strategies for

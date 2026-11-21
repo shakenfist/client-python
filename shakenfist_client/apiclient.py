@@ -5,11 +5,14 @@ import logging
 import os
 import re
 import time
+from urllib.parse import urljoin
 # The class rather than the module, because a loop variable elsewhere in
 # this file is named uuid and would shadow a module imported as such.
 from uuid import UUID
 
 import requests
+
+from shakenfist_client import credentials
 
 
 LOG = logging.getLogger(__name__)
@@ -448,7 +451,65 @@ def _correct_blob_indexes(d):
     return d
 
 
+def _cached_credential(apiurl=None):
+    """The credential a human login left behind for this client, or None.
+
+    Without an API URL this is the cache's current selection, which carries
+    the API URL along with the namespace and key -- the same three things
+    together that every other source of credentials supplies.
+
+    With one, the caller already knows which cluster it is talking to, and a
+    namespace key is scoped to the cluster which minted it, so only that
+    cluster's entries can answer. The selection does if it was made against
+    that cluster. Otherwise a single cached credential for the cluster is
+    unambiguous and is used, and several are not: choosing between them by
+    guessing is a command run against the wrong namespace, so nothing is
+    returned and it is left to the caller to ask the person which they meant.
+
+    A cache which cannot be read raises rather than returning None. See the
+    reasoning where this is called.
+    """
+    if not apiurl:
+        return credentials.current_credential()
+
+    credential = credentials.current_credential(apiurl=apiurl)
+    if credential:
+        return credential
+
+    for_cluster = credentials.credentials_for_apiurl(apiurl)
+    if len(for_cluster) == 1:
+        return for_cluster[0]
+    return None
+
+
 class Client:
+    """A connection to one Shaken Fist cluster, as one namespace.
+
+    Constructing one resolves a credential from five sources in order --
+    the arguments here, the environment, the credentials a human login
+    cached, ``~/.shakenfist`` and ``/etc/sf/shakenfist.json`` -- unless
+    suppress_configuration_lookup is set, which skips all five.
+
+    **Construction can raise**, and gained a new way to since the cache
+    arrived. Embedders of this library -- the ansible collection, CLI
+    plugins registered through ``shakenfist_client.plugin``, downstream
+    repositories -- should expect:
+
+    * ``UnconfiguredException`` when no source named a cluster.
+    * ``credentials.CredentialCacheException`` when a cache exists but
+      cannot be used: an unsafe file mode, a corrupt file, or a format
+      version only a newer client understands. This can happen purely
+      because somebody logged in once on the host, which is why it is
+      written down here. It is a refusal rather than a fallback on
+      purpose -- see where the cache is read below -- and a caller which
+      brought its own credentials never reads the file at all.
+
+    A caller which does not want the cache consulted passes
+    suppress_configuration_lookup=True, or supplies base_url, namespace
+    and key itself. ``docs/human-login.md`` covers the order and what
+    the cache beating both configuration files costs.
+    """
+
     def __init__(self, base_url=None, verbose=False,
                  namespace=None, key=None, sync_request_timeout=300,
                  suppress_configuration_lookup=False, logger=None,
@@ -471,20 +532,97 @@ class Client:
 
         if not suppress_configuration_lookup:
             # Where do we find authentication details? First off, we try command line
-            # flags; then environment variables; ~/.shakenfist (which is a JSON file);
-            # and finally /etc/sf/shakenfist.json. click reads the environment
+            # flags; then environment variables; then the credentials a human login
+            # cached; then ~/.shakenfist (which is a JSON file); and finally
+            # /etc/sf/shakenfist.json. click reads the environment
             # variables for free in the CLI, but we must also do it here so that
             # other library callers (the ansible collection for example) behave the
             # same way as the CLI.
+            #
+            # The environment's credential is read whether or not the
+            # environment also names the cluster. click injects both
+            # variables as arguments in the CLI however the cluster was
+            # named, and a library caller is meant to behave the same way,
+            # so a job which exports SHAKENFIST_KEY has pinned a credential
+            # even when the cluster comes from a flag, from a configuration
+            # file or from a login -- and must not start running as whoever
+            # last logged in on the machine it runs on.
+            #
+            # Both halves have to be missing. An argument which named a
+            # namespace or a key is pinning a credential, and completing the
+            # other half of it from the environment would present a pair
+            # that neither of them ever had.
+            if not namespace and not key:
+                LOG.debug('Testing environment variables for a credential')
+                namespace = os.environ.get('SHAKENFIST_NAMESPACE')
+                key = os.environ.get('SHAKENFIST_KEY')
+
             if not base_url:
-                LOG.debug('Testing environment variables')
+                LOG.debug('Testing environment variables for an API URL')
                 base_url = os.environ.get('SHAKENFIST_API_URL')
-                if base_url:
-                    LOG.debug('Loading configuration from environment variables')
-                    if not namespace:
-                        namespace = os.environ.get('SHAKENFIST_NAMESPACE')
-                    if not key:
-                        key = os.environ.get('SHAKENFIST_KEY')
+
+            # A login is the most recent and the most explicit thing a person has
+            # said about which credential they want, so it beats both of the
+            # configuration files below. If a ~/.shakenfist written a year ago won
+            # instead, the login would appear to have done nothing and the failure
+            # would be an unexplained authorisation error rather than a message.
+            # Flags and the environment still win over it, because they are
+            # equally explicit and they are how a script or a CI job pins a
+            # credential: one which sets SHAKENFIST_KEY must not start using a
+            # person's own login because they happened to log in on the same
+            # machine.
+            #
+            # A cache which cannot be read raises out of here rather than being
+            # passed over -- an unsafe file mode, a corrupt file, or a format
+            # version only a newer client understands, each naming the file in its
+            # message. All three are indistinguishable from "nobody has logged in"
+            # to anything which only looks at whether a credential came back, so
+            # carrying on to the configuration files would quietly use an identity
+            # other than the one the person logged in as, and would say nothing
+            # about a long lived secret which other users can now read. A caller
+            # which brought a credential of its own is unaffected either way: the
+            # file is read only where the cache would have been used, which is to
+            # say only where nothing above it answered.
+            # Whether anything above pinned a credential, which decides
+            # where the cache sits for the *cluster*. A namespace key is
+            # scoped to the cluster which minted it, so taking the cluster
+            # from a login for a credential somebody else pinned would send
+            # that key to a host nobody named: the cluster can only refuse
+            # it, and by then the secret has crossed to it. So a pinned
+            # credential asks the configuration files for its cluster
+            # first, which is where that answer came from before the cache
+            # existed, and falls back to the cache's cluster only on a host
+            # where neither file names one.
+            pinned = bool(namespace or key)
+
+            if not base_url and not pinned:
+                LOG.debug('Testing the credential cache')
+                credential = _cached_credential()
+                if credential:
+                    LOG.debug('Loading configuration from the credential cache')
+                    base_url = credential['apiurl']
+                    namespace = credential['namespace']
+                    key = credential['key']
+
+            elif not pinned:
+                # An API URL and nothing else, from a flag or from
+                # SHAKENFIST_API_URL on its own. None of the sources below are
+                # consulted for such a caller -- each of them is gated on there
+                # being no API URL yet -- so today it has no credential at all and
+                # gets an authentication failure from the first request it makes.
+                # The cache can answer that for the named cluster without taking
+                # anything from a file. The environment has already been asked,
+                # above, whether or not it named the cluster.
+                #
+                # Reached only when base_url is set, because the branch above
+                # takes every case where it is not.
+                LOG.debug('Testing the credential cache for %s' % base_url)
+                credential = _cached_credential(base_url)
+                if credential:
+                    LOG.debug('Loading credentials for %s from the credential '
+                              'cache' % base_url)
+                    namespace = credential['namespace']
+                    key = credential['key']
 
             if not base_url:
                 LOG.debug('Testing for ~/.shakenfist')
@@ -518,6 +656,24 @@ class Client:
                     if e.errno != errno.EACCES:
                         raise
 
+            # The cache's cluster for a pinned credential, last of all.
+            # Neither configuration file named one, so there is nothing for
+            # the key to be sent to instead, and refusing here would take
+            # away what a host with no configuration file at all has today:
+            # log in once, then pin a credential and have it work. What this
+            # ordering buys is the case where a file *does* name a cluster,
+            # which now keeps the key going there rather than to whichever
+            # cluster happened to be logged in to last.
+            #
+            # Only the cluster. A pinned credential is never completed from
+            # the cache, here or anywhere above.
+            if not base_url and pinned:
+                LOG.debug('Testing the credential cache for a cluster')
+                credential = _cached_credential()
+                if credential:
+                    LOG.debug('Taking the cluster from the credential cache')
+                    base_url = credential['apiurl']
+
         if not base_url:
             raise UnconfiguredException(
                 'You have not specified the server to communicate with')
@@ -546,18 +702,80 @@ class Client:
         self._collect_capabilities()
 
     def _collect_capabilities(self):
+        """Fetch the root page, and settle which URL this cluster answers on.
+
+        A deployment whose API root answers 301 is supported, and this is
+        where the redirection is resolved: self.base_url is rewritten to the
+        target before any route is built from it.
+
+        It has to happen here rather than on the first request which notices.
+        requests downgrades a redirected POST to a GET and discards the body,
+        so a POST sent to the pre-redirect URL does not arrive late, it
+        arrives as a GET of the same path with nothing in it -- and for
+        /auth/login, where GET is the public issuer list and POST is the
+        mint, that means the identity token is silently never sent and the
+        person is told their credentials could not be saved. The public login
+        routes cannot authenticate first, so they cannot rely on a
+        rewrite performed as a side effect of authenticating; doing it once
+        at construction is what makes the property hold for every route
+        rather than for the routes which remembered to ask.
+
+        The root fetch already follows the redirection, so the target is read
+        from the history of that response rather than costing a second
+        request. Only a 301 rewrites: a 302 is by definition temporary and
+        says nothing about where this cluster lives.
+
+        The target is resolved against the URL which was redirected rather
+        than taken as it stands, because RFC 9110 permits a relative
+        Location -- and a base_url of '/api' would break every request
+        built from it. Any trailing slash goes, because every caller here
+        appends a path beginning with one.
+        """
         r = self.session.request('GET', self.base_url, allow_redirects=True,
                                  timeout=self.sync_request_timeout)
+        if r.history and r.history[0].status_code == 301:
+            hop = r.history[0]
+            # Read rather than indexed. A 301 without a Location is
+            # malformed, but a broken proxy in front of a cluster can
+            # produce one, and a KeyError here would come out of
+            # Client.__init__ as a traceback on every verb -- including
+            # login, where this phase has worked to make sure a person
+            # gets a sentence instead. Leaving base_url alone is the
+            # honest answer: nothing said where to move it to.
+            location = hop.headers.get('Location')
+            if location:
+                target = urljoin(hop.url, location).rstrip('/')
+                LOG.debug('API server redirects to %s' % target)
+                self.base_url = target
+            else:
+                LOG.debug('API server answered 301 with no Location; '
+                          'leaving the API URL as %s' % self.base_url)
         self.root_html = r.text
 
     def check_capability(self, capability_string):
         # NOTE(mikal): this likely needs to be fancier
-        return capability_string in self.root_html
+        #
+        # Matched as a whole token, not a substring, because one capability
+        # can be a prefix of another: human-login is a prefix of
+        # human-login-metadata, so a cluster advertising only the latter
+        # would otherwise pass a check for the former.
+        return re.search(
+            r'(?<![\w-])' + re.escape(capability_string) + r'(?![\w-])',
+            self.root_html) is not None
 
     def _actual_request_url(self, method, url, data=None,
                             request_body_is_binary=False,
                             response_body_is_binary=False,
-                            allow_redirects=True, stream=False):
+                            allow_redirects=True, stream=False,
+                            body_is_sensitive=False):
+        """Make one HTTP request, with debug logging of what was sent.
+
+        body_is_sensitive suppresses the debug logging of both bodies,
+        for a route whose request or response is a credential rather
+        than merely describing one. _authenticate() avoids this method
+        altogether for the same reason; a route which needs the status
+        code mapping here cannot do that, so it says so instead.
+        """
         url = self.base_url + url
 
         h = {
@@ -596,7 +814,9 @@ class Client:
             else:
                 LOG.debug(f'Header: {hkey} = {h[hkey]}')
         if data:
-            if request_body_is_binary:
+            if body_is_sensitive:
+                LOG.debug('Data: ...request body not logged...')
+            elif request_body_is_binary:
                 LOG.debug('Data: ...%d bytes of binary omitted...' % len(data))
             else:
                 LOG.debug('Data:\n    %s' % '\n    '.join(data.split('\n')))
@@ -611,7 +831,9 @@ class Client:
             LOG.debug(f'Header: {hkey} = {r.headers[hkey]}')
 
         if not stream and r.text:
-            if response_body_is_binary:
+            if body_is_sensitive:
+                LOG.debug('Data: ...response body not logged...')
+            elif response_body_is_binary:
                 LOG.debug('Data: ...%d bytes of binary omitted...'
                           % len(r.text))
             else:
@@ -657,15 +879,12 @@ class Client:
     def _request_url(self, method, url, data=None, request_body_is_binary=False,
                      response_body_is_binary=False, stream=False,
                      deadline=None):
-        # NOTE(mikal): if we are not authenticated, probe the base_url looking
-        # for redirections. If we are redirected, rewrite our base_url to the
-        # redirection target.
+        # A redirecting API root was probed for here, before authenticating.
+        # _collect_capabilities() settles it at construction instead, which
+        # is both one request cheaper and the only version of the rule the
+        # public login routes can benefit from: they send no credential, so
+        # they never reach this branch at all. See its docstring.
         if not self.cached_auth:
-            probe = self._actual_request_url('GET', '', allow_redirects=False)
-            if probe.status_code == 301:
-                LOG.debug('API server redirects to %s'
-                          % probe.headers['Location'])
-                self.base_url = probe.headers['Location']
             self.cached_auth = self._authenticate()
 
         # A caller with a budget of its own passes a deadline, so the
@@ -2288,6 +2507,63 @@ class Client:
                 'Cluster does not support reading namespace key metadata')
         r = self._request_url(
             'GET', '/auth/namespaces/' + namespace + '/keys/' + key_name)
+        return r.json()
+
+    def get_login_issuers(self):
+        """List the identity providers this cluster offers for human login.
+
+        Returns a list of dicts, each with name, issuer_url, client_id and
+        oidc_scopes, plus whichever of authorization_endpoint,
+        token_endpoint and device_authorization_endpoint the issuer has. An
+        endpoint which is absent means the provider cannot do that flow
+        here. An empty list is a complete answer: this cluster offers no
+        human login.
+
+        The route is public, so this sends no credential and works before
+        anyone has logged in. That is why it bypasses _request_url(), which
+        would try to authenticate first and fail for a caller with none.
+
+        Gated rather than attempted, because a server which predates the
+        route answers 404, and a 404 is indistinguishable from "no issuers"
+        to a caller who is only checking whether login is on offer.
+        """
+        if not self.check_capability('human-login-metadata'):
+            raise IncapableException(
+                'Cluster does not support listing human login issuers')
+        r = self._actual_request_url('GET', '/auth/login')
+        return r.json()
+
+    def login(self, token):
+        """Exchange a signed identity token for namespace keys.
+
+        Returns a list of dicts, one per mapping rule the identity
+        satisfies, each with namespace, key_name, key, expiry and scopes.
+        Each secret is returned once and never again, so the caller must
+        keep the set. The token is the signed identity token an issuer
+        returned at the end of a login flow, not a Shaken Fist key.
+
+        The route is public, so this sends no credential and bypasses
+        _request_url(), which would try to authenticate first and fail for a
+        caller with none.
+
+        Gated separately from get_login_issuers(), because a cluster can
+        offer the issuer list without the mint: a server which meets a
+        client posting a token to a route it lacks answers 404, and the
+        caller has by then sent an identity token somewhere it was never
+        meant to go.
+
+        Neither body is debug logged: the request carries an identity
+        token and the response carries every secret this call will ever
+        return. The logging filter sf-client installs catches a JWT, so
+        it would catch the token, but a namespace key is not a JWT and
+        nothing else would redact one on the way out.
+        """
+        if not self.check_capability('human-login'):
+            raise IncapableException(
+                'Cluster does not support logging in with an identity token')
+        r = self._actual_request_url(
+            'POST', '/auth/login', data={'token': token},
+            body_is_sensitive=True)
         return r.json()
 
     def add_namespace_key(self, namespace, key_name, key):
