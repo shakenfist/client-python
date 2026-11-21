@@ -914,3 +914,154 @@ killed.
   failing. The baseline was 690; the 27 added are this round's.
 * `tools/flake8wrap.sh` over the package: clean.
 * `pre-commit run --all-files`: passed.
+
+### Review round five
+
+The review on `d6b5683` raised 12 items: 3 `fix`, 1 `document`, 5
+`consider` and 3 `none`. Eleven were taken, one declined.
+
+Worth recording for anyone judging whether to keep going: the
+`fix` count was flat at three, but none of the three was about
+code round four added. Round four's items did not recur, and the
+new `fix` items are all in code from steps 7a to 7c which a second
+pass over a large diff found. The two items which did touch round
+four's work were a `document` and a `consider`.
+
+**The ambiguous-mint advice could not resolve the ambiguity it
+described.** It told the person to run
+`sf-client --namespace=<ns> login`, which re-runs the whole
+provider flow to settle something already on disk -- and which
+cannot settle it at all where one namespace holds two of the
+minted credentials, because `store_credential_set()` selects only
+when exactly one minted credential matches the namespace it was
+given. Two mapping rules granting the same namespace is enough to
+produce that, and the person then loops through logins forever.
+The message also asserted "more than one namespace", which is
+false in exactly that case. It now points at
+`sf-client credential select`, with `--key-name` where the
+namespace holds more than one, and says which of the two
+situations it is in. One of the new tests follows the advice it
+prints and checks that doing so produces a selection, because
+advice is only worth anything if it works.
+
+**A login ended in a traceback against an unreachable or mistyped
+cluster.** Constructing a client fetches the API root for its
+capability list, so `requests` can raise before any of the
+exceptions `_client_for_login()` was translating. A URL typed by
+hand is the likeliest thing to be wrong on the first login anyone
+runs, and this is the same class of problem as the
+`UnconfiguredException` this phase already turned into a sentence.
+Both constructions are now inside the handler.
+
+**A killed write left a credential on disk that a logout did not
+remove.** `_write_atomically()` unlinks its temporary in a
+`finally`, which a process killed between `mkstemp()` and
+`os.replace()` never runs -- and that file holds the whole
+credential set. `delete_credentials()` removed only
+`credentials.json`, so a logout left a key the cluster still
+honours behind, which is precisely the invariant its own docstring
+states. It now sweeps the write temporaries too, before anything
+which can return or raise, because a directory holding only a
+stale temporary and no cache at all is what a process killed
+during its very first write leaves. The pattern moved into
+`TEMPORARY_PREFIX` and `TEMPORARY_SUFFIX` so the write and the
+sweep cannot spell it differently.
+
+Taken from the rest:
+
+* The redirect target is now resolved against the URL which was
+  redirected and stripped of a trailing slash, rather than taken
+  from the `Location` header as it stands. RFC 9110 permits a
+  relative `Location`, which would have left `base_url` as
+  something like `/api`. The substance is pre-existing -- the
+  probe round four replaced did the same -- but round four made
+  this the single place the redirect is resolved for every route
+  including the mint, so it is the right moment.
+* `docs/human-login.md` now names the one input shape where the
+  configuration files' per-half fill is visible: a library caller
+  exporting only one of `SHAKENFIST_NAMESPACE` or
+  `SHAKENFIST_KEY`, with a file present, presents the
+  environment's half with the file's other half. Round four's
+  change made that reachable, and the advice is to export both
+  halves or neither.
+* `logout` catches a cache exception itself, so the group's
+  handler cannot append "Discard the cache with sf-client logout"
+  to a failure of that very command.
+* `sf-client version` no longer resolves a credential. It answers
+  from the installed package and never touches a cluster, so
+  making it build a client meant it failed on a host which has no
+  configuration -- the state a fresh install is in, which this
+  phase newly treats as ordinary. `main.py` gained a
+  `CLIENT_FREE_COMMANDS` set which unions the login verbs with it,
+  rather than widening `COMMANDS_WITHOUT_A_CLIENT`, whose
+  documented meaning is "cannot resolve a credential". This broke
+  a pre-existing test whose "ordinary verb" was `version`; it now
+  uses `node list`, which actually talks to a cluster.
+* The broad handler in `_read_namespace()` carries on to the
+  namespace's next key instead of returning, matching the refusal
+  branch two lines above it.
+
+**Declined:** `credential list` building a full client, with its
+own root fetch, per namespace. It is a real cost -- three round
+trips per namespace, each with a ten second timeout -- but the
+suggested fix adds a constructor argument to `Client` to skip the
+capability fetch, which is API surface for a convenience listing
+that already has `--offline` for anyone who does not want the
+round trips.
+
+The two items recorded as `none` which needed nothing were the
+cache being parsed up to three times per construction (declined in
+round four, and recorded by the reviewer as such) and the family
+label matching as a capability (which round four recorded in a
+test, and the reviewer agreed with). The third pointed out that
+this file's index row still said `Proposed` while its Results
+section described finished work; the row now says `In progress`.
+
+#### Mutation testing
+
+**Seventeen mutants, seventeen killed.** Two survived the first
+pass, and both were real gaps rather than harness faults.
+
+Nothing covered the broad handler carrying on to the next key, so
+reverting it to a `return` changed no test: the existing
+next-key test exercises the 401 branch. Two tests were added, one
+for carrying on and one for the reason reported when carrying on
+runs out of keys.
+
+The temporary-sweep tests all planted their file using the
+module's own `TEMPORARY_PREFIX`, so a mutation of that constant
+moved the planted name and the sweep together and no test could
+notice. That mutant is unkillable by construction, which is the
+argument for the shared constant rather than a gap -- so it was
+re-aimed at the drift which is actually possible, the sweep
+looking for a pattern the write does not produce, and a test added
+which leaves behind a temporary `_write_atomically()` named
+itself: it fails the write and suppresses the cleanup unlink the
+way a killed process would, and names no constant at all.
+
+| Property | Mutant | Killed by |
+|----------|--------|-----------|
+| resolvable advice | the advice goes back to re-running login | `test_the_advice_names_a_verb_which_can_resolve_it` |
+| resolvable advice | the advice omits the key name within one namespace | `test_two_credentials_in_one_namespace_get_resolvable_advice` |
+| resolvable advice | the message asserts more than one namespace regardless | `test_two_credentials_in_one_namespace_get_resolvable_advice` |
+| login failure messages | an unreachable cluster is a traceback again | `ClientForLoginTestCase.test_an_unreachable_named_cluster_says_so` |
+| login failure messages | the named-cluster branch sits outside the handler | `test_an_unreachable_named_cluster_says_so` |
+| redirect resolution | a relative Location is taken as it stands | `test_a_relative_location_is_resolved_against_the_hop` |
+| redirect resolution | the trailing slash survives | `test_a_trailing_slash_does_not_double_up` |
+| logout completeness | logout leaves the stale temporary behind | `test_delete_takes_a_stale_write_temporary_with_it` |
+| logout completeness | the sweep happens too late to reach a lone temporary | `test_delete_sweeps_a_temporary_with_no_cache_beside_it` |
+| logout completeness | the sweep removes everything in the directory | `test_delete_leaves_other_files_in_the_directory_alone` |
+| logout completeness | the sweep looks for a name the write does not produce | `test_logout_removes_a_temporary_the_write_path_itself_named` |
+| documented precedence | the environment half loses to the file's pair | `test_half_an_environment_credential_pairs_with_a_files_other_half` |
+| honest advice | a failing logout falls through to the group handler | `test_a_logout_which_cannot_remove_the_cache_says_only_that` |
+| client-free verbs | version resolves a credential again | `test_version_still_answers_with_no_configuration_at_all` |
+| client-free verbs | the client-free set loses the login verbs | `test_logout_gets_no_client_at_all` |
+| best-effort reads | an unexpected failure abandons the other keys | `test_the_next_key_is_tried_after_an_unexpected_failure_too` |
+| best-effort reads | a refusal on a later key hides the earlier failure | `test_an_unexpected_failure_on_every_key_reports_a_failure` |
+
+#### Checks
+
+* `.tox/py3/bin/python -m stestr run`: 735 tests passing, 0
+  failing. The baseline was 717; the 18 added are this round's.
+* `tools/flake8wrap.sh` over the package: clean.
+* `pre-commit run --all-files`: passed.

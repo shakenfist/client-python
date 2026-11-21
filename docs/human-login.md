@@ -171,6 +171,19 @@ alternative is one person's key presented against another person's
 namespace. The two configuration files are the exception, and keep
 their long-standing per-half behaviour.
 
+That exception has a consequence worth stating for anyone embedding
+this library. A caller which exports only one of
+`SHAKENFIST_NAMESPACE` or `SHAKENFIST_KEY`, with no API URL and a
+configuration file present, now presents the environment's half paired
+with the file's other half -- where before this change the two
+variables were not read at all in that shape and the file supplied a
+matched pair. The result is a credential that no single source ever
+held, which will usually fail to authenticate. Export both halves or
+neither; exporting one of the two was always ambiguous and is now
+visibly so. `sf-client` itself is unaffected, because click requires
+nothing of the sort: it reads whichever variables are set and passes
+them down as arguments.
+
 A caller which named a cluster but no credential -- `--apiurl` or
 `SHAKENFIST_API_URL` on its own -- used to reach none of the sources
 above, because each of them is gated on there being no API URL yet, and

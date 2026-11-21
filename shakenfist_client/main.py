@@ -221,6 +221,15 @@ def error_text(json_text):
     return json_text
 
 
+# The verbs this group builds no API client for. The login verbs bring
+# their own reasons, which auth.py documents beside them; `version`
+# answers from the installed package and never touches a cluster, so
+# making it resolve a credential meant it failed on a host which has
+# none -- the state a fresh install is in, and the one somebody is most
+# likely to be asking a version question from.
+CLIENT_FREE_COMMANDS = auth.COMMANDS_WITHOUT_A_CLIENT | frozenset(['version'])
+
+
 @click.group(cls=GroupCatchExceptions)
 @click.option('--pretty', 'output', flag_value='pretty', default=True)
 @click.option('--simple', 'output', flag_value='simple')
@@ -265,7 +274,7 @@ def cli(ctx, output, verbose, namespace, key, apiurl, async_strategy):
     ctx.obj['NAMESPACE'] = namespace
 
     global CLIENT
-    if ctx.invoked_subcommand in auth.COMMANDS_WITHOUT_A_CLIENT:
+    if ctx.invoked_subcommand in CLIENT_FREE_COMMANDS:
         # Constructing a client resolves a credential, and both of the login
         # verbs exist for people who cannot do that. Logging in is what
         # somebody does before they have a credential at all, so the

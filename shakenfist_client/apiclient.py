@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import time
+from urllib.parse import urljoin
 # The class rather than the module, because a loop variable elsewhere in
 # this file is named uuid and would shadow a module imported as such.
 from uuid import UUID
@@ -699,13 +700,20 @@ class Client:
         from the history of that response rather than costing a second
         request. Only a 301 rewrites: a 302 is by definition temporary and
         says nothing about where this cluster lives.
+
+        The target is resolved against the URL which was redirected rather
+        than taken as it stands, because RFC 9110 permits a relative
+        Location -- and a base_url of '/api' would break every request
+        built from it. Any trailing slash goes, because every caller here
+        appends a path beginning with one.
         """
         r = self.session.request('GET', self.base_url, allow_redirects=True,
                                  timeout=self.sync_request_timeout)
         if r.history and r.history[0].status_code == 301:
-            LOG.debug('API server redirects to %s'
-                      % r.history[0].headers['Location'])
-            self.base_url = r.history[0].headers['Location']
+            hop = r.history[0]
+            target = urljoin(hop.url, hop.headers['Location']).rstrip('/')
+            LOG.debug('API server redirects to %s' % target)
+            self.base_url = target
         self.root_html = r.text
 
     def check_capability(self, capability_string):

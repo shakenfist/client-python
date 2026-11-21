@@ -476,7 +476,10 @@ class ClientConstructionTestCase(LoggingStateTestCase):
         return CliRunner().invoke(main.cli, args, catch_exceptions=False)
 
     def test_an_ordinary_verb_gets_a_client_from_the_group(self):
-        self._invoke(['--apiurl', self.CLUSTER, 'version'])
+        # A verb which actually talks to the cluster. This used to be
+        # `version`, which does not and no longer gets a client at all,
+        # so it could no longer demonstrate what this test is about.
+        self._invoke(['--apiurl', self.CLUSTER, 'node', 'list'])
 
         self.construct.assert_called_once_with(
             namespace=None, key=None, base_url=self.CLUSTER, logger=main.LOG,
@@ -517,6 +520,36 @@ class ClientConstructionTestCase(LoggingStateTestCase):
         self.assertIn('credential', main.cli.commands)
         self.assertEqual(frozenset(['login', 'logout', 'credential']),
                          auth.COMMANDS_WITHOUT_A_CLIENT)
+
+    def test_version_needs_no_cluster(self):
+        # It answers from the installed package and never touches one.
+        # Resolving a credential for it meant it failed on a host which
+        # has none -- the state a fresh install is in, and the one
+        # somebody is most likely to be asking a version question from.
+        result = self._invoke(['version'])
+
+        self.assertEqual(0, result.exit_code)
+        self.construct.assert_not_called()
+
+    def test_version_still_answers_with_no_configuration_at_all(self):
+        # The end to end version of the above, through the failure it
+        # used to produce.
+        self.construct.side_effect = apiclient.UnconfiguredException(
+            'You have not specified the server to communicate with')
+
+        result = self._invoke(['version'])
+
+        self.assertEqual(0, result.exit_code)
+        self.assertIn('shaken fist', result.output.lower())
+
+    def test_the_client_free_set_is_the_login_verbs_and_version(self):
+        # Two sets unioned rather than one, because
+        # COMMANDS_WITHOUT_A_CLIENT is documented as the verbs which
+        # cannot resolve a credential, and version simply has no use for
+        # one.
+        self.assertEqual(
+            frozenset(['login', 'logout', 'credential', 'version']),
+            main.CLIENT_FREE_COMMANDS)
 
     def test_the_group_passes_on_the_cluster_a_login_needs(self):
         # The verb has to be told which cluster was named, because it is

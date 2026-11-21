@@ -94,6 +94,13 @@ CACHE_FORMAT_VERSION = 1
 CACHE_DIRECTORY_MODE = 0o700
 CACHE_FILE_MODE = 0o600
 
+# How a write names its temporary file. Shared by the write which
+# creates one and the logout which sweeps up any left behind, because
+# two spellings of this pattern would mean a logout which silently
+# missed the files it exists to remove.
+TEMPORARY_PREFIX = '.credentials-'
+TEMPORARY_SUFFIX = '.tmp'
+
 # Reading refuses a file which grants *any* of the six group or other
 # bits, not just the read bits. A group readable file leaks the key; a
 # group writable one lets someone else substitute a key of their
@@ -219,7 +226,8 @@ def _write_atomically(path, document):
     temporary = None
     try:
         try:
-            fd, temporary = tempfile.mkstemp(dir=directory, prefix='.credentials-', suffix='.tmp')
+            fd, temporary = tempfile.mkstemp(dir=directory, prefix=TEMPORARY_PREFIX,
+                                             suffix=TEMPORARY_SUFFIX)
             with os.fdopen(fd, 'w') as f:
                 json.dump(document, f, indent=4, sort_keys=True)
                 f.write('\n')
@@ -633,12 +641,45 @@ def select_current(apiurl, namespace, key_name=None, path=None, now=None):
     return chosen
 
 
+def _remove_stale_temporaries(directory):
+    """Remove the write temporaries a killed process left behind.
+
+    _write_atomically() unlinks its temporary in a finally, but a
+    process killed between mkstemp() and os.replace() never runs one --
+    and that file holds the whole credential set, keys and all. A
+    logout which removed only credentials.json would leave a secret the
+    cluster still honours sitting on disk after the person asked for it
+    to be discarded, which is the one thing that verb exists to
+    prevent.
+
+    Best effort and silent. These files are not what the person asked
+    about, and a logout must not fail over one it could not reach when
+    it has already discarded the cache itself. They are also not
+    counted: the count answers "how many credentials did I just give
+    up", and a temporary holds a copy of credentials already counted
+    from the file it was going to replace.
+    """
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return
+
+    for name in names:
+        if name.startswith(TEMPORARY_PREFIX) and name.endswith(TEMPORARY_SUFFIX):
+            try:
+                os.unlink(os.path.join(directory, name))
+            except OSError:
+                ...
+
+
 def delete_credentials(path=None):
     """Delete the cache, and say how many credentials went with it.
 
     The whole file, not just the selection: a credential which
     survives a logout the person asked for is a secret still on their
-    disk and still honoured by the cluster.
+    disk and still honoured by the cluster. That includes any write
+    temporary a killed process left in the directory, which holds the
+    same secrets under a different name.
 
     Returns the number of credentials discarded, or None when the file
     existed but could not be counted. Counting never stops the delete,
@@ -646,6 +687,12 @@ def delete_credentials(path=None):
     module would refuse to read is the one most worth removing.
     """
     path = credentials_path(path)
+
+    # Before anything which can return or raise: a directory holding
+    # only a stale temporary, with no cache file at all, is the state a
+    # process killed during its very first write leaves behind, and it
+    # still has a key in it.
+    _remove_stale_temporaries(os.path.dirname(path))
 
     discarded = None
     try:

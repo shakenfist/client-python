@@ -1957,6 +1957,33 @@ class ApiClientConfigurationLookupTestCase(testtools.TestCase):
         self.assertEqual('flagspace', client.namespace)
         self.assertIsNone(client.key)
 
+    @mock.patch.dict('os.environ', {'SHAKENFIST_NAMESPACE': 'testspace'},
+                     clear=True)
+    def test_half_an_environment_credential_pairs_with_a_files_other_half(self):
+        # The documented behaviour of the one shape where the two
+        # configuration files' per-half fill is visible, pinned because it
+        # is a behaviour change for library embedders rather than something
+        # anyone would want. Before, with no API URL in the environment,
+        # neither variable was read at all and the file supplied a matched
+        # pair; now the environment's namespace is kept and only the key
+        # comes from the file, which is a credential no single source ever
+        # held.
+        #
+        # The files keep that behaviour deliberately -- it is years older
+        # than the credential cache and not this work's to change -- so the
+        # advice in docs/human-login.md is to export both halves or
+        # neither. sf-client is unaffected: click reads whichever variables
+        # are set and passes them down as arguments.
+        self.configuration_files(user_conf={
+            'apiurl': self.OTHER_CLUSTER, 'namespace': 'filespace',
+            'key': 'filekey'})
+
+        client = apiclient.Client()
+
+        self.assertEqual(self.OTHER_CLUSTER, client.base_url)
+        self.assertEqual('testspace', client.namespace)
+        self.assertEqual('filekey', client.key)
+
     @mock.patch.dict('os.environ', {}, clear=True)
     def test_another_cluster_is_not_answered_from_the_cache(self):
         # A namespace key is scoped to the cluster which minted it, so a
@@ -2732,6 +2759,42 @@ class BaseUrlRedirectTestCase(testtools.TestCase):
                                       base_url=self.REDIRECTED_FROM)
 
         self.assertEqual(self.REDIRECTED_FROM, client.base_url)
+
+    def _client_redirected_to(self, location):
+        """A client whose root answered 301 with this Location."""
+        session = mock.MagicMock()
+        response = self._response(True, self.ROOT_HTML, json_body=[])
+        response.history[0].headers = {'Location': location}
+        session.request.return_value = response
+
+        with mock.patch('shakenfist_client.apiclient.requests.Session',
+                        return_value=session):
+            client = apiclient.Client(suppress_configuration_lookup=True,
+                                      base_url=self.REDIRECTED_FROM)
+        return client, session
+
+    def test_a_relative_location_is_resolved_against_the_hop(self):
+        # RFC 9110 permits a relative Location. Taken as it stands it
+        # would leave base_url as '/api' and every request built from it
+        # would be a path with no host at all -- and since this is now the
+        # single place the redirect is resolved for every route, including
+        # the mint, there is no later probe to recover from it.
+        client, _ = self._client_redirected_to('/elsewhere/api')
+
+        self.assertEqual('http://sf.example.com/elsewhere/api',
+                         client.base_url)
+
+    def test_a_trailing_slash_does_not_double_up(self):
+        # Every caller appends a path which begins with a slash.
+        client, session = self._client_redirected_to(
+            'http://sf.example.com:13000/api/')
+
+        self.assertEqual('http://sf.example.com:13000/api', client.base_url)
+
+        client.get_login_issuers()
+
+        self.assertEqual('http://sf.example.com:13000/api/auth/login',
+                         session.request.call_args.args[1])
 
 
 class StatusCodeMappingTestCase(testtools.TestCase):

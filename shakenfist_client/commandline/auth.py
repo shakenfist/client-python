@@ -1177,11 +1177,18 @@ def _client_for_login(apiurl, verbose=False):
     nothing at all about the requests it made -- on the one verb where
     "why was I refused" is the usual question.
     """
-    if apiurl:
-        return apiclient.Client(base_url=apiurl, verbose=verbose,
-                                suppress_configuration_lookup=True)
-
+    # Constructing a client fetches the API root for its capability list,
+    # so every one of these can fail on the network rather than on the
+    # configuration -- and a login is the first verb a new user runs, with
+    # a URL they have just typed by hand. An unreachable or mistyped
+    # cluster is the likeliest thing to go wrong here and must not arrive
+    # as a traceback, for the same reason "no configuration at all" must
+    # not.
     try:
+        if apiurl:
+            return apiclient.Client(base_url=apiurl, verbose=verbose,
+                                    suppress_configuration_lookup=True)
+
         return apiclient.Client(verbose=verbose)
     except apiclient.UnconfiguredException:
         raise LoginFailed(
@@ -1195,6 +1202,10 @@ def _client_for_login(apiurl, verbose=False):
         raise LoginFailed(
             '%s A login does not need the cache: name the cluster with --apiurl to '
             'log in without reading it.' % e)
+    except requests.exceptions.RequestException as e:
+        raise LoginFailed(
+            'Could not reach the cluster at %s: %s. Check the address and that the '
+            'cluster is up.' % (apiurl or 'the address this host is configured with', e))
 
 
 def _login_issuers(client):
@@ -1381,9 +1392,20 @@ def _show_what_was_minted(ctx, stored):
         # rather than a namespace, so there is no way to work out which of
         # these credentials it wanted, and picking one would run it
         # somewhere the person did not ask for.
+        namespaces = sorted({row['namespace'] for row in rows})
+
         _tell('')
-        _tell('This login minted credentials in more than one namespace and none of '
-              'them is selected, so none of them will be presented by default.')
+        if len(namespaces) > 1:
+            _tell('This login minted credentials in more than one namespace and none '
+                  'of them is selected, so none of them will be presented by '
+                  'default.')
+        else:
+            # Two mapping rules can grant the same namespace, so a login
+            # can be ambiguous without naming two namespaces at all. The
+            # message used to assert that it did.
+            _tell('This login minted more than one credential for namespace %s and '
+                  'none of them is selected, so none of them will be presented by '
+                  'default.' % namespaces[0])
 
         elsewhere = stored.get('current')
         if elsewhere:
@@ -1391,8 +1413,22 @@ def _show_what_was_minted(ctx, stored):
                   'earlier for namespace %s on %s instead.'
                   % (elsewhere['namespace'], elsewhere['apiurl']))
 
-        _tell('Choose one of these with "sf-client --namespace=%s login".'
-              % sorted(row['namespace'] for row in rows)[0])
+        # Point at the verb which can actually resolve this. The advice
+        # used to be to log in again with --namespace, which runs the whole
+        # provider flow to settle something already on disk -- and which
+        # cannot settle it at all where one namespace holds two of these
+        # credentials, because the mint selects only when exactly one
+        # minted credential matches the namespace it was given. Naming a
+        # namespace holding two would leave nothing selected and send the
+        # person round the same loop again.
+        first = namespaces[0]
+        held = sorted(row['key_name'] for row in rows
+                      if row['namespace'] == first)
+        advice = 'sf-client credential select %s' % first
+        if len(held) > 1:
+            advice += ' --key-name %s' % held[0]
+        _tell('Choose one of these with "%s". They are already cached, so that is '
+              'a local change and needs no second login.' % advice)
 
 
 @click.command(name='login',
@@ -1455,7 +1491,17 @@ def logout(ctx):
     unavailable precisely when it is the command somebody needs.
     """
     path = credentials.credentials_path()
-    discarded = credentials.delete_credentials()
+    try:
+        discarded = credentials.delete_credentials()
+    except credentials.CredentialCacheException as e:
+        # Caught here rather than left to the group's handler, which
+        # appends "Discard the cache with sf-client logout" to any message
+        # of this type which does not already say so -- advice to run the
+        # command which has just failed. The cache directory has to be
+        # unwritable for this to happen at all, and the person then has a
+        # permissions problem to fix rather than a verb to re-run.
+        _tell(str(e))
+        sys.exit(1)
     output = ctx.obj.get('OUTPUT')
 
     if output == 'json':
@@ -1536,6 +1582,7 @@ def _read_namespace(held, make_client=None):
     """
     make_client = make_client or _client_for_credential
     refused = False
+    failed = False
     for credential in held:
         try:
             client = make_client(credential)
@@ -1558,14 +1605,22 @@ def _read_namespace(held, make_client=None):
             # answer, even under --verbose, and the reason for not printing
             # the exception does not apply to a log the client already
             # filters secrets out of.
+            # Carries on to the next key held for the namespace, like the
+            # refusal branch above it. The loop exists because one key
+            # failing says nothing about the next, and an unexpected
+            # failure presenting this key is no more informative about the
+            # others than a 401 is.
             LOG.debug('Live metadata read for namespace %s failed',
                       credential['namespace'], exc_info=True)
-            return None, REASON_FAILED
+            failed = True
+            continue
 
         return {k['key_name']: k for k in listing
                 if isinstance(k, dict) and 'key_name' in k}, None
 
-    return None, REASON_REFUSED if refused else REASON_FAILED
+    if refused and not failed:
+        return None, REASON_REFUSED
+    return None, REASON_FAILED
 
 
 def _live_metadata(cached, make_client=None):

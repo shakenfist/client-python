@@ -656,3 +656,77 @@ class CredentialsTestCase(testtools.TestCase):
         self.write_raw('{truncated')
         self.assertIsNone(credentials.delete_credentials(path=self.path))
         self.assertFalse(os.path.exists(self.path))
+
+    def _plant_temporary(self, key=OTHER_FAKE_KEY):
+        """A write temporary of the kind a killed process leaves behind."""
+        stale = os.path.join(
+            self.directory,
+            '%sabcd1234%s' % (credentials.TEMPORARY_PREFIX,
+                              credentials.TEMPORARY_SUFFIX))
+        os.makedirs(self.directory, mode=0o700, exist_ok=True)
+        with open(stale, 'w') as f:
+            json.dump({'version': 1, 'credentials': [cached(key=key)],
+                       'current': None}, f)
+        return stale
+
+    def test_delete_takes_a_stale_write_temporary_with_it(self):
+        # _write_atomically() unlinks its temporary in a finally, which a
+        # process killed between mkstemp() and os.replace() never runs.
+        # That file holds the whole credential set, so a logout which left
+        # it behind would leave a key the cluster still honours on disk
+        # after the person asked for it to be discarded.
+        credentials.write_credentials([cached()], path=self.path)
+        stale = self._plant_temporary()
+
+        self.assertEqual(1, credentials.delete_credentials(path=self.path))
+
+        self.assertFalse(os.path.exists(self.path))
+        self.assertFalse(os.path.exists(stale))
+
+    def test_delete_sweeps_a_temporary_with_no_cache_beside_it(self):
+        # What a process killed during its very first write leaves: a
+        # temporary and no credentials.json at all. The count is still
+        # zero, because no credential the person knew about went -- but
+        # the secret has to go.
+        stale = self._plant_temporary()
+
+        self.assertEqual(0, credentials.delete_credentials(path=self.path))
+
+        self.assertFalse(os.path.exists(stale))
+
+    def test_delete_leaves_other_files_in_the_directory_alone(self):
+        keep = os.path.join(self.directory, 'something-else.json')
+        os.makedirs(self.directory, mode=0o700, exist_ok=True)
+        with open(keep, 'w') as f:
+            f.write('{}')
+        credentials.write_credentials([cached()], path=self.path)
+
+        credentials.delete_credentials(path=self.path)
+
+        self.assertTrue(os.path.exists(keep))
+
+    def test_logout_removes_a_temporary_the_write_path_itself_named(self):
+        # The planted-file tests above take the name from the module's own
+        # constant, so they cannot notice the write and the sweep drifting
+        # apart: move the constant and both halves move with it. This one
+        # names nothing. It leaves behind a temporary which
+        # _write_atomically() named, by failing the write and suppressing
+        # the cleanup unlink the way a killed process would, and then asks
+        # a logout to find it.
+        credentials.write_credentials([cached()], path=self.path)
+
+        with mock.patch('shakenfist_client.credentials.json.dump',
+                        side_effect=OSError(28, 'No space left on device')):
+            with mock.patch('shakenfist_client.credentials.os.unlink'):
+                self.assertRaises(
+                    credentials.CredentialCacheException,
+                    credentials.write_credentials,
+                    [cached(key=OTHER_FAKE_KEY)], path=self.path)
+
+        leftover = [name for name in os.listdir(self.directory)
+                    if name != 'credentials.json']
+        self.assertEqual(1, len(leftover), leftover)
+
+        credentials.delete_credentials(path=self.path)
+
+        self.assertEqual([], os.listdir(self.directory))

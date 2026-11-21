@@ -1590,6 +1590,56 @@ class LoginCommandTestCase(CacheIsolatedTestCase):
         self.assertIsNone(cached['current'])
         self.assertIn('none of them is selected', result.output)
 
+    def test_the_advice_names_a_verb_which_can_resolve_it(self):
+        # It used to advise logging in again with --namespace, which runs
+        # the whole provider flow to settle something already on disk.
+        self.client.login.return_value = [
+            minted(namespace='ci'),
+            minted(namespace='dev', key_name='corporate-bbbb',
+                   key=OTHER_MINTED_KEY)]
+
+        result = self._invoke()
+
+        self.assertIn('sf-client credential select ci', result.stderr)
+        self.assertNotIn('--namespace=ci login', result.stderr)
+
+    def test_two_credentials_in_one_namespace_get_resolvable_advice(self):
+        # Two mapping rules can grant the same namespace, which is the
+        # case the old advice could not settle at all: the mint selects
+        # only where exactly one minted credential matches the namespace
+        # it was given, so "log in again with --namespace=ci" left
+        # nothing selected and sent the person round the loop again.
+        self.client.login.return_value = [
+            minted(namespace='ci', key_name='corporate-aaaa'),
+            minted(namespace='ci', key_name='corporate-bbbb',
+                   key=OTHER_MINTED_KEY)]
+
+        result = self._invoke()
+
+        self.assertEqual(0, result.exit_code)
+        self.assertIsNone(credentials.read_credentials(path=self.path)['current'])
+        # The claim about namespaces has to be true of this case too.
+        self.assertNotIn('more than one namespace', result.stderr)
+        self.assertIn('more than one credential for namespace ci', result.stderr)
+        self.assertIn('--key-name corporate-aaaa', result.stderr)
+
+    def test_the_advice_resolves_what_it_advertises(self):
+        # The advice is only worth anything if following it works, so
+        # follow it: the key name it names must be one credential select
+        # accepts, and the result must be a selection.
+        self.client.login.return_value = [
+            minted(namespace='ci', key_name='corporate-aaaa'),
+            minted(namespace='ci', key_name='corporate-bbbb',
+                   key=OTHER_MINTED_KEY)]
+        self._invoke()
+
+        chosen = credentials.select_current(
+            CLUSTER, 'ci', key_name='corporate-aaaa', path=self.path)
+
+        self.assertEqual('corporate-aaaa', chosen['key_name'])
+        cached = credentials.read_credentials(path=self.path)
+        self.assertEqual('corporate-aaaa', cached['current']['key_name'])
+
     def test_a_selection_on_another_cluster_is_called_out(self):
         # A selection against a different cluster survives a login here, so
         # this login leaves nothing of its own selected while the cache
@@ -1766,8 +1816,10 @@ class ClientForLoginTestCase(testtools.TestCase):
 
     The group callback cannot build a client for a login -- somebody
     logging in for the first time has no credential for it to resolve --
-    so the verb builds its own, and these are the three answers it can
-    get back.
+    so the verb builds its own, and these are the answers it can get
+    back. Each of them has to be a sentence rather than a traceback:
+    this is the first verb a new user runs, and every one of these is
+    something they can do something about.
     """
 
     def setUp(self):
@@ -1804,6 +1856,31 @@ class ClientForLoginTestCase(testtools.TestCase):
 
         self.assertIn('0644', str(e))
         self.assertIn('--apiurl', str(e))
+
+    def test_an_unreachable_named_cluster_says_so(self):
+        # Constructing a client fetches the API root for its capability
+        # list, so a mistyped or down cluster fails on the network rather
+        # than on the configuration -- and a URL typed by hand is the
+        # likeliest thing to be wrong on the first login anyone runs.
+        self.construct.side_effect = requests.exceptions.ConnectionError(
+            'Name or service not known')
+
+        e = self.assertRaises(auth.LoginFailed, auth._client_for_login,
+                              'http://typo.example.com/api')
+
+        self.assertIn('Could not reach the cluster', str(e))
+        self.assertIn('http://typo.example.com/api', str(e))
+
+    def test_an_unreachable_configured_cluster_says_so_too(self):
+        # The same failure on the branch which had to resolve the cluster
+        # from the host's own configuration, where there is no URL from
+        # the command line to quote back.
+        self.construct.side_effect = requests.exceptions.ReadTimeout('too slow')
+
+        e = self.assertRaises(auth.LoginFailed, auth._client_for_login, None)
+
+        self.assertIn('Could not reach the cluster', str(e))
+        self.assertIn('configured with', str(e))
 
 
 class LogoutCommandTestCase(CacheIsolatedTestCase):
@@ -1854,6 +1931,23 @@ class LogoutCommandTestCase(CacheIsolatedTestCase):
         self.assertEqual(0, result.exit_code)
         self.assertFalse(os.path.exists(self.path))
         self.assertIn('could not be read', result.stdout)
+
+    def test_a_logout_which_cannot_remove_the_cache_says_only_that(self):
+        # The group's handler appends 'Discard the cache with "sf-client
+        # logout"' to any cache exception whose message does not already
+        # say so. Letting this one reach it would advise running the
+        # command which has just failed.
+        self._write_cache()
+
+        with mock.patch('shakenfist_client.credentials.delete_credentials',
+                        side_effect=credentials.CredentialCacheException(
+                            'Could not remove the credential cache %s: '
+                            'Permission denied' % self.path)):
+            result = self._invoke()
+
+        self.assertEqual(1, result.exit_code)
+        self.assertIn('Could not remove the credential cache', result.stderr)
+        self.assertNotIn('Discard the cache with', result.stderr)
 
     def test_a_corrupt_cache_is_still_removed(self):
         self._write_cache(content='{this is not json')
@@ -2010,6 +2104,37 @@ class CredentialCommandTestCase(CacheIsolatedTestCase):
 
         self.assertEqual(['cache', 'live'], [r['source'] for r in rows])
         self.assertEqual(auth.REASON_NOT_LISTED, rows[0]['reason'])
+
+    def test_the_next_key_is_tried_after_an_unexpected_failure_too(self):
+        # The same property for the broad handler as for the refusal above
+        # it. One key failing says nothing about the next, and an
+        # unanticipated error presenting this one is no more informative
+        # about the others than a 401 is -- so the loop carries on rather
+        # than abandoning the namespace at its first key.
+        a = self._held('ci', 'one')
+        b = self._held('ci', 'two', key=OTHER_MINTED_KEY)
+        self._write_cache([a, b])
+        self.live[(CLUSTER, 'ci', 'one')] = AssertionError('a bug, not a cluster')
+        self.live[(CLUSTER, 'ci', 'two')] = [
+            {'key_name': 'two', 'expiry': 2.0, 'scopes': []}]
+
+        rows = json.loads(self._list(output='json').stdout)
+
+        self.assertEqual(['cache', 'live'], [r['source'] for r in rows])
+
+    def test_an_unexpected_failure_on_every_key_reports_a_failure(self):
+        # And when carrying on runs out of keys, the reason is the failure
+        # rather than a refusal nothing saw.
+        a = self._held('ci', 'one')
+        b = self._held('ci', 'two', key=OTHER_MINTED_KEY)
+        self._write_cache([a, b])
+        self.live[(CLUSTER, 'ci', 'one')] = apiclient.UnauthenticatedException(
+            'no', 'POST', 'u', 401, '')
+        self.live[(CLUSTER, 'ci', 'two')] = AssertionError('a bug, not a cluster')
+
+        rows = json.loads(self._list(output='json').stdout)
+
+        self.assertEqual(auth.REASON_FAILED, rows[0]['reason'])
 
     def test_an_unreachable_cluster_is_asked_once_and_the_cache_answers(self):
         self._two_namespaces()
