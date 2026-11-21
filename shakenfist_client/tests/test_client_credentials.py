@@ -174,7 +174,6 @@ class CredentialsTestCase(testtools.TestCase):
         self.assertEqual([], credentials.credentials_for_apiurl(CLUSTER, path=self.path))
         self.assertIsNone(credentials.current_credential(path=self.path))
         self.assertEqual(0, credentials.delete_credentials(path=self.path))
-        self.assertEqual(0, credentials.purge_expired(path=self.path))
 
     def test_a_truncated_file_is_refused_not_a_traceback(self):
         self.write_raw('{"version": 1, "credentials": [{"namespa')
@@ -286,15 +285,38 @@ class CredentialsTestCase(testtools.TestCase):
         credentials.read_credentials(path=self.path, now=1000.0)
         self.assertEqual(before, self.read_raw())
 
-    def test_purge_expired_rewrites_the_file(self):
-        live = cached(namespace='ops', key_name='corporate-bbbb',
-                      key=OTHER_FAKE_KEY, expiry=2000.0)
-        credentials.write_credentials([live, cached(expiry=900.0)], path=self.path)
-
-        self.assertEqual(1, credentials.purge_expired(path=self.path, now=1000.0))
-        self.assertNotIn(FAKE_KEY, self.read_raw())
+    def test_a_login_takes_the_expired_entries_with_it(self):
+        # Reading does not repair the file, so a dead secret stays on disk
+        # until something writes the cache. Nothing purges on its own, and
+        # nothing needs to: every path which writes builds its document
+        # from read_credentials(), which has already dropped what expired.
+        # This is that property for a login, and the expired entry is
+        # against another cluster so that it is the expiry doing the work
+        # rather than this cluster's entries being replaced wholesale.
+        stale = cached(apiurl=OTHER_CLUSTER, namespace='ops',
+                       key_name='corporate-bbbb', key=OTHER_FAKE_KEY,
+                       expiry=900.0)
+        credentials.write_credentials([stale], path=self.path)
         self.assertIn(OTHER_FAKE_KEY, self.read_raw())
-        self.assertEqual(0, credentials.purge_expired(path=self.path, now=1000.0))
+
+        credentials.store_credential_set(
+            CLUSTER, [minted(expiry=2000.0)], path=self.path, now=1000.0)
+
+        self.assertNotIn(OTHER_FAKE_KEY, self.read_raw())
+        self.assertIn(FAKE_KEY, self.read_raw())
+
+    def test_a_selection_takes_the_expired_entries_with_it(self):
+        # The same property for the other verb which writes.
+        stale = cached(apiurl=OTHER_CLUSTER, namespace='ops',
+                       key_name='corporate-bbbb', key=OTHER_FAKE_KEY,
+                       expiry=900.0)
+        live = cached(expiry=2000.0)
+        credentials.write_credentials([stale, live], path=self.path)
+
+        credentials.select_current(CLUSTER, 'ci', path=self.path, now=1000.0)
+
+        self.assertNotIn(OTHER_FAKE_KEY, self.read_raw())
+        self.assertIn(FAKE_KEY, self.read_raw())
 
     # The atomic write.
     def test_a_failed_write_leaves_the_previous_cache_intact(self):
@@ -313,6 +335,29 @@ class CredentialsTestCase(testtools.TestCase):
                 path=self.path)
 
         self.assertEqual(before, self.read_raw())
+        self.assertEqual(['credentials.json'], os.listdir(self.directory))
+
+    def test_a_failed_directory_sync_does_not_claim_the_write_failed(self):
+        # The one point in this function where a refusal would be a lie.
+        # The directory sync happens after os.replace(), so by then the new
+        # cache is in place: a failure there is a write which succeeded with
+        # a weaker durability guarantee than was asked for, not a write
+        # which did not happen. Refusing would say "any previous cache is
+        # unchanged", and login turns that into telling the person that none
+        # of their credentials were kept -- about secrets the cluster will
+        # never issue again.
+        real_open = os.open
+
+        def refuse_the_directory(path, *args, **kwargs):
+            if path == self.directory:
+                raise OSError(13, 'Permission denied')
+            return real_open(path, *args, **kwargs)
+
+        with mock.patch('shakenfist_client.credentials.os.open',
+                        side_effect=refuse_the_directory):
+            credentials.write_credentials([cached()], path=self.path)
+
+        self.assertIn(FAKE_KEY, self.read_raw())
         self.assertEqual(['credentials.json'], os.listdir(self.directory))
 
     def test_a_successful_write_leaves_no_temporary_file(self):

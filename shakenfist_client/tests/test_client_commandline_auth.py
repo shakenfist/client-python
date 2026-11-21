@@ -23,6 +23,27 @@ from shakenfist_client import credentials
 from shakenfist_client.commandline import auth
 
 
+def runner():
+    """A CliRunner which captures the error stream separately.
+
+    Several tests here assert which of the two streams a message went to,
+    because that is what keeps --json parseable while a login talks to a
+    human. click separates them unconditionally from 8.2, and before that
+    only when asked -- and the keyword which asks was removed in 8.2, so
+    neither form on its own works on every version this package supports.
+
+    Asked for by feature detection rather than by comparing versions:
+    click.__version__ is deprecated from 8.2 and goes away in 9.1, and its
+    own deprecation notice says to detect features instead. Without this the
+    tests would need click >= 8.2 in the test extra, which cannot be
+    installed on the Python 3.7 this package still supports.
+    """
+    try:
+        return CliRunner(mix_stderr=False)
+    except TypeError:
+        return CliRunner()
+
+
 # Every secret in this file is deliberately unconvincing, and none of
 # them is shaped like the thing it stands in for: a credential scanner
 # runs over this repository's history with a positive control, so a
@@ -245,6 +266,42 @@ class DeviceAuthorizationFlowTestCase(testtools.TestCase):
         token = self._run([response(200, dict(STARTED)), token_response()])
 
         self.assertEqual(IDENTITY_TOKEN, token)
+
+    def test_a_verification_uri_which_is_not_http_is_refused(self):
+        # The provider supplies this and nothing had checked it, and it is
+        # the one message in a login the person is told to act on. A scheme
+        # which is not http or https cannot carry a login they could
+        # complete, so it is refused before it is printed.
+        started = dict(STARTED, verification_uri='file:///etc/passwd')
+
+        e = self.assertRaises(auth.LoginFailed, self._run,
+                              [response(200, started), token_response()])
+
+        self.assertIn('http or https', str(e))
+        self.assertNotIn('/etc/passwd', self.teller.text)
+
+    def test_a_complete_verification_uri_which_is_not_http_is_refused(self):
+        # The field the person is most likely to follow, because it carries
+        # the code already and asks for no transcription.
+        started = dict(STARTED,
+                       verification_uri_complete='javascript:alert(1)')
+
+        e = self.assertRaises(auth.LoginFailed, self._run,
+                              [response(200, started), token_response()])
+
+        self.assertIn('verification_uri_complete', str(e))
+
+    def test_an_https_complete_verification_uri_is_shown(self):
+        # The negative control for the two above: the check must not refuse
+        # the shape a real provider sends.
+        started = dict(
+            STARTED,
+            verification_uri_complete='https://idp.example.com/activate?c=1')
+
+        self._run([response(200, started), token_response()])
+
+        self.assertIn('https://idp.example.com/activate?c=1',
+                      self.teller.text)
 
     def test_the_device_request_sends_the_client_id_and_the_scopes(self):
         # oidc_scopes arrives from the cluster as one space separated
@@ -482,6 +539,51 @@ class DeviceAuthorizationFlowTestCase(testtools.TestCase):
             sleep=self.clock.sleep, clock=self.clock.now, tell=self.teller)
 
         self.assertIn('Could not reach the identity provider', str(e))
+
+
+class TellTestCase(testtools.TestCase):
+    """What reaches the terminal, when a provider wrote some of it.
+
+    An issuer is semi-trusted: an operator configured it, nobody audited
+    what it returns. Its error descriptions and codes are interpolated
+    into messages for the person, so an escape sequence in one would let
+    it paint over the rest of the login -- including printing a different
+    URI to the one this client thinks it showed.
+    """
+
+    def test_control_characters_do_not_reach_the_terminal(self):
+        self.assertEqual(
+            '[31mnot really red',
+            auth._printable('\x1b[31mnot really red'))
+
+    def test_a_carriage_return_cannot_overwrite_the_line(self):
+        self.assertEqual(
+            'realHarmless',
+            auth._printable('real\rHarmless'))
+
+    def test_the_c1_range_and_delete_go_too(self):
+        self.assertEqual('ab', auth._printable('a\x9b\x7fb'))
+
+    def test_layout_survives(self):
+        # Messages here are laid out with these, so stripping them would
+        # make a login's instructions run together.
+        self.assertEqual('one\ntwo\tthree',
+                         auth._printable('one\ntwo\tthree'))
+
+    def test_ordinary_text_is_untouched(self):
+        self.assertEqual(
+            'To log in, open https://idp.example.com/activate',
+            auth._printable('To log in, open https://idp.example.com/activate'))
+
+    def test_tell_sanitises_what_it_says(self):
+        # The sanitising lives in _tell() rather than at each site which
+        # interpolates a provider's string, so that a message added later
+        # cannot forget to ask for it. This is that wiring.
+        with mock.patch('shakenfist_client.commandline.auth.click.echo') as echo:
+            auth._tell('\x1bcwiped')
+
+        self.assertEqual('cwiped', echo.call_args.args[0])
+        self.assertTrue(echo.call_args.kwargs['err'])
 
 
 class PkceTestCase(testtools.TestCase):
@@ -1438,7 +1540,7 @@ class LoginCommandTestCase(CacheIsolatedTestCase):
             return_value=True).start()
 
     def _invoke(self, output='pretty', namespace=None, apiurl=CLUSTER, args=None):
-        return CliRunner().invoke(
+        return runner().invoke(
             auth.login, args or [], obj={'OUTPUT': output, 'APIURL': apiurl,
                                          'NAMESPACE': namespace},
             catch_exceptions=False)
@@ -1628,7 +1730,7 @@ class LoginCommandTestCase(CacheIsolatedTestCase):
         self.assertFalse(os.path.exists(self.path))
 
     def test_an_unknown_flow_is_refused_by_the_command_line(self):
-        result = CliRunner().invoke(
+        result = runner().invoke(
             auth.login, ['--flow=carrier-pigeon'],
             obj={'OUTPUT': 'pretty', 'APIURL': CLUSTER, 'NAMESPACE': None})
 
@@ -1706,8 +1808,8 @@ class ClientForLoginTestCase(testtools.TestCase):
 
 class LogoutCommandTestCase(CacheIsolatedTestCase):
     def _invoke(self, output='pretty'):
-        return CliRunner().invoke(auth.logout, [], obj={'OUTPUT': output},
-                                  catch_exceptions=False)
+        return runner().invoke(auth.logout, [], obj={'OUTPUT': output},
+                               catch_exceptions=False)
 
     def _write_cache(self, count=1, mode=0o600, content=None):
         os.makedirs(os.path.dirname(self.path), mode=0o700, exist_ok=True)
@@ -1823,12 +1925,12 @@ class CredentialCommandTestCase(CacheIsolatedTestCase):
         return entry
 
     def _list(self, output='pretty', args=None, apiurl=None):
-        return CliRunner().invoke(
+        return runner().invoke(
             auth.credential, ['list'] + (args or []),
             obj={'OUTPUT': output, 'APIURL': apiurl}, catch_exceptions=False)
 
     def _select(self, args, apiurl=None):
-        return CliRunner().invoke(
+        return runner().invoke(
             auth.credential, ['select'] + args,
             obj={'OUTPUT': 'pretty', 'APIURL': apiurl}, catch_exceptions=False)
 
@@ -1879,6 +1981,23 @@ class CredentialCommandTestCase(CacheIsolatedTestCase):
         self.assertEqual(['cache', 'live'], [r['source'] for r in rows])
         self.assertEqual(auth.REASON_REFUSED, rows[0]['reason'])
         self.assertIn('1 of 2', result.stderr)
+
+    def test_an_unexpected_failure_leaves_a_diagnostic_behind(self):
+        # The handler is deliberately silent on the terminal, because what
+        # the exception says may quote what was presented. Without a log
+        # there is no path at all to what went wrong, so a programming
+        # error here looks exactly like a cluster which will not answer --
+        # even under --verbose.
+        self._two_namespaces()
+        self.live[(CLUSTER, 'ci', 'one')] = AssertionError('a bug, not a cluster')
+
+        with mock.patch('shakenfist_client.commandline.auth.LOG') as log:
+            rows = json.loads(self._list(output='json').stdout)
+
+        self.assertEqual(auth.REASON_FAILED, rows[0]['reason'])
+        self.assertTrue(log.debug.called)
+        self.assertTrue(log.debug.call_args.kwargs.get('exc_info'))
+        self.assertNotIn('a bug, not a cluster', json.dumps(rows))
 
     def test_the_next_key_for_a_namespace_is_tried_when_one_is_refused(self):
         a = self._held('ci', 'one')
@@ -2052,6 +2171,23 @@ class CredentialCommandTestCase(CacheIsolatedTestCase):
 
         self.assertEqual(0, result.exit_code)
         self.assertEqual('two', credentials.current_credential()['key_name'])
+
+    def test_asking_which_cluster_is_not_a_cache_refusal(self):
+        # The cache is in perfect order here: what is missing is --apiurl.
+        # A CredentialCacheException would mean the cache cannot be used,
+        # and main.py's handler for that type appends advice to discard it
+        # with a logout -- which would be the wrong thing to tell somebody
+        # who only has to name a cluster.
+        self._write_cache([self._held('ci', 'one'),
+                           self._held('ci', 'two', apiurl=OTHER_CLUSTER)])
+        cache = credentials.read_credentials()
+
+        e = self.assertRaises(auth._NotEnoughToChoose,
+                              auth._apiurl_to_select,
+                              mock.MagicMock(obj={'APIURL': None}), cache)
+
+        self.assertNotIsInstance(e, credentials.CredentialCacheException)
+        self.assertIn('--apiurl', str(e))
 
     def test_the_cluster_of_the_current_selection_is_the_default(self):
         self._write_cache([self._held('ci', 'one'), self._held('ci', 'two', apiurl=OTHER_CLUSTER),

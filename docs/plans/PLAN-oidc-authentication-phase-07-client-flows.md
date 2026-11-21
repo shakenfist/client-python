@@ -721,3 +721,196 @@ It has no documentation link hook and no plan-number hook; those are the
 shakenfist repository's. The constraint against naming plans, phases or
 decisions outside a plan file was followed in `docs/human-login.md`
 regardless, and the one documentation link it adds was checked by hand.
+
+### Review round four
+
+The automated review on `03cb917` raised 14 items: 3 `fix`, 2
+`document`, 7 `consider` and 2 `none`. Eleven were taken, one
+declined.
+
+Two of the three `fix` items were defects a person would have
+met against a real deployment, and both were fixed a level above
+where they were reported.
+
+**The environment's credential was unreachable when the
+environment did not also name the cluster.** `SHAKENFIST_NAMESPACE`
+and `SHAKENFIST_KEY` were read only inside the block which had
+just found `SHAKENFIST_API_URL`, so a library caller which
+exported the two and took its cluster from a configuration file
+reached the cache with both still unset and was handed somebody
+else's login -- the exact inversion D7 forbids. The CLI was never
+affected, because click injects both variables as arguments
+however the cluster was named, which is why nothing had noticed:
+every test of this ordering went through a flag.
+
+The environment read is now hoisted above the cache and applied
+once, under the both-halves rule the named-cluster branch already
+used, and that branch's duplicate copy of it is gone. Two
+consequences worth recording. The configuration files inherit the
+fix, so an environment credential now beats `~/.shakenfist` for
+this input shape as the documentation always said it did; and the
+cache's own fill moved to the both-halves rule as well, which
+fixed an instance the review had not found -- a caller which named
+a namespace and no key used to be handed the login's key to pair
+with its own namespace. The two configuration files keep their
+per-half behaviour, deliberately: that is years older than this
+phase and is not this pull request's to change.
+
+**The mint bypassed the redirect probe, so a 301 silently dropped
+the identity token.** `login()` and `get_login_issuers()` call
+`_actual_request_url()` directly, to avoid authenticating as a
+caller who has no credential. That also skipped the probe
+`_request_url()` performed, and `requests` downgrades a redirected
+POST to a GET and discards the body -- so on a deployment whose
+root redirects, `POST /auth/login` arrived as `GET /auth/login`,
+which is the public issuer list. The call succeeded, answering
+with somebody else's document, having never sent the identity
+token at all; the person was told their credentials could not be
+saved after authenticating at their provider.
+
+Rather than give the two login routes a probe of their own, the
+rewrite moved to `_collect_capabilities()`, which already fetches
+the root with redirects at construction: the target is read from
+that response's history, so it costs no extra request, and it
+settles `base_url` before any route is built from it. The probe in
+`_request_url()` is gone, being both a second copy of the rule and
+one request per client. Only a 301 rewrites; a 302 is temporary
+and says nothing about where the cluster lives. Nothing had
+covered any of this, which is why the probe's removal could pass
+unnoticed -- there are now seven tests.
+
+**The `click >= 8.2` pin was removed rather than marked.** The pin
+contradicted `requires-python = '>=3.7'`, since click 8.2 requires
+3.10, so `pip install -e '.[test]'` could not resolve on the floor
+this package claims. It turned out to be avoidable: click 8.0 and
+8.1 do separate the two streams, when asked with
+`CliRunner(mix_stderr=False)`, and 8.2 removed that keyword while
+making the separation unconditional. Verified against 8.0.0, 8.1.8
+and 8.2.1 rather than from memory. The tests build their runner
+through a factory which feature-detects instead -- which is also
+what click's own deprecation notice for `__version__` asks for --
+and the pin is gone. `tox.ini`'s default envlist moved from `py37`
+to `py3`, the other half of what the item pointed at: 3.7 is the
+floor this package supports, not an interpreter anyone has, so a
+bare `tox` could not build an environment at all. The `py37`
+environment is kept for anyone who wants to check the floor.
+
+Both `document` items were taken. `Client` gained a class
+docstring naming the two exceptions construction can raise,
+`CredentialCacheException` among them, which it can now do purely
+because somebody logged in once on the host; `ARCHITECTURE.md`
+says the same in one sentence. `AGENTS.md` gained a four-line
+section, reversing this plan's own decision not to add one: the
+four invariants are exactly the kind that file carries -- things
+an agent cannot infer by reading the code and would otherwise
+tidy away -- and every comparable feature in this repository has
+such a section.
+
+Six of the seven `consider` items were taken, each being a defect
+in code this phase added rather than an observation about code
+which was already there:
+
+* `purge_expired()` had no caller. It was **deleted** rather than
+  wired in, because wiring it in would have been a no-op: every
+  path which writes the cache already builds its document from
+  `read_credentials()`, which has dropped what expired, so a
+  login, a selection change and a logout each take the expired
+  entries with them. The function was a second copy of the expiry
+  rule, free to disagree with the first. `read_credentials()`'s
+  docstring said the opposite and now says this, and two tests
+  pin the property on the verbs which actually perform it.
+* Provider-supplied strings reached the terminal unsanitised.
+  `_tell()` now strips the characters a terminal acts on rather
+  than prints, which covers every message a login makes because
+  they all go through it; newline and tab survive, since the
+  messages are laid out with them. Separately, a
+  `verification_uri` whose scheme is not http or https is refused
+  where the rest of the provider's answer is validated: it is the
+  one message in a login the person is told to act on.
+* `_read_namespace()`'s deliberately silent handler now logs at
+  debug with a traceback. The reason for not printing the
+  exception -- it may quote what was presented -- does not apply
+  to a log the client already filters secrets out of, and without
+  one a programming error there is indistinguishable from a
+  cluster which will not answer, even under `--verbose`.
+* `_apiurl_to_select()` raised `CredentialCacheException` to ask
+  for `--apiurl`. It now raises a module-local `_NotEnoughToChoose`,
+  so the type keeps meaning "the cache cannot be used" and
+  `main.py`'s handler cannot append advice to discard a cache
+  which is in perfect order.
+* `_write_atomically()`'s directory `fsync` moved out of the
+  refusal around it. It runs after `os.replace()`, so a failure
+  there was reported with a message saying the previous cache was
+  unchanged -- false at the one moment it matters, and `login`
+  turns it into telling the person that none of their credentials
+  were kept, about secrets the cluster will never issue again. A
+  failure there is now a successful write with a weaker durability
+  guarantee, which is what it is.
+* `check_capability()` was tested only against hand-written
+  fragments. It now has a fixture shaped exactly as the server
+  renders the root page -- `'<li>%s: %s</li>'` per family, from
+  `render_capabilities()` in the server's `external_api/app.py` --
+  carrying the three shapes which decide whether a whole-token
+  match can fail closed. The whole-token match is correct against
+  it. The fixture also found something: a *family* label sits in
+  the searched text on the same boundaries as a token, so
+  `check_capability('auth')` answers true although no server
+  advertises `auth` as a capability. That is recorded in a test
+  rather than fixed -- it is harmless while no token shares a
+  family's name, it was true of the substring match this replaced,
+  and closing it means parsing the list out of the page instead of
+  searching the page, which is a change to the contract shared by
+  around fifty call sites.
+
+**Declined:** the cache being read and parsed twice per `Client`
+construction. The reviewer called it pure tidiness and it is; the
+suggested single read would move resolution logic which many
+tests pin, for no correctness gain, and the window between the
+two reads is benign.
+
+#### Mutation testing
+
+Harness:
+`.../scratchpad/mutate-round4.py`, one mutant per run, each
+bounded by a `timeout`, run with `-B` so a same-size mutant
+cannot leave live bytecode behind, and the mutated file restored
+from a pristine copy taken before anything was applied rather
+than with git.
+
+**Twenty-two mutants, twenty-two killed.** One survived the first
+pass and was a fault in the harness rather than a gap: the
+mutation was a no-op, adding a fill for a value already set.
+Replaced with a real mutation of the property it names, and
+killed.
+
+| Property | Mutant | Killed by |
+|----------|--------|-----------|
+| environment precedence | the environment's credential is read only when the environment names the cluster | `ApiClientConfigurationLookupTestCase.test_an_environment_credential_with_no_url_beats_the_cache` |
+| environment precedence | the environment's credential loses to `~/.shakenfist` | `test_an_environment_credential_with_no_url_beats_the_file` |
+| both-halves rule | the cache completes half a flag-supplied credential | `test_a_half_supplied_credential_with_no_url_is_not_completed` |
+| both-halves rule | the cache completes half an environment credential | `test_an_environment_key_alone_with_no_url_is_not_completed` |
+| redirect resolution | a redirecting root is never resolved | `BaseUrlRedirectTestCase.test_the_mint_posts_to_the_resolved_url` |
+| redirect resolution | the rewrite happens, but too late for the login routes | `test_a_redirecting_root_is_resolved_at_construction` |
+| redirect resolution | a temporary redirect moves the cluster too | `test_a_302_does_not_move_the_cluster` |
+| redirect resolution | the issuer list reads the unresolved URL | `test_the_issuer_list_reads_the_resolved_url` |
+| capability matching | `check_capability()` goes back to a substring match | `test_check_capability_against_a_real_root_page_refuses_fragments` |
+| capability matching | the trailing boundary is dropped | `test_check_capability_against_a_real_root_page_refuses_fragments` |
+| capability matching | a token adjacent to markup is refused | `test_check_capability_against_a_real_root_page` |
+| expiry leaves disk | a login keeps the expired entries it read | `test_a_login_takes_the_expired_entries_with_it` |
+| terminal sanitising | `_tell()` stops sanitising | `TellTestCase.test_tell_sanitises_what_it_says` |
+| terminal sanitising | escape sequences pass through `_printable()` | `test_control_characters_do_not_reach_the_terminal` |
+| terminal sanitising | the layout characters are stripped too | `test_layout_survives` |
+| verification URI | a URI of any scheme is shown | `test_a_verification_uri_which_is_not_http_is_refused` |
+| verification URI | only the plain URI is checked | `test_a_complete_verification_uri_which_is_not_http_is_refused` |
+| verification URI | an https URI is refused as well | `test_an_https_complete_verification_uri_is_shown` |
+| silent handler | the unexpected failure is silent everywhere | `test_an_unexpected_failure_leaves_a_diagnostic_behind` |
+| silent handler | the diagnostic carries no traceback | `test_an_unexpected_failure_leaves_a_diagnostic_behind` |
+| exception meaning | asking for `--apiurl` is a cache refusal again | `test_asking_which_cluster_is_not_a_cache_refusal` |
+| durability | a failed directory sync refuses the write | `test_a_failed_directory_sync_does_not_claim_the_write_failed` |
+
+#### Checks
+
+* `.tox/py3/bin/python -m stestr run`: 717 tests passing, 0
+  failing. The baseline was 690; the 27 added are this round's.
+* `tools/flake8wrap.sh` over the package: clean.
+* `pre-commit run --all-files`: passed.

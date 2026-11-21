@@ -252,6 +252,30 @@ oversight, because the server sends a fixed `15` and anything
 unparseable falls back to that same number. The flag is library-level:
 `main.py` does not set it, so `sf-client` behaviour is unchanged.
 
+## Human Login and the Credential Cache
+
+`docs/human-login.md` is the reference. These four are the invariants
+which read as tidy-up targets:
+
+- The cache file and its directory are **created** with their modes, not
+  created and then `chmod`ed: there must be no instant where a namespace
+  key is in a file another user can open. `credentials.py` says so where
+  somebody would otherwise undo it.
+- `check_capability()` matches a **whole token**, not a substring, and
+  the lookbehind and lookahead are load-bearing: `human-login` is a
+  prefix of `human-login-metadata`. Simplifying it back to `in` makes a
+  cluster which advertises only the metadata route pass a check for the
+  mint.
+- `COMMANDS_WITHOUT_A_CLIENT` is the list of verbs `main.py` must not
+  build a client for. `logout` is there because it is the remedy for a
+  cache every other verb refuses to read; building a client would make
+  the remedy fail for the same reason as the problem.
+- The cache sits **between the environment and the two configuration
+  files** in credential precedence, and the environment's namespace and
+  key are read whether or not the environment also names the cluster. An
+  automated caller which exports `SHAKENFIST_KEY` must never run as
+  whoever last logged in on the machine.
+
 ## Code Conventions
 
 - Python >= 3.7 compatibility (conservative for broad client support)

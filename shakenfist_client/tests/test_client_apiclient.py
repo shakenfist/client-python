@@ -350,6 +350,90 @@ class ApiClientTestCase(testtools.TestCase):
         client.root_html = '<li>auth: other, human-login</li>'
         self.assertTrue(client.check_capability('human-login'))
 
+    # A root page shaped exactly as the server renders one. The server
+    # builds each family as '<li>%s: %s</li>' % (family, ', '.join(tokens))
+    # and wraps the lot in the markup below -- see render_capabilities() and
+    # Root.get() in shakenfist/external_api/app.py. The tokens are a real
+    # excerpt of API_CAPABILITIES, chosen for the three shapes which decide
+    # whether a whole-token match can fail closed: a token which is a
+    # prefix of another in the same family, a family label which is itself
+    # hyphen-joined, and a family with exactly one token so that the token
+    # abuts the markup rather than a comma.
+    REAL_ROOT_HTML = (
+        '<html><head><title>Shaken Fist REST API service</title></head>'
+        '<body><h1>Shaken Fist REST API service</h1>'
+        '<p>You might be interested in the <a href="/apidocs">apidocs</a>.'
+        '</p><p>Machine searchable API capabilities:</p><ul>'
+        '<li>admin: cluster-cacert, cluster-resources, vdi-token-pubkey, '
+        'cluster-capacity, cluster-resources-excluded, cluster-claims</li>'
+        '<li>agent-operations: agentoperations-crud, '
+        'instance-agentoperations, instance-agentoperations-all, '
+        'agentoperations-put-with-mode</li>'
+        '<li>auth: trusted-issuers, generated-key-secrets, '
+        'scope-enforcement, mapping-rules, federated-exchange, '
+        'issuer-discovery, human-login-metadata, human-login, '
+        'namespace-claims, namespace-events, namespace-claim-events, '
+        'namespace-key-metadata</li>'
+        '<li>networkinterfaces: interface-metadata</li>'
+        '<li>nodes: node-get, node-metadata, node-process-metrics</li>'
+        '</ul></p></body></html>')
+
+    def test_check_capability_against_a_real_root_page(self):
+        # The whole-token match is a lookbehind and a lookahead over the
+        # page as text, so it fails closed if a token is rendered next to a
+        # word character or a hyphen: the verb then raises
+        # IncapableException against a cluster which is perfectly capable.
+        # The suite otherwise only feeds check_capability hand-written
+        # fragments and bare space-separated strings, neither of which can
+        # show that, and it gates around fifty call sites.
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = self.REAL_ROOT_HTML
+
+        for token in ['cluster-cacert', 'cluster-claims',
+                      'agentoperations-crud', 'instance-agentoperations',
+                      'instance-agentoperations-all', 'human-login',
+                      'human-login-metadata', 'namespace-events',
+                      'namespace-claim-events', 'interface-metadata',
+                      'node-get', 'node-process-metrics']:
+            self.assertTrue(client.check_capability(token),
+                            '%s was advertised and was not found' % token)
+
+    def test_check_capability_against_a_real_root_page_refuses_fragments(self):
+        # The other direction on the same page: nothing which is merely a
+        # piece of an advertised token, or a piece of the markup around it,
+        # may answer for a capability the cluster never claimed.
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = self.REAL_ROOT_HTML
+
+        for token in ['agentoperations', 'instance', 'login', 'metadata',
+                      'cluster', 'node', 'events', 'operations']:
+            self.assertFalse(client.check_capability(token),
+                             '%s is not a capability and was found' % token)
+
+    def test_a_family_label_answers_as_though_it_were_a_capability(self):
+        # Found by the fixture above, and recorded rather than fixed. The
+        # page renders each family as '<li>auth: ...', so a family name sits
+        # in the searched text on the same whole-token boundaries as the
+        # tokens do, and 'auth' or 'nodes' answer a capability check which
+        # no server ever advertised.
+        #
+        # Harmless today: no capability token shares a name with a family,
+        # and this has been true of every version of this function -- the
+        # substring match it replaced had the same hole and a larger one.
+        # Closing it means parsing the list out of the page instead of
+        # searching the page, which is a change to the roughly fifty call
+        # sites' shared contract rather than to this test's subject. The
+        # assertion is here so that the day a token is named after a family
+        # the suite says so.
+        client = apiclient.Client(suppress_configuration_lookup=True,
+                                  base_url='http://localhost:13000')
+        client.root_html = self.REAL_ROOT_HTML
+
+        self.assertTrue(client.check_capability('auth'))
+        self.assertTrue(client.check_capability('nodes'))
+
     def _mint_response(self):
         response = mock.MagicMock()
         response.status_code = 200
@@ -1797,6 +1881,82 @@ class ApiClientConfigurationLookupTestCase(testtools.TestCase):
         self.assertEqual('testkey', client.key)
         self.assertIsNone(client.namespace)
 
+    # -- an environment which pins a credential but names no cluster -------
+
+    @mock.patch.dict('os.environ', {
+        'SHAKENFIST_NAMESPACE': 'testspace',
+        'SHAKENFIST_KEY': 'testkey',
+    }, clear=True)
+    def test_an_environment_credential_with_no_url_beats_the_cache(self):
+        # The environment pins a credential and leaves the cluster to be
+        # found. The cache is the only thing here which knows a cluster, so
+        # it supplies that -- and nothing else. Before the cache existed
+        # this shape reached ~/.shakenfist and took all three from it, which
+        # is the same inversion one level down: an automated caller which
+        # exports SHAKENFIST_KEY must not run as whoever logged in on the
+        # machine, whether the identity it would acquire came from a login
+        # or from a file.
+        #
+        # This is the ordering D7 names which the CLI gets for free, because
+        # click injects both variables as arguments however the cluster was
+        # named. A library caller such as the ansible collection does not,
+        # which is why it is asserted here.
+        self.cache([self.credential()])
+
+        client = apiclient.Client()
+
+        self.assertEqual(self.CLUSTER, client.base_url)
+        self.assertEqual('testspace', client.namespace)
+        self.assertEqual('testkey', client.key)
+
+    @mock.patch.dict('os.environ', {'SHAKENFIST_KEY': 'testkey'}, clear=True)
+    def test_an_environment_key_alone_with_no_url_is_not_completed(self):
+        # The same rule as the named-cluster case: half a credential from
+        # the environment is a pinned credential, so the cache supplies the
+        # cluster and neither half of its own. The result is a client with
+        # no namespace, which fails to authenticate -- the honest outcome,
+        # and better than silently presenting one user's key against another
+        # user's namespace.
+        self.cache([self.credential()])
+
+        client = apiclient.Client()
+
+        self.assertEqual(self.CLUSTER, client.base_url)
+        self.assertEqual('testkey', client.key)
+        self.assertIsNone(client.namespace)
+
+    @mock.patch.dict('os.environ', {
+        'SHAKENFIST_NAMESPACE': 'testspace',
+        'SHAKENFIST_KEY': 'testkey',
+    }, clear=True)
+    def test_an_environment_credential_with_no_url_beats_the_file(self):
+        # The same inversion with no cache in play at all. The documented
+        # order puts the environment above both configuration files, and
+        # this is the one input shape where it did not.
+        self.configuration_files(user_conf={
+            'apiurl': self.OTHER_CLUSTER, 'namespace': 'filespace',
+            'key': 'filekey'})
+
+        client = apiclient.Client()
+
+        self.assertEqual(self.OTHER_CLUSTER, client.base_url)
+        self.assertEqual('testspace', client.namespace)
+        self.assertEqual('testkey', client.key)
+
+    @mock.patch.dict('os.environ', {}, clear=True)
+    def test_a_half_supplied_credential_with_no_url_is_not_completed(self):
+        # The argument half of the same rule, and the reason the cache's
+        # credential is taken only when neither half was pinned rather than
+        # half at a time: a caller which named a namespace and no key used
+        # to be handed the login's key to go with its own namespace.
+        self.cache([self.credential()])
+
+        client = apiclient.Client(namespace='flagspace')
+
+        self.assertEqual(self.CLUSTER, client.base_url)
+        self.assertEqual('flagspace', client.namespace)
+        self.assertIsNone(client.key)
+
     @mock.patch.dict('os.environ', {}, clear=True)
     def test_another_cluster_is_not_answered_from_the_cache(self):
         # A namespace key is scoped to the cluster which minted it, so a
@@ -2443,6 +2603,135 @@ class VDIConsoleProxyFileTestCase(testtools.TestCase):
                 self.assertEqual(
                     '[virt-viewer]\n',
                     client.get_vdi_console_proxy_file('inst-ref'))
+
+
+class BaseUrlRedirectTestCase(testtools.TestCase):
+    """A deployment whose API root answers 301.
+
+    These clusters are supported, and the redirection is resolved once at
+    construction. What is under test is not the rewrite itself so much as
+    that it happens before any route is built, because the two public login
+    routes send no credential and so can never resolve it as a side effect
+    of authenticating.
+
+    The consequence if they could not: requests downgrades a redirected
+    POST to a GET and discards the body, and GET /auth/login is the public
+    issuer list while POST /auth/login is the mint. A mint sent to the
+    pre-redirect URL therefore does not fail -- it succeeds as a different
+    request, answering with the issuer list, having never sent the identity
+    token anywhere. The person is told their credentials could not be
+    saved, after authenticating at their provider.
+
+    _collect_capabilities is deliberately not patched out here. It is the
+    thing under test.
+    """
+
+    REDIRECTED_FROM = 'http://sf.example.com/api'
+    REDIRECTED_TO = 'http://sf.example.com:13000/api'
+
+    ROOT_HTML = ('<html><body><p>Machine searchable API capabilities:</p><ul>'
+                 '<li>auth: human-login-metadata, human-login</li>'
+                 '</ul></body></html>')
+
+    def _response(self, redirected, body, json_body=None):
+        hop = mock.MagicMock()
+        hop.status_code = 301
+        hop.url = self.REDIRECTED_FROM
+        hop.headers = {'Location': self.REDIRECTED_TO}
+
+        response = mock.MagicMock()
+        response.status_code = 200
+        response.history = [hop] if redirected else []
+        response.headers = {}
+        response.text = body
+        response.json.return_value = json_body
+        return response
+
+    def _client(self, redirected=True, json_body=None):
+        """A client constructed against a root which redirects, or does not.
+
+        One mocked session answers every request, so what each call asked
+        for is readable from its mock afterwards.
+        """
+        session = mock.MagicMock()
+        session.request.return_value = self._response(
+            redirected, self.ROOT_HTML, json_body=json_body)
+
+        with mock.patch('shakenfist_client.apiclient.requests.Session',
+                        return_value=session):
+            client = apiclient.Client(suppress_configuration_lookup=True,
+                                      base_url=self.REDIRECTED_FROM)
+        return client, session
+
+    def test_a_redirecting_root_is_resolved_at_construction(self):
+        client, session = self._client()
+
+        self.assertEqual(self.REDIRECTED_TO, client.base_url)
+
+    def test_a_root_which_does_not_redirect_is_left_alone(self):
+        # The negative control: the rewrite is driven by the response's
+        # history, so a client which was never redirected must keep the URL
+        # it was given.
+        client, session = self._client(redirected=False)
+
+        self.assertEqual(self.REDIRECTED_FROM, client.base_url)
+
+    def test_the_root_page_is_still_read(self):
+        # Resolving the redirection must not cost the capability list, which
+        # is read from the same response.
+        client, session = self._client()
+
+        self.assertTrue(client.check_capability('human-login'))
+
+    def test_the_mint_posts_to_the_resolved_url(self):
+        # The regression this class exists for. Were the POST sent to
+        # REDIRECTED_FROM it would arrive as a GET of the issuer list.
+        client, session = self._client(json_body=[])
+
+        client.login('notarealtoken')
+
+        self.assertEqual(
+            self.REDIRECTED_TO + '/auth/login',
+            session.request.call_args.args[1])
+        self.assertEqual('POST', session.request.call_args.args[0])
+
+    def test_the_issuer_list_reads_the_resolved_url(self):
+        client, session = self._client(json_body=[])
+
+        client.get_login_issuers()
+
+        self.assertEqual(
+            self.REDIRECTED_TO + '/auth/login',
+            session.request.call_args.args[1])
+        self.assertEqual('GET', session.request.call_args.args[0])
+
+    def test_an_authenticated_route_reads_the_resolved_url(self):
+        # Every other route resolved this for itself on its first
+        # unauthenticated request. It must still end up at the same place
+        # now that the probe it used to do has gone.
+        client, session = self._client(json_body={'instances': []})
+        client.cached_auth = 'Bearer notreallyatoken'
+
+        client.get_instances()
+
+        self.assertEqual(
+            self.REDIRECTED_TO + '/instances',
+            session.request.call_args.args[1])
+
+    def test_a_302_does_not_move_the_cluster(self):
+        # A temporary redirect says nothing about where this cluster lives,
+        # so it must not be written down as though it did.
+        session = mock.MagicMock()
+        response = self._response(True, self.ROOT_HTML)
+        response.history[0].status_code = 302
+        session.request.return_value = response
+
+        with mock.patch('shakenfist_client.apiclient.requests.Session',
+                        return_value=session):
+            client = apiclient.Client(suppress_configuration_lookup=True,
+                                      base_url=self.REDIRECTED_FROM)
+
+        self.assertEqual(self.REDIRECTED_FROM, client.base_url)
 
 
 class StatusCodeMappingTestCase(testtools.TestCase):

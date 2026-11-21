@@ -50,6 +50,7 @@ import base64
 import datetime
 import hashlib
 import json
+import logging
 import secrets
 import sys
 import time
@@ -67,6 +68,16 @@ from prettytable import PrettyTable
 
 from shakenfist_client import apiclient
 from shakenfist_client import credentials
+
+
+# Nothing here logs on the ordinary paths -- what a login has to say, it
+# says to the person through _tell(). This is for the handlers which
+# deliberately say nothing to the terminal, where without it a
+# programming error is indistinguishable from a cluster which will not
+# answer. The level is left alone so it follows root, which --verbose
+# moves to DEBUG, and root's handlers carry the secret redacting filter
+# main.py installs.
+LOG = logging.getLogger(__name__)
 
 
 # The two flows a login can run, spelled as --flow takes them.
@@ -181,6 +192,24 @@ class LoginFailed(Exception):
     ...
 
 
+def _printable(message):
+    """message without the characters a terminal acts on rather than prints.
+
+    Much of what a login says is provider supplied: a verification URI, a
+    user code, an OAuth error and its description. An issuer is only
+    semi-trusted -- an operator configured it, nobody audited what it
+    returns -- and an escape sequence in any of those fields would let it
+    paint what it liked over the rest of the login, including a different
+    URI to the one this client believes it printed.
+
+    Newline and tab survive, because the messages here are laid out with
+    them. Everything else below 0x20, DEL, and the C1 range go.
+    """
+    return ''.join(
+        c for c in str(message)
+        if c in '\n\t' or not (ord(c) < 0x20 or 0x7f <= ord(c) <= 0x9f))
+
+
 def _tell(message):
     """Say something to the person, on the error stream.
 
@@ -188,8 +217,13 @@ def _tell(message):
     comma separated listing, or JSON -- and ``--json`` exists so that
     something else can parse it. A login still has to talk to a human
     while it runs, so everything it says goes to stderr.
+
+    Everything a login says passes through here, which is why the
+    sanitising is here rather than at each site which interpolates a
+    provider's string into a message: one added later cannot forget to
+    ask for it.
     """
-    click.echo(message, err=True)
+    click.echo(_printable(message), err=True)
 
 
 def _json_body(response):
@@ -291,6 +325,21 @@ def _request_device_code(issuer):
                 'The identity provider started a login but did not say what the %s is, '
                 'so there is no way to continue. This is a fault at the provider.'
                 % field)
+
+    # A verification URI is the one message in a login the person is
+    # meant to act on, and the provider supplies it. Checked here, with
+    # the other things the answer has to get right, rather than where it
+    # is printed: a scheme which is not http or https cannot carry a
+    # login the person could complete, so it is a refusal and not a
+    # rendering problem.
+    for field in ('verification_uri', 'verification_uri_complete'):
+        uri = document.get(field)
+        if uri and urlparse(uri).scheme not in ('http', 'https'):
+            raise LoginFailed(
+                'The identity provider gave a %s which this client will not ask anyone '
+                'to open: %s. A login is opened over http or https and nothing else.'
+                % (field, _printable(uri)))
+
     return document
 
 
@@ -1499,10 +1548,18 @@ def _read_namespace(held, make_client=None):
             refused = True
             continue
         except Exception:
-            # Deliberately broad and deliberately silent. This is a
+            # Deliberately broad, and silent on the terminal: this is a
             # best-effort read on top of a listing which needs none of it,
-            # and what the exception says is not repeated because it may
-            # quote what was presented.
+            # and what the exception says is not repeated to the person
+            # because it may quote what was presented.
+            #
+            # Logged at debug all the same. Without it a programming error
+            # here is indistinguishable from a cluster which will not
+            # answer, even under --verbose, and the reason for not printing
+            # the exception does not apply to a log the client already
+            # filters secrets out of.
+            LOG.debug('Live metadata read for namespace %s failed',
+                      credential['namespace'], exc_info=True)
             return None, REASON_FAILED
 
         return {k['key_name']: k for k in listing
@@ -1657,6 +1714,18 @@ def credential_list(ctx, offline):
               % (live, len(rows)))
 
 
+class _NotEnoughToChoose(Exception):
+    """The command line did not say enough to choose between what is held.
+
+    Deliberately not a CredentialCacheException. That type means the
+    cache cannot be used, and main.py's handler for it appends advice to
+    discard the cache with a logout -- which is the wrong thing to tell
+    somebody whose cache is in perfect order and who has only to pass
+    --apiurl. Harmless today, because the verb catches it first, but one
+    refactor away from the logout advice appearing on an argument error.
+    """
+
+
 def _apiurl_to_select(ctx, cache):
     """Which cluster a selection is for, without guessing."""
     named = ctx.obj.get('APIURL')
@@ -1670,7 +1739,7 @@ def _apiurl_to_select(ctx, cache):
     if len(apiurls) == 1:
         return apiurls[0]
 
-    raise credentials.CredentialCacheException(
+    raise _NotEnoughToChoose(
         'Credentials are cached for more than one cluster and none is selected. Name one with '
         '--apiurl: %s.' % ', '.join(apiurls))
 
@@ -1694,7 +1763,7 @@ def credential_select(ctx, namespace, key_name):
             raise credentials.CredentialCacheException(
                 'There are no cached credentials to select from in %s.' % credentials.credentials_path())
         chosen = credentials.select_current(_apiurl_to_select(ctx, cache), namespace, key_name=key_name)
-    except credentials.CredentialCacheException as e:
+    except (credentials.CredentialCacheException, _NotEnoughToChoose) as e:
         _tell(str(e))
         sys.exit(1)
 

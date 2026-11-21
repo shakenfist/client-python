@@ -146,16 +146,37 @@ and they are how a script or a CI job pins a credential. A job which
 sets `SHAKENFIST_KEY` must not start running as somebody's personal
 login because they happened to log in on the same machine.
 
-There is one addition to all of this. A caller which named a cluster but
-no credential -- `--apiurl` or `SHAKENFIST_API_URL` on its own -- used
-to reach none of the sources above, because each of them is gated on
-there being no API URL yet, and so had no credential at all. Such a
-caller now gets the environment's credential if it has one, and
-otherwise the cache's, for that named cluster only. Both halves of a
-credential have to be missing for either to be filled in: a caller which
-named a namespace or a key is pinning a credential, and completing the
-other half of it from a login would present a pair that nothing ever
-had.
+Two things follow from that, and neither is quite what the gating rule
+above would suggest on its own.
+
+**The environment's namespace and key are read whether or not the
+environment also names the cluster.** `SHAKENFIST_NAMESPACE` and
+`SHAKENFIST_KEY` pin a credential; where the cluster comes from is a
+separate question, and it may come from `--apiurl`, from a
+configuration file or from the cache. The cache then supplies the
+cluster and nothing else. This is what `sf-client` has always done,
+because click injects both variables as arguments however the cluster
+was named -- the point of saying it here is that a library caller such
+as the ansible collection now behaves the same way. Before, an
+automated caller which exported only those two variables was handed the
+cache's identity instead of its own.
+
+**Both halves of a credential have to be missing before any source
+fills one in.** A caller or an environment which named a namespace or a
+key is pinning a credential, and completing the other half of it from a
+login would present a pair that nothing ever had. The visible
+consequence is that a half-named credential stays half-named and the
+command fails to authenticate, which is the honest outcome: the
+alternative is one person's key presented against another person's
+namespace. The two configuration files are the exception, and keep
+their long-standing per-half behaviour.
+
+A caller which named a cluster but no credential -- `--apiurl` or
+`SHAKENFIST_API_URL` on its own -- used to reach none of the sources
+above, because each of them is gated on there being no API URL yet, and
+so had no credential at all. Such a caller now gets the environment's
+credential if it has one, and otherwise the cache's, for that named
+cluster only.
 
 ## Seeing and switching what you hold
 

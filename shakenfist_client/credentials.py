@@ -239,18 +239,30 @@ def _write_atomically(path, document):
 
             os.replace(temporary, path)
             temporary = None
+        except OSError as e:
+            raise CredentialCacheException(
+                'Could not write the credential cache %s: %s. Any previous cache is unchanged.' % (path, e))
 
-            # The rename is durable only once the directory entry is,
-            # and a credential which survives a write but not a power
-            # cut is one the person would have to mint again.
+        # The rename is durable only once the directory entry is, and a
+        # credential which survives a write but not a power cut is one the
+        # person would have to mint again.
+        #
+        # Outside the refusal above, and deliberately. By this point the
+        # replacement has happened, so a failure here is a write which
+        # succeeded with a weaker durability guarantee than was asked for --
+        # not a write which did not happen. Refusing would say "any previous
+        # cache is unchanged", which at this one moment is the opposite of
+        # the truth, and login turns that into telling the person that none
+        # of their credentials were kept about secrets the cluster will
+        # never issue again.
+        try:
             dir_fd = os.open(directory, os.O_RDONLY)
             try:
                 os.fsync(dir_fd)
             finally:
                 os.close(dir_fd)
-        except OSError as e:
-            raise CredentialCacheException(
-                'Could not write the credential cache %s: %s. Any previous cache is unchanged.' % (path, e))
+        except OSError:
+            ...
     finally:
         if temporary:
             try:
@@ -418,9 +430,15 @@ def read_credentials(path=None, now=None):
     allowed to fail: the cluster stops honouring a key the moment its
     expiry passes, and a cache which went on presenting one would turn
     a lapsed login into an unexplained authorisation failure on the
-    next command instead of a prompt to log in again. Nothing is
-    written -- reading does not repair the file -- so a caller which
-    wants the expired entries gone from disk calls purge_expired().
+    next command instead of a prompt to log in again.
+
+    Nothing is written -- reading does not repair the file. A dead
+    secret therefore stays on disk until something writes the cache,
+    and every path which writes it builds the new document from this
+    function's output: a login, a change of selection and a logout each
+    take the expired entries with them. There is deliberately no
+    separate purge, because it would be a second copy of the expiry rule
+    with nothing calling it, free to disagree with this one.
 
     The selection is dropped with the credential it named, for the
     same reason: a selection pointing at a credential this function
@@ -613,32 +631,6 @@ def select_current(apiurl, namespace, key_name=None, path=None, now=None):
     }
     write_credentials(cache['credentials'], current=current, path=path)
     return chosen
-
-
-def purge_expired(path=None, now=None):
-    """Remove expired credentials from the file, and say how many went.
-
-    read_credentials() already declines to offer them, so this is
-    housekeeping rather than a guard: it stops a dead secret sitting on
-    disk after the login it belonged to has lapsed. Returns 0 when
-    there is no cache and when there was nothing to drop, in which
-    case nothing is written.
-    """
-    path = credentials_path(path)
-    document = _load(path)
-    if document is None:
-        return 0
-
-    if now is None:
-        now = time.time()
-
-    live, current = _live_view(document, now)
-    dropped = len(document['credentials']) - len(live)
-    if not dropped:
-        return 0
-
-    write_credentials(live, current=current, path=path)
-    return dropped
 
 
 def delete_credentials(path=None):
