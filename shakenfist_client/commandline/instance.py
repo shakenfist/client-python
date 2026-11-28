@@ -28,12 +28,12 @@ def _get_instances(ctx, args, incomplete):
 def _warn_if_timing_unsupported(ctx, timings):
     """Warn when the user asked for a budget this server cannot accept.
 
-    The client is deliberately silent when it has nothing to send (decision
-    7 of PLAN-agent-operation-deadlines-phase-06-client.md), because an
-    omitted flag means "whatever the server does by default" and that is
-    exactly what an old server gives. A value the user typed is a different
-    thing: dropping it silently hands them an operation with the server's
-    default budget rather than the one they asked for, and no clue why.
+    The client is deliberately silent when it has nothing to send,
+    because an omitted flag means "whatever the server does by default"
+    and that is exactly what an old server gives. A value the user typed
+    is a different thing: dropping it silently hands them an operation
+    with the server's default budget rather than the one they asked for,
+    and no clue why.
 
     ``timings`` is a plain dict keyed by the flag name as the user typed
     it, so the warning can name the flag rather than the kwarg.

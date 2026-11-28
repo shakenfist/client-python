@@ -343,7 +343,7 @@ class VdiConsoleCommandTestCase(testtools.TestCase):
 
 
 class VdiConsoleFileCommandTestCase(testtools.TestCase):
-    """Tests for ``sf-client instance vdiconsolefile`` (decision 5)."""
+    """Tests for ``sf-client instance vdiconsolefile``."""
 
     def _invoke(self, client, args):
         runner = CliRunner()
