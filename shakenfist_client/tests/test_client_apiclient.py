@@ -3728,10 +3728,10 @@ class AgentOperationDeadlineTestCase(testtools.TestCase):
 
 class APIExceptionTestCase(testtools.TestCase):
     # Downstream repositories construct APIException with five positional
-    # arguments and no headers, so that form must keep working even though
-    # this phase adds a headers keyword. See shakenfist's
-    # docs/plans/PLAN-transient-capacity-refusals-phase-04-retry-after.md,
-    # step 4d.
+    # arguments and no headers. The headers keyword was added after them
+    # and is therefore last and optional, so that form has to keep
+    # working: a caller which has never heard of it must not have to
+    # change to keep raising the exception.
     def test_old_five_positional_form_still_works(self):
         exc = apiclient.APIException('m', 'GET', 'u', 507, 't')
 

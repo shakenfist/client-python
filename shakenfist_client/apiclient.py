@@ -187,10 +187,11 @@ STATUS_CODES_TO_ERRORS = {
 
 # How long to wait before retrying a 507 which the server marked as
 # transient but which carried no usable Retry-After header. The server
-# sends a fixed 15 (see shakenfist's
-# docs/plans/PLAN-transient-capacity-refusals-phase-04-retry-after.md,
-# decision D31), so this only matters when a proxy has stripped the
-# header.
+# sends a fixed 15 on the scheduler refusal this retry exists for, so
+# this number only matters when something between here and there --
+# a proxy rewriting the response -- has stripped the header, and
+# matching what the server would have asked for is the closest thing to
+# honouring a header we did not receive.
 TRANSIENT_RETRY_DEFAULT = 15
 
 # A Retry-After we are willing to honour is clamped into this range. The
