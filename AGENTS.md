@@ -139,10 +139,13 @@ means "the server default". `AgentOperationFailed` is in
 `GroupCatchExceptions`, because once the server side deadlines deploy an
 `expired` operation is a routine CLI outcome rather than a bug.
 
-There is deliberately no `docs/` page for the timing model yet. Phase 7
-of the master plan writes it once, for the server and client halves
-together; until then the `--help` text on `instance execute`, `upload`
-and `download` is what a user has.
+There is deliberately no `docs/` page for the timing model. The server
+and client halves of it are to be written up once, together, in the
+server repository -- see
+[the client plan's out-of-scope list](docs/plans/PLAN-agent-operation-deadlines-phase-06-client.md)
+-- so until that is written the `--help` text on `instance execute`,
+`upload` and `download` is what a user has, and a page here would be
+the second place the story is told.
 
 ## Agent Operation Dependencies
 

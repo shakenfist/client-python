@@ -78,7 +78,7 @@ and `docs/cluster-capacity.md`.
 
 ### Transient Capacity Refusals (2026-09)
 
-The client half of phase 4 of shakenfist's
+The client half of shakenfist's
 `PLAN-transient-capacity-refusals.md`: `APIException` now carries the
 response headers, and `Client(retry_transient_capacity=True)` waits out a
 `507` whose body says `"transient": true`, sleeping for a `Retry-After`
