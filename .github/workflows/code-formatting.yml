@@ -16,7 +16,7 @@ on:
 
 jobs:
   code-formatters:
-    runs-on: [self-hosted, vm]
+    runs-on: [self-hosted, vm, s]
     timeout-minutes: 60
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}

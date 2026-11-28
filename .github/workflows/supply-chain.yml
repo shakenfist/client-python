@@ -78,7 +78,7 @@ jobs:
 
   agent-context:
     name: agent context
-    runs-on: [self-hosted, vm]
+    runs-on: [self-hosted, vm, s]
     timeout-minutes: 15
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-agent-context
