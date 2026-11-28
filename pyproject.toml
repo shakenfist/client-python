@@ -19,12 +19,13 @@ dependencies = [
     "click >= 8.0.0",           # bsd
     "prettytable",              # bsd
     "requests>=2.31.0",         # apache2
-    "requests_toolbelt>=1.0.0", # apache2
-    "chardet>=5.0.0",           # lgpl -- required by requests with this version pin
+    # not-imported: chardet -- requests chooses a character set detector at
+    # import time and prefers chardet when it is installed; pinned directly so
+    # the floor is ours rather than whatever requests happens to resolve to.
+    "chardet>=5.0.0",           # lgpl
     "urllib3>=1.26.14",         # mit -- required by requests with this version pin
     "tqdm",                     # mit / mozilla
     "shakenfist-utilities",     # apache2
-    "pyyaml",                   # mit
     "importlib-metadata; python_version < '3.9'",  # apache2
 ]
 
