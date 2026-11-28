@@ -23,6 +23,9 @@ tox -eflake8
 
 # Run all tox environments
 tox
+
+# Install the pre-commit hooks (actionlint, shellcheck, skillsaw, tox)
+pre-commit install
 ```
 
 ## Key Files
@@ -79,10 +82,20 @@ code look like tidy-up targets and are not:
   every dimension -- read back from the claim or otherwise -- turns a
   re-date into a resize and races concurrent writers. Do not "simplify"
   the filtering away.
+- `expires_in_seconds` is a duration rather than a timestamp, because
+  the expiry is computed from the cluster's clock -- the only clock the
+  expiry sweep compares against. Converting a local datetime here would
+  fold workstation clock skew into the expiry.
 - The CLI keeps `state` and `coverage_state` as separate columns. They
   answer different questions, and an expired claim (`created` /
   `expired`) is the one an operator has to act on, so collapsing them
   into a single status hides it.
+- 503 is `ServiceUnavailableException`, separately from the other
+  refusals, because the claims API has two retryable ones -- capacity
+  accounting not built yet, and a claim contended past the optimistic
+  retry budget -- and a caller has to be able to tell them from a
+  durable refusal. `main.py`'s `GroupCatchExceptions` reports it as a
+  retry. The client does not retry a 503 itself.
 
 ## Node Capacity View
 
@@ -126,6 +139,11 @@ targets and are not:
 - `_add_agentop_timing()` is called by the three creating helpers rather
   than by `_await_agentop()`, because by the time that is polling the
   POST which created the operation has already gone out.
+- `await_agent_command()` and `await_agent_fetch()` floor the deadline
+  they derive at one second rather than sending the `0` an exhausted
+  budget would otherwise produce. The server reads `0` as "no such
+  budget at all", so an operation nobody is left waiting for would run
+  on under the server's own default instead of being reaped.
 - `_await_agentop()` is the only place which polls an agent operation's
   state. `await_agent_command()` and `await_agent_fetch()` hand it their
   own remaining budget and then catch `AgentOperationFailed` to enrich it
@@ -294,7 +312,10 @@ which read as tidy-up targets:
 ## Code Conventions
 
 - Python >= 3.7 compatibility (conservative for broad client support)
-- Use `importlib.metadata` for entry points, with backport for < 3.9
+- Use `importlib.metadata` for entry points, with the
+  `importlib-metadata` backport below 3.9. The API differs by version
+  as well: `entry_points().select(group=...)` on 3.10 and above,
+  `entry_points().get(group, [])` below it
 - Single quotes for strings, double quotes for docstrings
 - Max line length: 120 characters
 - Trim trailing whitespace
@@ -318,4 +339,9 @@ tox -epy3                     # via tox
   a release tag is only accepted on a commit whose queue run passed. A
   new `functional-tests.yml` job goes in the `needs:` of "Can enqueue"
   and "Can merge". See `docs/development.md`.
-- Update CLAUDE.md if architecture changes significantly
+- Document user-visible changes in `docs/`, which is where a human
+  benefits from them too. Update this file only when a *convention*
+  changes, and `ARCHITECTURE.md` only when the *shape of the system*
+  does; both are a summary and an index into `docs/`, and both are
+  loaded into every session, so a change here costs context on every
+  task

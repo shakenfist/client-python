@@ -172,9 +172,12 @@ from Ansible playbooks.
 ## Python Version Compatibility
 
 The client targets Python >= 3.7, intentionally more conservative
-than the server. This supports the widest range of client platforms,
-including enterprise Linux distributions that ship older Python
-versions.
+than the server. The server runs on infrastructure where we choose the
+operating system; the client runs on whatever workstation an operator
+has, which includes enterprise distributions such as RHEL 9 and its
+Python 3.9. Somebody should be able to drive a Shaken Fist cluster
+from any reasonable machine, so the floor here is set by the
+distributions rather than by what the language offers.
 
 When using newer Python features, conditional imports or backport
 packages are required. See `main.py` lines 7-10 for an example
@@ -202,3 +205,8 @@ with `importlib.metadata`.
   context. Both are deliberately ungated by path filters, because a
   credential, or an instruction aimed at an agent, lands in a document
   as readily as in code; the workflow's header says so at length
+- **Security scanning**: CodeQL via `codeql-analysis.yml`
+- **Repository settings**: exported daily by `export-repo-config.yml`,
+  so a change made in the GitHub UI lands in git
+- **Dependencies**: Renovate, run centrally from the fleet runner in
+  `shakenfist/development`; this repository carries only `renovate.json`
