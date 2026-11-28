@@ -230,7 +230,6 @@ configuration steps.
 - **Code formatting** (`code-formatting.yml`): Daily automated
   formatting.
 - **CodeQL** (`codeql-analysis.yml`): Security scanning.
-- **Renovate** (`renovate.yml`): Automated dependency updates.
 - **Export repo config** (`export-repo-config.yml`): Daily export of
   GitHub repository settings.
 
