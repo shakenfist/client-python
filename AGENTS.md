@@ -23,6 +23,9 @@ tox -eflake8
 
 # Run all tox environments
 tox
+
+# Install the pre-commit hooks (actionlint, shellcheck, skillsaw, tox)
+pre-commit install
 ```
 
 ## Key Files
@@ -40,258 +43,35 @@ tox
 | `docs/plans/index.md` | Register for phased plans; add a row when starting one |
 | `pyproject.toml` | Package metadata and dependencies |
 
-## VDI Console Access
+## Before You Simplify Anything
 
-What the commands do, and which combinations of path and viewer write
-the console token to disk, is in `docs/vdi-console.md`. Three things
-about the code are not derivable from reading it:
+Several things in this client look like tidy-up targets and are not: a
+filter that looks redundant, two columns that look like they should be
+one, a capability gate that raises where its neighbour stays silent.
+Each has been "simplified" at least once already.
 
-- `get_vdi_console_proxy_file` in `shakenfist_client/apiclient.py`
-  fetches the `.vv` body with a plain `requests.get()` and must NOT
-  attach an SF bearer token. The capability is already embedded as a
-  JWT in the URL, and sending the bearer token as well would put a
-  long-lived credential where a single-use one belongs.
-- `get_vdi_token_public_keys` (`GET /admin/vditokenpubkey`) has no CLI
-  caller. It exists for Kerbside's source driver, so "unused" is not a
-  reason to remove it.
-- A proxy console URL is a credential, and rendering it anywhere is
-  how that credential escapes. Two mechanisms cover the known routes,
-  and they are not interchangeable. `apiclient.redact_tokens()` is
-  applied where `get_vdi_console_proxy_file()` raises, because requests
-  builds its exception messages out of the URL and an uncaught one is
-  printed as a traceback that no logging filter ever sees. `main.py`
-  installs the same function as a logging filter, which covers what
-  libraries log -- `_request_url()`'s response bodies, urllib3's
-  request targets. A new way to render that URL needs one of the two
-  applied to it; neither is automatic.
+They are written down once, in
+[docs/code-invariants.md](docs/code-invariants.md), with what breaks
+when each one goes. Read the section that covers the area you are
+about to change before changing it:
 
-The launch logic and viewer-selection chain live in
-`shakenfist_client/commandline/instance.py`.
-
-## Namespace Capacity Claims
-
-What the commands do, the two claim states and what each refusal
-status means is in `docs/namespace-claims.md`. Two invariants in the
-code look like tidy-up targets and are not:
-
-- `update_namespace_claim()` filters `None` arguments out of the body
-  on purpose. The server reads the body as a field mask, so sending
-  every dimension -- read back from the claim or otherwise -- turns a
-  re-date into a resize and races concurrent writers. Do not "simplify"
-  the filtering away.
-- The CLI keeps `state` and `coverage_state` as separate columns. They
-  answer different questions, and an expired claim (`created` /
-  `expired`) is the one an operator has to act on, so collapsing them
-  into a single status hides it.
-
-## Node Capacity View
-
-What `sf-client node capacity` prints and how to read it is in
-`docs/cluster-capacity.md`. Four invariants here look like tidy-up
-targets and are not:
-
-- The binding marker (`_capacity_binding_cpu()` in
-  `commandline/node.py`) is a copy of the server's arithmetic in
-  `shakenfist/scheduler.py` (`_has_sufficient_cpu()`): the charge is
-  `max(measured, committed)`, and the ceiling is the row's limit, or hard
-  max only for a node with no row. A change there must be made here too.
-  A payload missing an input marks nothing.
-- Committed, measured, limit and hard max stay separate columns. Merging
-  them into "used" hides which ledger is binding.
-- A hypervisor absent from the server's `per_node` is listed under the
-  tables, never dropped, because the busiest node is the one most likely
-  to be missing.
-- `n/a` (key absent: an older server) and `-` (key sent as `None`) are
-  deliberately different, via `util.render_optional()`. Do not render
-  either as zero.
-
-## Agent Operation Deadlines
-
-`deadline_seconds` and `progress_timeout_seconds` bound an in-guest
-agent operation on the *server*. Four invariants here read as tidy-up
-targets and are not:
-
-- `TERMINAL_AGENT_OPERATION_STATES` hand-duplicates
-  `AgentOperation.TERMINAL_STATES` in the server repository
-  (`shakenfist/operations/agentoperation.py`). The client cannot import
-  it, so a state added there has to be added here too.
-- Nothing derives a deadline from the async strategy. The strategy says
-  how long this client will block; the deadline says how long the
-  operation may live. Deriving one from the other gave every CLI
-  invocation a 60 second server side kill, because `pause` is the CLI
-  default.
-- The timing values are tested with `is not None`, never truthiness. The
-  server reads `0` as "no such budget at all", which is a different
-  answer from omitting the key, and `--deadline 0` has to reach the wire.
-- `_add_agentop_timing()` is called by the three creating helpers rather
-  than by `_await_agentop()`, because by the time that is polling the
-  POST which created the operation has already gone out.
-- `_await_agentop()` is the only place which polls an agent operation's
-  state. `await_agent_command()` and `await_agent_fetch()` hand it their
-  own remaining budget and then catch `AgentOperationFailed` to enrich it
-  with console data; they do not re-poll. A loop below that call would be
-  an already expired copy of the one inside it.
-
-The capability gate (`agentoperation-deadlines`) fails closed: against a
-server which does not advertise it the client sends nothing. The CLI
-warns only when the user typed a flag, because an omitted flag already
-means "the server default". `AgentOperationFailed` is in
-`GroupCatchExceptions`, because once the server side deadlines deploy an
-`expired` operation is a routine CLI outcome rather than a bug.
-
-There is deliberately no `docs/` page for the timing model yet. Phase 7
-of the master plan writes it once, for the server and client halves
-together; until then the `--help` text on `instance execute`, `upload`
-and `download` is what a user has.
-
-## Agent Operation Dependencies
-
-`depends_on` and `runs_after` order in-guest agent operations on the
-*server*, and they are not interchangeable: a failed `depends_on`
-dependency cascades its dependent to `abort`, whereas a `runs_after`
-dependency only sequences it and the dependent runs regardless.
-
-There is deliberately no usage guide for either edge kind here. The
-server repository will describe both once, in
-`docs/developer_guide/agent_operations.md`, which does not exist yet;
-until it does, the docstrings on `agent_dependency()`,
-`await_agent_chain()` and the three creating helpers are what a caller
-has. This section holds only the invariants which read as tidy-up
-targets and are not:
-
-- `TERMINAL_AGENT_OPERATION_STATES` has five members, and `abort` had
-  to arrive before the submission parameters rather than after. Until a
-  caller can declare a dependency no operation it created can reach
-  `abort`, and a client which could create one before it recognised the
-  state would poll to its deadline and hand back an aborted operation
-  with no exception. `await_agent_command()` would then raise
-  `AgentAwaitTimeout` about an operation whose timeout was never the
-  problem.
-- The capability gate for dependencies *raises* where the deadlines gate
-  silently sends nothing, and the two helpers sit beside each other so
-  the divergence is visible. Silence means different things: an omitted
-  deadline means "the server's own default applies", whereas a dropped
-  ordering edge means "run now", the precise outcome the caller declared
-  the edge to prevent.
-- Neither `None` nor an empty list is a declaration, so neither consults
-  the capability nor sends a key. The timing parameters test
-  `is not None` because zero is a real budget there; it is not here.
-- The client validates an edge's shape and deliberately carries neither
-  of the server's bounds, the edge-count limit or the `settle_seconds`
-  ceiling. Both are deployment policy read from the cluster's own
-  configuration, and the ceiling has already moved by two orders of
-  magnitude in one release.
-- `_verify_agentop_dependencies()` exists because an older `sf-database`
-  behind a new `sf-api` accepts the edges, answers 200 and stores
-  nothing, which no capability token can report. It runs on the POST
-  response, by which time the operation exists and is queued, so it
-  **deletes** that operation as well as raising: refusing to await an
-  operation does not stop it running, and running unordered is the harm
-  being refused. The delete is best effort and the exception says
-  whether it worked.
-- `await_seconds=0` is how a chain link is submitted: it sets a deadline
-  already reached, so the call returns the operation as created.
-  Awaiting each link as it is submitted defeats the chain entirely. This
-  is the idiom the repository publishes in place of a submission helper.
-- The chain walk must never resolve a UUID the caller did not submit. A
-  chain may cross namespaces, and doing so would turn a reporting helper
-  into a question about authorisation.
-
-## Transient Capacity Refusals
-
-`Client(retry_transient_capacity=True)` waits out a `507` the server has
-marked as transient. What the server publishes and what a caller should
-expect is in `docs/transient-capacity-retry.md`. These invariants in
-`_request_url()` read as tidy-up targets and are not:
-
-- The gate is the `"transient": true` marker in the body, never the
-  status code. An older server marks nothing and a proxy's HTML error
-  page parses as nothing; neither is a promise that waiting will help,
-  so both must keep raising immediately.
-- The `507` clause clamps its sleep to the remaining budget where the
-  `406` clause immediately above it sleeps a whole second regardless.
-  The two look like they should be harmonised. They should not: a `406`
-  overshoots by at most a second, a 15 second sleep by enough for a
-  caller to notice.
-- There are two bounds, and they are not redundant.
-  `TRANSIENT_RETRY_MAXIMUM_ATTEMPTS` is what replaying costs the
-  cluster, the deadline is what the caller asked to wait. Without the
-  cap an hour of `ASYNC_BLOCK` is ~240 replays of a request the server
-  creates and discards an instance record for each time; without the
-  deadline a caller's budget would not be honoured at all. The cap is 5
-  because that is what a 60 second `ASYNC_PAUSE` budget could already
-  spend, so adding it took no attempt away from any waiting strategy.
-  Whichever bound is reached first re-raises the server's own refusal.
-- The deadline bounds the sleeps, not the request which follows the
-  last of them. When less than `Retry-After` remains the sleep is
-  truncated and one more attempt is made, so a call can return a round
-  trip after its deadline. Raising instead would be a behaviour change,
-  not a tidy-up.
-- `TRANSIENT_RETRY_MINIMUM` exists so that `Retry-After: 0` cannot turn
-  the retry into a busy loop against a server which is already out of
-  capacity. `TRANSIENT_RETRY_MAXIMUM` is 60 because that is the whole
-  budget `_calculate_async_deadline()` gives `ASYNC_PAUSE`, so one sleep
-  can never exceed what the caller asked to wait in total.
-- An `ASYNC_CONTINUE` client passing no deadline of its own never
-  retries, because `_calculate_async_deadline()` returns `-1` and the
-  deadline is already in the past. That is correct -- the strategy means
-  the caller is not waiting for anything -- and is deliberately not
-  special cased.
-
-The marker is a contract, not just a hint. Because the client replays
-the request byte for byte and gates on the marker rather than on an
-endpoint list, a server may set `"transient": true` only on a refusal
-which committed no part of the request. Today only the scheduler refusal
-is marked. Anything which appends or mutates -- `send_upload()`, whose
-natural refusal is also a `507` -- must be made replay safe before it is
-marked.
-
-Only the delta-seconds form of `Retry-After` is parsed. RFC 9110 also
-allows an HTTP-date; not implementing it is a decision, not an
-oversight, because the server sends a fixed `15` and anything
-unparseable falls back to that same number. The flag is library-level:
-`main.py` does not set it, so `sf-client` behaviour is unchanged.
-
-## Human Login and the Credential Cache
-
-`docs/human-login.md` is the reference. These four are the invariants
-which read as tidy-up targets:
-
-- The cache file and its directory are **created** with their modes, not
-  created and then `chmod`ed: there must be no instant where a namespace
-  key is in a file another user can open. `credentials.py` says so where
-  somebody would otherwise undo it.
-- `check_capability()` matches a **whole token**, not a substring, and
-  the lookbehind and lookahead are load-bearing: `human-login` is a
-  prefix of `human-login-metadata`. Simplifying it back to `in` makes a
-  cluster which advertises only the metadata route pass a check for the
-  mint.
-- Two sets name the verbs `main.py` must not build a client for, and
-  they are kept apart on purpose. `COMMANDS_WITHOUT_A_CLIENT` in
-  `auth.py` is the verbs which *cannot* resolve a credential -- `logout`
-  is there because it is the remedy for a cache every other verb refuses
-  to read, so building a client would make the remedy fail for the same
-  reason as the problem. `CLIENT_FREE_COMMANDS` in `main.py` is that set
-  plus `version`, which can resolve one perfectly well and simply has no
-  use for it. `main.py` tests the second. Folding `version` into the
-  first would make its name a lie.
-- The cache sits **between the environment and the two configuration
-  files** in credential precedence, and the environment's namespace and
-  key are read whether or not the environment also names the cluster. An
-  automated caller which exports `SHAKENFIST_KEY` must never run as
-  whoever last logged in on the machine.
-- The one exception to that position: a caller which pinned a
-  **credential and no cluster** asks the configuration files for its
-  cluster before the cache, and the cache last of all. A namespace key is
-  scoped to the cluster which minted it, so taking the cluster from a
-  login would send a pinned key to a host nobody named -- which can only
-  refuse it, after the secret has already crossed to it. The cache then
-  supplies the cluster and never either half of the credential.
+| Area | Invariants | User-facing documentation |
+|------|-----------|---------------------------|
+| VDI consoles (`apiclient.py`, `commandline/instance.py`) | token never reaches a bearer header, two redaction mechanisms that are not interchangeable | `docs/vdi-console.md` |
+| Namespace capacity claims | field-mask body, duration not timestamp, separate state columns, 503 | `docs/namespace-claims.md` |
+| Node and cluster capacity views | the binding marker copies the server's arithmetic, four separate ledger columns, `n/a` versus `-` | `docs/cluster-capacity.md` |
+| Agent operation deadlines | three budgets kept apart, `is not None` rather than truthiness, one poller | `--help` on `instance execute` / `upload` / `download` |
+| Agent operation dependencies | `depends_on` versus `runs_after`, a gate that raises, `await_seconds=0` as the submission idiom | docstrings on `agent_dependency()` and `await_agent_chain()` |
+| Transient capacity retry | the body marker is the whole gate, two non-redundant bounds | `docs/transient-capacity-retry.md` |
+| Human login and the credential cache | modes at creation, whole-token capability match, where the cache sits in precedence | `docs/human-login.md` |
 
 ## Code Conventions
 
 - Python >= 3.7 compatibility (conservative for broad client support)
-- Use `importlib.metadata` for entry points, with backport for < 3.9
+- Use `importlib.metadata` for entry points, with the
+  `importlib-metadata` backport below 3.9. The API differs by version
+  as well: `entry_points().select(group=...)` on 3.10 and above,
+  `entry_points().get(group, [])` below it
 - Single quotes for strings, double quotes for docstrings
 - Max line length: 120 characters
 - Trim trailing whitespace
@@ -315,4 +95,9 @@ tox -epy3                     # via tox
   a release tag is only accepted on a commit whose queue run passed. A
   new `functional-tests.yml` job goes in the `needs:` of "Can enqueue"
   and "Can merge". See `docs/development.md`.
-- Update CLAUDE.md if architecture changes significantly
+- Document user-visible changes in `docs/`, which is where a human
+  benefits from them too. Update this file only when a *convention*
+  changes, and `ARCHITECTURE.md` only when the *shape of the system*
+  does; both are a summary and an index into `docs/`, and both are
+  loaded into every session, so a change here costs context on every
+  task

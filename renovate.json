@@ -1,28 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "gitAuthor": "shakenfist-bot <bot@shakenfist.com>",
-  "dependencyDashboard": true,
-  "assignees": [
-    "mikalstill"
-  ],
-  "schedule": [
-    "after 9pm"
-  ],
-  "pre-commit": {
-    "description": "Renovate's pre-commit manager is opt-in. Without this the hook revisions in .pre-commit-config.yaml are the one dependency file nobody is watching.",
-    "enabled": true
-  },
-  "packageRules": [
-    {
-      "description": "Group minor and patch-level updates",
-      "matchUpdateTypes": [
-        "minor",
-        "patch",
-        "digest"
-      ],
-      "automerge": false
-    }
-  ],
-  "minimumReleaseAge": "3 days",
-  "rollbackPrs": true
+  "extends": [
+    "local>shakenfist/development:renovate-fleet"
+  ]
 }

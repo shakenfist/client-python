@@ -187,10 +187,11 @@ STATUS_CODES_TO_ERRORS = {
 
 # How long to wait before retrying a 507 which the server marked as
 # transient but which carried no usable Retry-After header. The server
-# sends a fixed 15 (see shakenfist's
-# docs/plans/PLAN-transient-capacity-refusals-phase-04-retry-after.md,
-# decision D31), so this only matters when a proxy has stripped the
-# header.
+# sends a fixed 15 on the scheduler refusal this retry exists for, so
+# this number only matters when something between here and there --
+# a proxy rewriting the response -- has stripped the header, and
+# matching what the server would have asked for is the closest thing to
+# honouring a header we did not receive.
 TRANSIENT_RETRY_DEFAULT = 15
 
 # A Retry-After we are willing to honour is clamped into this range. The
@@ -211,8 +212,8 @@ TRANSIENT_RETRY_MAXIMUM = 60
 # ASYNC_PAUSE budget could already spend -- four waits and a final
 # attempt -- so no waiting strategy loses an attempt it used to have,
 # and the story this retry exists for (a neighbouring instance is being
-# torn down right now; phase 3 measured capacity returning 5.3-5.6
-# seconds after a domain is destroyed) does not need more.
+# torn down right now; capacity was measured returning 5.3-5.6 seconds
+# after a domain is destroyed) does not need more.
 TRANSIENT_RETRY_MAXIMUM_ATTEMPTS = 5
 
 
@@ -1627,10 +1628,12 @@ class Client:
     def delete_network(self, network_ref, namespace=None, wait=True):
         """Delete a network.
 
-        Phase 7 of the network facade flipped this endpoint to a
-        202+poll contract: the server enqueues the delete work and
-        returns ``{'op_type': 'net_op', 'op_uuid': '<uuid>'}`` with
-        HTTP 202.
+        A server which advertises ``network-delete-async`` answers
+        this endpoint with a 202 and the handle
+        ``{'op_type': 'net_op', 'op_uuid': '<uuid>'}``, having only
+        enqueued the delete work. One which does not advertise it
+        performs the delete inline and answers 200 with the network's
+        external view.
 
         By default (``wait=True``) this method transparently polls
         the returned cluster operation until it reaches a terminal
@@ -1648,8 +1651,8 @@ class Client:
         if namespace:
             data = {'namespace': namespace}
         r = self._request_url('DELETE', '/networks/' + network_ref, data=data)
-        # A pre-phase-7 server returns 200 with the network's external
-        # view; a phase-7+ server advertises ``network-delete-async`` and
+        # A server which does not advertise ``network-delete-async``
+        # returns 200 with the network's external view; one which does
         # returns 202 with a {op_type, op_uuid} handle. Pick the path
         # from the advertised capability so we never try to poll a
         # response that doesn't carry an op handle.
@@ -1663,11 +1666,11 @@ class Client:
     def delete_all_networks(self, namespace, clean_wait=False, wait=True):
         """Delete every network in a namespace.
 
-        Phase 7 of the network facade flipped this endpoint to a
-        202+poll contract: the server enqueues one delete op per
-        network and returns a list of
-        ``{'network_uuid', 'op_type', 'op_uuid'}`` entries with HTTP
-        202.
+        A server which advertises ``network-delete-async`` answers
+        this endpoint with a 202 and a list of
+        ``{'network_uuid', 'op_type', 'op_uuid'}`` entries, having only
+        enqueued one delete op per network. One which does not
+        advertise it performs the deletes inline and answers 200.
 
         By default (``wait=True``) this method polls each returned op
         sequentially until terminal, raising
@@ -1683,9 +1686,9 @@ class Client:
                                     'namespace': namespace,
                                     'clean_wait': clean_wait,
                                     })
-        # Same capability gate as ``delete_network``: pre-phase-7
-        # servers return the old shape, phase-7+ servers advertise
-        # ``network-delete-async`` and return the op-handle list.
+        # Same capability gate as ``delete_network``: a server
+        # without ``network-delete-async`` returns the inline shape,
+        # one which advertises it returns the op-handle list.
         if not self.check_capability('network-delete-async'):
             return r.json()
         handles = r.json()
@@ -2194,8 +2197,10 @@ class Client:
         be tidied into truthiness tests.
         """
         if not self.check_capability('agentoperation-deadlines'):
-            # Decision 7: against a server which cannot accept these, the
-            # client behaves exactly as it did before they existed.
+            # Against a server which cannot accept these, the client
+            # behaves exactly as it did before they existed: silence
+            # means "the server's own default applies", which is the
+            # answer an older server needs.
             return
 
         if deadline_seconds is not None:
@@ -2421,7 +2426,7 @@ class Client:
                 'executing a command within an instance.')
 
         data = {'command_line': command_line}
-        # The server refuses a progress timeout on execute (decision 4;
+        # The server refuses a progress timeout on execute (see
         # shakenfist/external_api/instance.py), so execute never gains a
         # progress_timeout_seconds kwarg and always passes None here. The
         # dependency parameters have no such asymmetry: all three endpoints
@@ -3202,10 +3207,11 @@ class Client:
     def get_cluster_operation_chain(self, op_uuid):
         """Return the transitive depends_on closure for a cluster op.
 
-        Calls ``GET /clusteroperations/<op_uuid>/chain`` (added in
-        phase 7 of the network facade). Returns a list of op summary
-        dicts (each carrying ``operation_type``, ``uuid``, ``state``
-        and ``tasks``), newest-first by ``created_at``.
+        Calls ``GET /clusteroperations/<op_uuid>/chain``, gated on
+        the ``cluster-operation-chain`` capability because an older
+        server has no such route. Returns a list of op summary dicts
+        (each carrying ``operation_type``, ``uuid``, ``state`` and
+        ``tasks``), newest-first by ``created_at``.
 
         The server raises 404 on an unknown ``op_uuid`` (surfaced as
         :class:`ResourceNotFoundException`).
@@ -3223,9 +3229,10 @@ class Client:
         """List cluster operations targeting a given object.
 
         Calls ``GET /clusteroperations?target_object_type=<type>
-        &target_uuid=<uuid>`` (added in phase 7 of the network
-        facade). Returns a list of op summary dicts scoped to the
-        caller's namespace.
+        &target_uuid=<uuid>``, gated on the
+        ``cluster-operations-by-target`` capability because an older
+        server has no such route. Returns a list of op summary dicts
+        scoped to the caller's namespace.
         """
         if not self.check_capability('cluster-operations-by-target'):
             raise IncapableException(

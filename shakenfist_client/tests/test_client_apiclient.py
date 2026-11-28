@@ -869,8 +869,9 @@ class ApiClientTestCase(testtools.TestCase):
             'GET', '/networks/notreallyauuid', data=None)
 
     def test_delete_network(self):
-        # Phase 7 contract: the server returns a 202 + op handle, and
-        # the client transparently polls the op to terminal.
+        # A server advertising network-delete-async returns a 202 and
+        # an op handle, and the client transparently polls the op to
+        # terminal.
         handle = {'op_type': 'net_op', 'op_uuid': 'op-uuid'}
         final_view = {
             'operation_type': 'net_op',
@@ -939,9 +940,10 @@ class ApiClientTestCase(testtools.TestCase):
         self.assertEqual(error_view, exc.op_view)
 
     def test_delete_all_networks(self):
-        # Phase 7 contract: 202 returns a list of {network_uuid, op_type,
-        # op_uuid}; the client polls each op to terminal and attaches the
-        # final view under ``op_view``.
+        # A server advertising network-delete-async returns a 202 and
+        # a list of {network_uuid, op_type, op_uuid}; the client polls
+        # each op to terminal and attaches the final view under
+        # ``op_view``.
         handles = [
             {'network_uuid': 'net-a', 'op_type': 'net_op',
              'op_uuid': 'op-a'},
@@ -1008,9 +1010,9 @@ class ApiClientTestCase(testtools.TestCase):
                   'namespace': 'bobspace',
                   'clean_wait': False})
 
-    def test_delete_network_pre_phase7_server(self):
-        # Pre-phase-7 servers do not advertise ``network-delete-async``
-        # and return a 200 with the network's external view. The client
+    def test_delete_network_without_async_capability(self):
+        # A server which does not advertise ``network-delete-async``
+        # returns a 200 with the network's external view. The client
         # must passthrough that body without trying to poll.
         legacy_view = {
             'uuid': 'notreallyauuid', 'state': 'deleted', 'name': 'n'}
@@ -1026,7 +1028,7 @@ class ApiClientTestCase(testtools.TestCase):
         # Only the DELETE round-trip; no GET for the op handle.
         self.assertEqual(1, self.mock_request.call_count)
 
-    def test_delete_all_networks_pre_phase7_server(self):
+    def test_delete_all_networks_without_async_capability(self):
         legacy_list = [
             {'uuid': 'net-a', 'state': 'deleted', 'name': 'a'},
         ]
@@ -3375,9 +3377,9 @@ class AgentOperationAwaitTestCase(testtools.TestCase):
             'notreallyauuid', '/tmp/f', deadline_seconds=42, await_seconds=42)
 
     def test_await_agent_fetch_slow_operation_still_reaches_results(self):
-        # Decision 6 / survey finding 5: every loop in this method must
-        # share the same `timeout` budget, measured from the same
-        # start_time. Before that repair, the results-wait and blob-wait
+        # Every loop in this method must share the same `timeout`
+        # budget, measured from the same start_time. Before that
+        # repair, the results-wait and blob-wait
         # loops were hardcoded to 60 seconds from start_time regardless
         # of `timeout`, so an operation that took longer than a minute
         # to reach 'complete' entered those loops with their window
@@ -3572,8 +3574,10 @@ class AgentOperationDeadlineTestCase(testtools.TestCase):
     """The three agent-operation creating helpers propagate a deadline
     (and, for put/get, a progress timeout) to the server -- but only once
     the server has advertised it can accept them via the
-    'agentoperation-deadlines' capability token (decision 2 and 7 of
-    PLAN-agent-operation-deadlines-phase-06-client.md).
+    'agentoperation-deadlines' capability token. The gate fails closed,
+    and closed means sending nothing rather than raising: an omitted
+    budget means "the server's own default applies", which is a server
+    without the token answering correctly rather than an error.
     """
 
     def setUp(self):
@@ -3685,7 +3689,7 @@ class AgentOperationDeadlineTestCase(testtools.TestCase):
         self.assertEqual(0, self._sent_data()['deadline_seconds'])
 
     def test_execute_has_no_progress_timeout_kwarg(self):
-        # The server refuses a progress timeout on execute (decision 4;
+        # The server refuses a progress timeout on execute (see
         # shakenfist/external_api/instance.py) -- instance_execute must
         # not grow a way to send one, even if a caller asks for it.
         client = self._client(True)
@@ -3728,10 +3732,10 @@ class AgentOperationDeadlineTestCase(testtools.TestCase):
 
 class APIExceptionTestCase(testtools.TestCase):
     # Downstream repositories construct APIException with five positional
-    # arguments and no headers, so that form must keep working even though
-    # this phase adds a headers keyword. See shakenfist's
-    # docs/plans/PLAN-transient-capacity-refusals-phase-04-retry-after.md,
-    # step 4d.
+    # arguments and no headers. The headers keyword was added after them
+    # and is therefore last and optional, so that form has to keep
+    # working: a caller which has never heard of it must not have to
+    # change to keep raising the exception.
     def test_old_five_positional_form_still_works(self):
         exc = apiclient.APIException('m', 'GET', 'u', 507, 't')
 

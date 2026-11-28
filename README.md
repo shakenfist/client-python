@@ -71,6 +71,9 @@ operator has configured one.
 - [Merging and releasing](https://github.com/shakenfist/client-python/blob/develop/docs/development.md)
   -- what CI runs, merging through the merge queue, and how a release is
   gated on CI
+- [Why the code is the way it is](https://github.com/shakenfist/client-python/blob/develop/docs/code-invariants.md)
+  -- the invariants in the client which read as tidy-up targets and are
+  not, and what breaks when each one goes
 - [ARCHITECTURE.md](https://github.com/shakenfist/client-python/blob/develop/ARCHITECTURE.md) -- project structure and key components
 - [AGENTS.md](https://github.com/shakenfist/client-python/blob/develop/AGENTS.md) -- guide for AI agents working on this codebase
 - [RELEASE-SETUP.md](https://github.com/shakenfist/client-python/blob/develop/RELEASE-SETUP.md) -- one-time release infrastructure setup

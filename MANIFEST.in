@@ -1,0 +1,7 @@
+# setuptools_scm's file finder offers every git-tracked file to the sdist,
+# which would otherwise ship docs/plans/. Those plans are working history --
+# why the code is shaped the way it is -- and they stay in git for whoever
+# asks that question, but nobody who installs a release needs them. prune
+# names the directory rather than today's files, so the next plan and its
+# audit notes are excluded too.
+prune docs/plans

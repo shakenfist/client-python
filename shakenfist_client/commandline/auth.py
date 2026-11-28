@@ -68,6 +68,7 @@ from prettytable import PrettyTable
 
 from shakenfist_client import apiclient
 from shakenfist_client import credentials
+from shakenfist_client.safe_headers import SafeHeaderMixin
 
 
 # Nothing here logs on the ordinary paths -- what a login has to say, it
@@ -617,7 +618,7 @@ REDIRECT_PAGES = {
 }
 
 
-class _RedirectHandler(BaseHTTPRequestHandler):
+class _RedirectHandler(SafeHeaderMixin, BaseHTTPRequestHandler):
     """Answer one OAuth redirect, and record for the flow what it was.
 
     The result is recorded on the server rather than returned, because a
@@ -634,6 +635,11 @@ class _RedirectHandler(BaseHTTPRequestHandler):
     has connected but not spoken. The server's own timeout does not cover
     that, so without this the listener waits on such a connection
     forever.
+
+    SafeHeaderMixin is listed first, and must stay first. Listed after
+    the handler base class the base class's send_header() wins the
+    method resolution order, so the sanitisation would silently stop
+    happening while still appearing in the bases.
     """
 
     def setup(self):

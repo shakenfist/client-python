@@ -99,7 +99,7 @@ jobs:
   sanity_checks:
     needs: check_paths
     if: needs.check_paths.outputs.code_changed != 'false'
-    runs-on: [self-hosted, vm]
+    runs-on: [self-hosted, vm, s]
     # On a merge group, key on the base branch rather than github.ref,
     # which is a new queue branch on every rebuild, so a superseded run
     # is cancelled. That is safe because the queue is serial
